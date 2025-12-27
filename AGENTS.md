@@ -85,6 +85,28 @@ dullahan/
 
 ---
 
+### Commit Format
+
+```
+<type>(<scope>)<!>: <description>
+```
+
+**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `deps`, `ci`, `build`
+
+**Examples:**
+```bash
+feat(auth): add OAuth2 support
+fix(api): handle null response
+deps: bump axios to 1.6.0
+deps(core)!: upgrade to node 20
+ci: add caching for builds
+feat(parser)!: change output format   # breaking change
+```
+
+**Breaking changes:** Add `!` after scope (or after type if no scope)
+
+---
+
 ## Issue Tracking
 
 This project uses **bd (beads)** for issue tracking.
