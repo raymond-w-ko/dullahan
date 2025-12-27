@@ -1,0 +1,28 @@
+# Zig
+zig-cache/
+zig-out/
+.zig-cache/
+
+# Node.js
+node_modules/
+client/dist/*
+!client/dist/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-*
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local

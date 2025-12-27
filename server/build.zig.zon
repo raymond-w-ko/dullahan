@@ -1,6 +1,8 @@
 .{
-    .name = "dullahan",
+    .name = .dullahan,
     .version = "0.0.1",
+    .fingerprint = 0xbf95c78e9ce4f53f, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         // TODO: add libghostty-vt
     },
