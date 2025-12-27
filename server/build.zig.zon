@@ -4,7 +4,10 @@
     .fingerprint = 0xbf95c78e9ce4f53f, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        // TODO: add libghostty-vt
+        .ghostty = .{
+            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#c00d7fc5c4dc28bfa14935a84c70591d7103c284",
+            .hash = "ghostty-1.3.0-dev-5UdBC6b4RAS-aOm1WROEJdM8RjYlDcMUqjAqavax0TpW",
+        },
     },
     .paths = .{
         "build.zig",

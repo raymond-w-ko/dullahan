@@ -10,6 +10,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // Add ghostty-vt dependency (lazy so it's only fetched when needed)
+    if (b.lazyDependency("ghostty", .{})) |ghostty_dep| {
+        const ghostty_vt = ghostty_dep.module("ghostty-vt");
+        dullahan_mod.addImport("ghostty-vt", ghostty_vt);
+    }
+
     // Executable
     const exe = b.addExecutable(.{
         .name = "dullahan",

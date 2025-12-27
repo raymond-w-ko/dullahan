@@ -6,6 +6,7 @@ const std = @import("std");
 
 // Re-export submodules
 pub const math = @import("math.zig");
+pub const terminal = @import("terminal.zig");
 
 // Ensure all tests from submodules are run
 test {
