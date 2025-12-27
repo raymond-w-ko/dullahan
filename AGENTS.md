@@ -53,6 +53,29 @@ If that audit trail is missing, then you must act as if the operation never happ
   2. **Canvas** — explicit font drawing for performance
   3. **WebGL** — custom shaders for effects (à la Ghostty)
 
+### Development REPL
+
+The server includes an IPC system for runtime inspection. **Never run `dullahan serve` directly in bash** — it blocks forever. Instead, use client commands which auto-spawn the server:
+
+```bash
+# These commands auto-spawn the server if not running:
+./zig-out/bin/dullahan ping      # Check server responsiveness
+./zig-out/bin/dullahan status    # Get runtime state (uptime, command count)
+./zig-out/bin/dullahan help      # List available commands
+./zig-out/bin/dullahan quit      # Gracefully shutdown server
+
+# Options:
+./zig-out/bin/dullahan --timeout=1000 ping   # Custom timeout (ms)
+./zig-out/bin/dullahan --no-spawn status     # Don't auto-spawn, fail if not running
+```
+
+**Use this REPL to verify assumptions during development:**
+- Check if server is running: `dullahan ping`
+- Inspect runtime state: `dullahan status`  
+- Clean shutdown before rebuild: `dullahan quit`
+
+Socket: `/tmp/dullahan.sock` | PID file: `/tmp/dullahan.pid`
+
 ### Repo Layout
 
 ```

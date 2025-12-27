@@ -306,6 +306,41 @@ This allows:
 
 ---
 
+## Additional API Changes
+
+### `std.time.sleep` → `std.Thread.sleep`
+
+```zig
+// ❌ Old
+std.time.sleep(100 * std.time.ns_per_ms);
+
+// ✅ New
+std.Thread.sleep(100 * std.time.ns_per_ms);
+```
+
+### Error sets cannot be discarded with `_ = e`
+
+```zig
+// ❌ Old
+something() catch |e| {
+    _ = e;  // Error: error set is discarded
+};
+
+// ✅ New — just don't capture it
+something() catch {
+    // handle error without capturing
+};
+```
+
+### `std.c.getpid()` instead of `std.os.linux.getpid()`
+
+For cross-platform PID access:
+```zig
+const pid = std.c.getpid();
+```
+
+---
+
 ## Compiler Improvements (Non-Breaking)
 
 - **5x faster debug builds** with x86 backend (now default)
