@@ -1,0 +1,12 @@
+.{
+    .name = "dullahan",
+    .version = "0.0.1",
+    .dependencies = .{
+        // TODO: add libghostty-vt
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

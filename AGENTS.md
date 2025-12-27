@@ -37,7 +37,51 @@ If that audit trail is missing, then you must act as if the operation never happ
 
 ## Project Architecture
 
-TODO
+**Dullahan** is a modern tmux reimagined as a server + client model.
+
+### Server (Zig)
+- Written in Zig using `libghostty-vt` for terminal emulation
+- Source of truth for all terminal state
+- Sends full snapshots and delta updates to connected clients
+- Runs as a daemon on Linux/macOS (Windows support planned)
+
+### Client (Web)
+- Browser-based UI supporting multiple simultaneous connections
+- Responsive design for desktop, laptop, and mobile
+- Rendering backends (in order of development):
+  1. **React/Preact** — initial implementation
+  2. **Canvas** — explicit font drawing for performance
+  3. **WebGL** — custom shaders for effects (à la Ghostty)
+
+### Repo Layout
+
+```
+dullahan/
+├── AGENTS.md
+├── README.md
+├── Makefile                 # orchestrates both builds
+│
+├── server/
+│   ├── build.zig
+│   ├── build.zig.zon        # dependencies (libghostty-vt)
+│   └── src/
+│       └── main.zig
+│
+├── client/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── esbuild.config.ts
+│   ├── index.html           # stub HTML
+│   ├── src/
+│   │   ├── main.ts          # entry point
+│   │   ├── components/      # React/Preact components
+│   │   └── terminal/        # terminal rendering logic
+│   └── dist/                # build output (gitignored)
+│
+└── protocol/                # shared definitions
+    ├── messages.md          # documentation of wire format
+    └── schema/              # JSON schemas, protobuf, etc.
+```
 
 ---
 
