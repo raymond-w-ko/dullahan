@@ -51,8 +51,31 @@ pub fn build(b: *std.Build) void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    // `zig build test` runs all tests
-    const test_step = b.step("test", "Run unit tests");
+    // Integration tests (separate test/ directory)
+    const integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/integration.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dullahan", .module = dullahan_mod },
+            },
+        }),
+    });
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+
+    // `zig build test` runs all tests (unit + integration)
+    const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_integration_tests.step);
+
+    // `zig build test-unit` runs only unit tests
+    const unit_test_step = b.step("test-unit", "Run unit tests only");
+    unit_test_step.dependOn(&run_mod_tests.step);
+    unit_test_step.dependOn(&run_exe_tests.step);
+
+    // `zig build test-integration` runs only integration tests
+    const integration_test_step = b.step("test-integration", "Run integration tests only");
+    integration_test_step.dependOn(&run_integration_tests.step);
 }
