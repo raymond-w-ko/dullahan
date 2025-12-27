@@ -1,13 +1,17 @@
 # Zig 0.15 Notes
 
-This documents Zig 0.15 changes from earlier versions (0.11/0.12/0.13).
+This documents Zig 0.15 breaking changes from earlier versions (0.11/0.12/0.13/0.14).
+
+> **Source**: [Zig 0.15.1 Release Notes](https://ziglang.org/download/0.15.1/release-notes.html)
+
+---
 
 ## build.zig.zon
 
 ### Package name is an enum literal, not a string
 
 ```zig
-// ❌ Old (0.11-0.13)
+// ❌ Old (0.11-0.14)
 .name = "dullahan",
 
 // ✅ New (0.15)
@@ -40,7 +44,7 @@ error: invalid fingerprint: 0x...; if this is a new or forked package, use this 
 ### Executable creation uses `root_module` instead of `root_source_file`
 
 ```zig
-// ❌ Old (0.11-0.13)
+// ❌ Old (0.11-0.14)
 const exe = b.addExecutable(.{
     .name = "dullahan",
     .root_source_file = b.path("src/main.zig"),
@@ -110,6 +114,158 @@ const exe_tests = b.addTest(.{
 
 ---
 
+## Language Changes
+
+### `usingnamespace` Removed
+
+The `usingnamespace` keyword has been completely removed. Migration strategies:
+
+**Conditional inclusion** — just include unconditionally (lazy compilation handles it):
+```zig
+// ❌ Old
+pub usingnamespace if (have_foo) struct {
+    pub const foo = 123;
+} else struct {};
+
+// ✅ New — just include it, or use compile error
+pub const foo = if (have_foo) 123 else @compileError("foo not supported");
+```
+
+**Mixins** — use zero-bit fields with `@fieldParentPtr`:
+```zig
+// ❌ Old
+pub const Foo = struct {
+    count: u32 = 0,
+    pub usingnamespace CounterMixin(Foo);
+};
+// Usage: foo.incrementCounter()
+
+// ✅ New — zero-bit field namespace
+pub const Foo = struct {
+    count: u32 = 0,
+    counter: CounterMixin(Foo) = .{},
+};
+// Usage: foo.counter.increment()
+```
+
+### `async` and `await` Keywords Removed
+
+These keywords are gone from the language. They will return as standard library functions
+as part of the new I/O interface. Also removed: `@frameSize`.
+
+### Switch on Non-Exhaustive Enums
+
+Now allows mixing explicit tags with `_` prong, and both `else` and `_`:
+
+```zig
+switch (enum_val) {
+    .special_case_1 => foo(),
+    .special_case_2 => bar(),
+    _ => baz(),              // unnamed values
+    else => default(),       // other named tags
+}
+```
+
+---
+
+## Standard Library Changes
+
+### ArrayList: Unmanaged is Now Default ("Writergate")
+
+**The big one.** `std.ArrayList` now requires passing the allocator to every method call.
+
+```zig
+// ❌ Old (0.14)
+var list = std.ArrayList(u8).init(allocator);
+try list.append(42);
+list.deinit();
+
+// ✅ New (0.15) — pass allocator to methods
+var list = std.ArrayList(u8).init(allocator);
+try list.append(allocator, 42);  // allocator required!
+list.deinit(allocator);          // here too!
+```
+
+**Option 1**: Store allocator in your struct and pass it everywhere:
+```zig
+const MyStruct = struct {
+    items: std.ArrayList(Item),
+    allocator: std.mem.Allocator,
+
+    fn addItem(self: *MyStruct, item: Item) !void {
+        try self.items.append(self.allocator, item);
+    }
+};
+```
+
+**Option 2**: Use `ArrayListUnmanaged` (now the "base" implementation):
+```zig
+const MyStruct = struct {
+    items: std.ArrayListUnmanaged(Item) = .{},
+
+    fn addItem(self: *MyStruct, allocator: std.mem.Allocator, item: Item) !void {
+        try self.items.append(allocator, item);
+    }
+};
+```
+
+### Writer/Reader API Rewrite
+
+Major changes to I/O types to reduce generic code bloat:
+
+- `std.io.Writer` → `std.Io.Writer`
+- `std.io.Reader` → `std.Io.Reader`
+- `CountingWriter` — deleted
+- `BufferedWriter` — deleted
+
+```zig
+// ❌ Old
+const stdout = std.io.getStdOut().writer();
+try stdout.print("hello\n", .{});
+
+// ✅ New
+const stdout = std.io.getStdOut();
+try stdout.writeAll("hello\n");
+// Or for formatted:
+var buf: [256]u8 = undefined;
+const msg = std.fmt.bufPrint(&buf, "value: {}\n", .{42}) catch unreachable;
+try stdout.writeAll(msg);
+```
+
+### Format String Changes
+
+- `"{f}"` now required to call custom format methods
+- Format methods no longer receive format strings or options
+- Formatted printing no longer handles Unicode width
+
+### BoundedArray Removed
+
+Use `std.ArrayListUnmanaged` with a fixed-size backing buffer, or `[N]T` directly.
+
+### Linked Lists De-Genericified
+
+`std.SinglyLinkedList` and `std.DoublyLinkedList` API changes.
+
+---
+
+## Process API Changes
+
+`std.process.Child.run()` return type changed:
+
+```zig
+// ❌ Old
+if (result.term.Exited != 0) { ... }
+
+// ✅ New — term is a tagged union
+switch (result.term) {
+    .exited => |code| if (code != 0) { ... },
+    .signaled => |sig| { ... },
+    // etc.
+}
+```
+
+---
+
 ## Project Structure (Recommended for 0.15)
 
 The idiomatic structure separates library code from the executable:
@@ -141,3 +297,19 @@ This allows:
 | Executable | `.root_source_file` | `.root_module` |
 | Module imports | Implicit via `@import` path | Explicit `.imports` list |
 | Test creation | `.root_source_file` | `.root_module` |
+| `usingnamespace` | Supported | Removed |
+| `async`/`await` | Keywords | Removed (coming back as stdlib) |
+| ArrayList.append | `list.append(item)` | `list.append(allocator, item)` |
+| Writer/Reader | `std.io.Writer` | `std.Io.Writer` |
+| BoundedArray | `std.BoundedArray` | Removed |
+| process.Child.term | `.Exited` field | Tagged union |
+
+---
+
+## Compiler Improvements (Non-Breaking)
+
+- **5x faster debug builds** with x86 backend (now default)
+- **Incremental compilation** improvements
+- **Threaded codegen** for faster release builds
+- **LLVM 20** backend
+- **Fuzzer** built-in support
