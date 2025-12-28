@@ -48,10 +48,20 @@ If that audit trail is missing, then you must act as if the operation never happ
 ### Client (Web)
 - Browser-based UI supporting multiple simultaneous connections
 - Responsive design for desktop, laptop, and mobile
+- **Uses Bun** for package management and running TypeScript
 - Rendering backends (in order of development):
   1. **React/Preact** — initial implementation
   2. **Canvas** — explicit font drawing for performance
   3. **WebGL** — custom shaders for effects (à la Ghostty)
+
+```bash
+cd client
+bun install          # Install dependencies
+bun run build        # Build for production
+bun run dev          # Watch mode for development
+bun run serve        # Dev server at http://localhost:3000
+bun run typecheck    # Type check without emitting
+```
 
 ### Development REPL
 
@@ -92,12 +102,13 @@ dullahan/
 │
 ├── client/
 │   ├── package.json
+│   ├── bun.lock             # bun lockfile
 │   ├── tsconfig.json
 │   ├── esbuild.config.ts
 │   ├── index.html           # stub HTML
 │   ├── src/
 │   │   ├── main.ts          # entry point
-│   │   ├── components/      # React/Preact components
+│   │   ├── components/      # Preact components
 │   │   └── terminal/        # terminal rendering logic
 │   └── dist/                # build output (gitignored)
 │
