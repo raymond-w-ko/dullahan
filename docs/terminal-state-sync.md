@@ -352,6 +352,143 @@ Then send style table separately (style_id → full style).
 
 ---
 
+## Images (Kitty Graphics Protocol)
+
+Modern terminals support inline images via the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). Images are **not stored in cells** — cells only reference placements. The actual image data lives separately.
+
+### Data Flow
+
+```
+1. TRANSMISSION     2. STORAGE           3. PLACEMENT         4. RENDERING
+   (base64 data)       (decoded pixels)     (grid position)      (draw to screen)
+   ESC_Gi=1,...        Image{id, data}      Pin + offset         Source rect → dest
+```
+
+### Image Storage (server-side)
+
+Each screen (primary/alternate) has its own `ImageStorage`:
+
+| Field | Zig Type | Description |
+|-------|----------|-------------|
+| `images` | `HashMap(u32, Image)` | id → image data |
+| `placements` | `HashMap(Key, Placement)` | Where images appear |
+| `total_bytes` | `usize` | Memory tracking |
+| `total_limit` | `usize` | 320MB default limit |
+
+### Image Data
+
+| Field | Zig Type | Wire Format | Notes |
+|-------|----------|-------------|-------|
+| `id` | `u32` | `uint32` | Unique image ID |
+| `number` | `u32` | `uint32` | Alternative reference |
+| `width` | `u32` | `uint32` | Pixels |
+| `height` | `u32` | `uint32` | Pixels |
+| `format` | `Format` | `uint8` | rgb=0, rgba=1, png=2 |
+| `data` | `[]u8` | `base64` or binary | Raw pixel data |
+
+```typescript
+interface Image {
+  id: number;
+  number?: number;
+  width: number;
+  height: number;
+  format: 'rgb' | 'rgba' | 'png';
+  data: string;  // base64 encoded
+}
+```
+
+### Placement (where an image appears)
+
+| Field | Zig Type | Wire Format | Notes |
+|-------|----------|-------------|-------|
+| `image_id` | `u32` | `uint32` | Reference to image |
+| `placement_id` | `u32` | `uint32` | Unique placement ID |
+| `x` | `u16` | `uint16` | Grid column |
+| `y` | `u16` | `uint16` | Grid row |
+| `x_offset` | `u32` | `uint32` | Pixel offset in cell |
+| `y_offset` | `u32` | `uint32` | Pixel offset in cell |
+| `source_x/y/w/h` | `u32` | `uint32` | Crop rectangle |
+| `columns` | `u32` | `uint32` | Grid cells wide |
+| `rows` | `u32` | `uint32` | Grid cells tall |
+| `z` | `i32` | `int32` | Z-index for layering |
+
+```typescript
+interface ImagePlacement {
+  imageId: number;
+  placementId: number;
+  x: number;
+  y: number;
+  offsetX?: number;
+  offsetY?: number;
+  sourceRect?: { x: number, y: number, w: number, h: number };
+  columns: number;
+  rows: number;
+  z?: number;
+}
+```
+
+### Unicode Placeholder Mode
+
+Cells can contain `U+10EEEE` (placeholder codepoint) with image references encoded in style attributes:
+- **Image ID**: encoded in foreground color
+- **Placement ID**: encoded in underline color  
+- **Row/Column within image**: encoded via diacritics
+
+```typescript
+// Cell with image reference (unicode placeholder mode)
+interface Cell {
+  // ... existing fields ...
+  imgRef?: {
+    imageId: number;
+    row: number;    // row within multi-cell image
+    col: number;    // col within multi-cell image
+  };
+}
+```
+
+### Sync Strategies
+
+#### Option A: Server-Side Compositing (Recommended Initially)
+
+Server renders images into the terminal grid, sends composite as PNG:
+
+```typescript
+type ServerMessage =
+  // ... existing types ...
+  | { type: 'image_composite', data: string /* base64 PNG */ };
+```
+
+**Pros**: Simple client, no image handling logic needed  
+**Cons**: Higher bandwidth, no client-side caching
+
+#### Option B: Client-Side Rendering (Optimized)
+
+Send image data separately, client renders:
+
+```typescript
+type ServerMessage =
+  // ... existing types ...
+  | { type: 'image_add', image: Image }
+  | { type: 'image_remove', id: number }
+  | { type: 'image_place', placement: ImagePlacement }
+  | { type: 'image_unplace', imageId: number, placementId?: number };
+```
+
+**Pros**: Client caches images, lower bandwidth for repeated images  
+**Cons**: More complex client, must handle z-ordering
+
+#### Recommendation
+
+1. **Phase 1**: Skip images entirely (most terminal use cases)
+2. **Phase 2**: Server-side compositing for basic support
+3. **Phase 3**: Client-side rendering when bandwidth matters
+
+### Memory Limits
+
+Ghostty enforces a 320MB default limit on image storage. When exceeded, oldest/unused images are evicted. Dullahan should mirror this behavior and communicate evictions to clients.
+
+---
+
 ## Implementation Notes
 
 ### Server (Zig)
