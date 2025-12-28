@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const ipc = @import("ipc.zig");
-const terminal = @import("terminal.zig");
+const Session = @import("session.zig").Session;
 
 pub const ServerState = struct {
     allocator: std.mem.Allocator,
@@ -12,13 +12,19 @@ pub const ServerState = struct {
     commands_processed: u64 = 0,
     running: bool = true,
 
-    // TODO: Add terminal sessions, client connections, etc.
+    /// The terminal session (windows/panes)
+    session: Session,
 
-    pub fn init(allocator: std.mem.Allocator) ServerState {
+    pub fn init(allocator: std.mem.Allocator) !ServerState {
         return .{
             .allocator = allocator,
             .start_time = std.time.timestamp(),
+            .session = try Session.init(allocator, .{}),
         };
+    }
+
+    pub fn deinit(self: *ServerState) void {
+        self.session.deinit();
     }
 
     pub fn uptime(self: *const ServerState) i64 {
@@ -43,7 +49,8 @@ pub const ServerState = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, config: ipc.Config) !void {
-    var state = ServerState.init(allocator);
+    var state = try ServerState.init(allocator);
+    defer state.deinit();
 
     var server = try ipc.Server.init(config);
     defer server.deinit();
@@ -105,11 +112,24 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
             const data = try buf.toOwnedSlice(allocator);
             break :blk ipc.Response.okWithData("Help", data);
         },
+
+        .demo => blk: {
+            // Run ls -al --color=always in the active pane
+            try state.session.runCommand(&.{ "ls", "-al", "--color=always" });
+
+            // Get the terminal output
+            const pane = state.session.activePane() orelse
+                break :blk ipc.Response.err("No active pane");
+
+            const output = try pane.plainString();
+            break :blk ipc.Response.okWithData("Terminal output (plain text)", output);
+        },
     };
 }
 
 test "ServerState uptime" {
-    var state = ServerState.init(std.testing.allocator);
+    var state = try ServerState.init(std.testing.allocator);
+    defer state.deinit();
     // Just verify it doesn't crash
     try std.testing.expect(state.uptime() >= 0);
 }

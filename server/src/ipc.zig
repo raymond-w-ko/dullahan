@@ -20,6 +20,7 @@ pub const Command = enum {
     quit,
     ping,
     help,
+    demo,
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -27,6 +28,7 @@ pub const Command = enum {
             .{ "quit", .quit },
             .{ "ping", .ping },
             .{ "help", .help },
+            .{ "demo", .demo },
         });
         return map.get(s);
     }
@@ -37,6 +39,7 @@ pub const Command = enum {
             .quit => "Gracefully shutdown the server",
             .ping => "Check if server is responsive",
             .help => "Show available commands",
+            .demo => "Run ls -al --color and show terminal output",
         };
     }
 };
