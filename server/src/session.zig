@@ -6,8 +6,10 @@
 //! Addressing: (window_id, pane_id) provides 2D indexing into terminal panes.
 
 const std = @import("std");
+const posix = std.posix;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
+const Pty = @import("pty.zig").Pty;
 
 pub const Session = struct {
     /// Windows in this session, indexed by window ID
@@ -129,6 +131,35 @@ pub const Session = struct {
         }
 
         _ = try child.wait();
+    }
+
+    /// Run a command in the active pane using a PTY (passes isatty() checks)
+    pub fn runCommandPty(self: *Session, argv: []const [:0]const u8) !void {
+        const pane = self.activePane() orelse return error.NoActivePane;
+
+        // Open PTY with pane dimensions
+        var pty = try Pty.open(.{
+            .ws_row = pane.rows,
+            .ws_col = pane.cols,
+        });
+        defer pty.deinit();
+
+        // Spawn child process
+        const pid = try pty.spawn(argv, null);
+
+        // Read from PTY master and feed to terminal
+        var buf: [4096]u8 = undefined;
+        while (true) {
+            const n = pty.read(&buf) catch |err| switch (err) {
+                error.InputOutput => break, // Child closed PTY
+                else => break,
+            };
+            if (n == 0) break;
+            try pane.feed(buf[0..n]);
+        }
+
+        // Wait for child to exit
+        _ = posix.waitpid(pid, 0);
     }
 
     /// Dump session state in compact human-readable format

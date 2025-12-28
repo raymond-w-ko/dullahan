@@ -114,7 +114,7 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
         },
 
         .demo => blk: {
-            // Run ls -al --color=always in the active pane
+            // Run ls -al --color=always in the active pane (via pipe)
             try state.session.runCommand(&.{ "ls", "-al", "--color=always" });
 
             // Get the terminal output
@@ -122,7 +122,19 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
                 break :blk ipc.Response.err("No active pane");
 
             const output = try pane.plainString();
-            break :blk ipc.Response.okWithData("Terminal output (plain text)", output);
+            break :blk ipc.Response.okWithData("Terminal output (pipe)", output);
+        },
+
+        .@"pty-demo" => blk: {
+            // Run ls -al --color=always in the active pane (via PTY)
+            try state.session.runCommandPty(&.{ "ls", "-al", "--color=always" });
+
+            // Get the terminal output
+            const pane = state.session.activePane() orelse
+                break :blk ipc.Response.err("No active pane");
+
+            const output = try pane.plainString();
+            break :blk ipc.Response.okWithData("Terminal output (PTY)", output);
         },
 
         .dump => blk: {

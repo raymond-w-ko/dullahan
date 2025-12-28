@@ -21,6 +21,7 @@ pub const Command = enum {
     ping,
     help,
     demo,
+    @"pty-demo",
     dump,
 
     pub fn fromString(s: []const u8) ?Command {
@@ -30,6 +31,7 @@ pub const Command = enum {
             .{ "ping", .ping },
             .{ "help", .help },
             .{ "demo", .demo },
+            .{ "pty-demo", .@"pty-demo" },
             .{ "dump", .dump },
         });
         return map.get(s);
@@ -41,7 +43,8 @@ pub const Command = enum {
             .quit => "Gracefully shutdown the server",
             .ping => "Check if server is responsive",
             .help => "Show available commands",
-            .demo => "Run ls -al --color and show terminal output",
+            .demo => "Run ls -al --color and show terminal output (pipe)",
+            .@"pty-demo" => "Run ls -al --color via PTY (isatty=true)",
             .dump => "Dump terminal state (compact, human-readable)",
         };
     }

@@ -15,6 +15,7 @@ pub const cli = @import("cli.zig");
 pub const Session = @import("session.zig").Session;
 pub const Window = @import("window.zig").Window;
 pub const Pane = @import("pane.zig").Pane;
+pub const Pty = @import("pty.zig").Pty;
 
 // Ensure all tests from submodules are run
 test {
