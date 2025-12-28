@@ -99,6 +99,24 @@ pub const Window = struct {
             try pane.resize(cols, rows);
         }
     }
+
+    /// Dump window state in compact human-readable format
+    pub fn dump(self: *Window, writer: anytype) !void {
+        try writer.print("Window[{d}] {d}x{d} panes={d} active={d}\n", .{
+            self.id,
+            self.cols,
+            self.rows,
+            self.paneCount(),
+            self.active_pane_id,
+        });
+
+        // Dump each pane
+        var it = self.panes.valueIterator();
+        while (it.next()) |pane| {
+            try writer.writeAll("  ");
+            try pane.dump(writer);
+        }
+    }
 };
 
 // Tests

@@ -124,6 +124,21 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
             const output = try pane.plainString();
             break :blk ipc.Response.okWithData("Terminal output (plain text)", output);
         },
+
+        .dump => blk: {
+            var buf: std.ArrayListUnmanaged(u8) = .{};
+            const writer = buf.writer(allocator);
+
+            // Server info
+            const up = state.uptime();
+            try writer.print("Server: up={d}s cmds={d}\n", .{ up, state.commands_processed });
+
+            // Session dump
+            try state.session.dump(writer);
+
+            const data = try buf.toOwnedSlice(allocator);
+            break :blk ipc.Response.okWithData("State dump", data);
+        },
     };
 }
 

@@ -70,6 +70,50 @@ pub const Pane = struct {
         self.rows = rows;
         try self.terminal.resize(.{ .cols = cols, .rows = rows });
     }
+
+    /// Dump pane state in compact human-readable format
+    pub fn dump(self: *Pane, writer: anytype) !void {
+        const screen = self.terminal.screens.active;
+        const cursor = screen.cursor;
+
+        try writer.print("Pane[{d}] {d}x{d}", .{ self.id, self.cols, self.rows });
+        try writer.print(" cur=({d},{d})", .{ cursor.x, cursor.y });
+
+        // Cursor style
+        const style_char: u8 = switch (cursor.cursor_style) {
+            .block => 'B',
+            .block_hollow => 'O',
+            .underline => 'U',
+            .bar => 'I',
+        };
+        try writer.print(" style={c}", .{style_char});
+
+        if (cursor.pending_wrap) try writer.writeAll(" wrap");
+        try writer.writeAll("\n");
+
+        // Dump terminal content (non-empty rows only)
+        try writer.writeAll("---content---\n");
+
+        const content = self.terminal.plainString(self.allocator) catch |e| {
+            try writer.print("(error: {})\n", .{e});
+            return;
+        };
+        defer self.allocator.free(content);
+
+        // Trim trailing empty lines and output
+        var end = content.len;
+        while (end > 0 and (content[end - 1] == '\n' or content[end - 1] == ' ')) {
+            end -= 1;
+        }
+
+        if (end > 0) {
+            try writer.writeAll(content[0..end]);
+            try writer.writeAll("\n");
+        } else {
+            try writer.writeAll("(empty)\n");
+        }
+        try writer.writeAll("---end---\n");
+    }
 };
 
 // Tests

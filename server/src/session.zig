@@ -130,6 +130,22 @@ pub const Session = struct {
 
         _ = try child.wait();
     }
+
+    /// Dump session state in compact human-readable format
+    pub fn dump(self: *Session, writer: anytype) !void {
+        try writer.print("Session: {d} window(s), active={d}, default={d}x{d}\n", .{
+            self.windowCount(),
+            self.active_window_id,
+            self.default_cols,
+            self.default_rows,
+        });
+
+        // Dump each window
+        var it = self.windows.valueIterator();
+        while (it.next()) |window| {
+            try window.dump(writer);
+        }
+    }
 };
 
 // Tests
