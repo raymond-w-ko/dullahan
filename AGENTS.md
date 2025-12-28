@@ -101,10 +101,32 @@ dullahan/
 │   │   └── terminal/        # terminal rendering logic
 │   └── dist/                # build output (gitignored)
 │
-└── protocol/                # shared definitions
-    ├── messages.md          # documentation of wire format
-    └── schema/              # JSON schemas, protobuf, etc.
+├── protocol/                # shared definitions
+│   ├── messages.md          # documentation of wire format
+│   └── schema/              # JSON schemas, protobuf, etc.
+│
+├── scripts/
+│   └── update-ghostty.sh    # updates dependency + source checkout
+│
+└── deps/                    # gitignored, source checkouts for reference
+    └── ghostty/             # ghostty source (synced to dependency version)
 ```
+
+### Dependency Source Reference
+
+The `deps/ghostty/` directory contains a git checkout of the ghostty source code,
+synced to the same commit as our zig dependency. This is for **reference only** —
+the actual dependency comes from `build.zig.zon`.
+
+```bash
+# Update dependency AND sync source checkout:
+./scripts/update-ghostty.sh
+
+# Browse ghostty source for API reference:
+ls deps/ghostty/src/
+```
+
+This checkout is gitignored and created/updated by the update script.
 
 ---
 
