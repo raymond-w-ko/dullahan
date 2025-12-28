@@ -31,10 +31,14 @@ pub const Pane = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
-        const terminal = try Terminal.init(allocator, .{
+        var terminal = try Terminal.init(allocator, .{
             .cols = opts.cols,
             .rows = opts.rows,
         });
+
+        // Enable LNM (Line Feed/New Line Mode) so \n does CR+LF
+        // Without this, \n only moves down, not back to column 0
+        terminal.modes.set(.linefeed, true);
 
         return .{
             .terminal = terminal,
