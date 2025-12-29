@@ -1,6 +1,6 @@
 import { h } from "preact";
 import { useState, useEffect, useRef } from "preact/hooks";
-import { TerminalConnection } from "../terminal/connection";
+import { TerminalConnection, cellsToLines } from "../terminal/connection";
 import type { TerminalSnapshot } from "../terminal/connection";
 
 export function App() {
@@ -81,10 +81,10 @@ interface TerminalViewProps {
 }
 
 function TerminalView({ snapshot }: TerminalViewProps) {
-  const { cols, rows, cursor, content, altScreen } = snapshot;
+  const { cols, rows, cursor, cells, altScreen } = snapshot;
 
-  // Split content into lines
-  const lines = content.split("\n");
+  // Convert cells to lines for display
+  const lines = cellsToLines(cells, cols, rows);
 
   return (
     <div>
@@ -94,7 +94,8 @@ function TerminalView({ snapshot }: TerminalViewProps) {
         color: "#888" 
       }}>
         {cols}x{rows} | Cursor: ({cursor.x}, {cursor.y}) {cursor.visible ? "visible" : "hidden"} | 
-        {altScreen ? " Alt Screen" : " Primary Screen"}
+        {altScreen ? " Alt Screen" : " Primary Screen"} |
+        {cells.length} cells
       </div>
 
       <pre style={{

@@ -1,5 +1,8 @@
 // WebSocket connection to dullahan server
 
+import { decodeCellsFromBase64, cellToChar } from "../../../protocol/schema/cell";
+import type { Cell } from "../../../protocol/schema/cell";
+
 export interface TerminalSnapshot {
   cols: number;
   rows: number;
@@ -10,11 +13,24 @@ export interface TerminalSnapshot {
     style: "block" | "underline" | "bar";
   };
   altScreen: boolean;
-  content: string;
+  cells: Cell[]; // Decoded cell data
+}
+
+interface RawSnapshot {
+  cols: number;
+  rows: number;
+  cursor: {
+    x: number;
+    y: number;
+    visible: boolean;
+    style: "block" | "underline" | "bar";
+  };
+  altScreen: boolean;
+  cells: string; // Base64 encoded
 }
 
 export type ServerMessage =
-  | { type: "snapshot"; data: TerminalSnapshot }
+  | { type: "snapshot"; data: RawSnapshot }
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -76,7 +92,16 @@ export class TerminalConnection {
     switch (msg.type) {
       case "snapshot":
         console.log("Received snapshot:", msg.data.cols, "x", msg.data.rows);
-        this.onSnapshot?.(msg.data);
+        // Decode cells from base64
+        const cells = decodeCellsFromBase64(msg.data.cells);
+        const snapshot: TerminalSnapshot = {
+          cols: msg.data.cols,
+          rows: msg.data.rows,
+          cursor: msg.data.cursor,
+          altScreen: msg.data.altScreen,
+          cells,
+        };
+        this.onSnapshot?.(snapshot);
         break;
       case "output":
         this.onOutput?.(msg.data);
@@ -129,4 +154,21 @@ export class TerminalConnection {
   get isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
+}
+
+/**
+ * Convert cells to lines of text (for simple rendering).
+ */
+export function cellsToLines(cells: Cell[], cols: number, rows: number): string[] {
+  const lines: string[] = [];
+  for (let y = 0; y < rows; y++) {
+    let line = "";
+    for (let x = 0; x < cols; x++) {
+      const idx = y * cols + x;
+      const cell = cells[idx];
+      line += cell ? cellToChar(cell) : " ";
+    }
+    lines.push(line.trimEnd());
+  }
+  return lines;
 }
