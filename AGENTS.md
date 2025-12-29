@@ -145,7 +145,9 @@ dullahan/
 │   └── schema/
 │       ├── types.ts         # TypeScript type definitions
 │       ├── cell.ts          # Cell encode/decode (matches ghostty packed struct)
-│       └── cell.test.ts     # Cell tests (bun test)
+│       ├── cell.test.ts     # Cell tests (bun test)
+│       ├── style.ts         # Style encode/decode (colors, attributes)
+│       └── style.test.ts    # Style tests (bun test)
 │
 ├── docs/                    # documentation
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes

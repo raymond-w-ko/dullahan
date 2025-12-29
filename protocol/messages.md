@@ -40,6 +40,7 @@ Full terminal state, sent on connection and after changes.
 - `cursor.style` — One of: `"block"`, `"underline"`, `"bar"`
 - `altScreen` — Whether alternate screen buffer is active
 - `cells` — Base64-encoded raw cell data (cols × rows × 8 bytes)
+- `styles` — Base64-encoded style table (see below)
 
 #### Cell Binary Format
 
@@ -78,6 +79,41 @@ const wide = (hi >>> 10) & 0x3;
 const protected = (hi >>> 12) & 0x1;
 const hyperlink = (hi >>> 13) & 0x1;
 ```
+
+#### Style Table Binary Format
+
+The `styles` field contains a binary style table:
+
+```
+[count: u16]  // Number of non-default styles
+[
+  id: u16,           // Style ID (matches cell.style_id)
+  fg_color: 4 bytes, // [tag, v0, v1, v2]
+  bg_color: 4 bytes,
+  underline_color: 4 bytes,
+  flags: u16         // Packed attribute flags
+] × count
+```
+
+Color encoding (4 bytes):
+- Tag 0 = none (default color)
+- Tag 1 = palette index (v0 = index 0-255)
+- Tag 2 = RGB (v0=r, v1=g, v2=b)
+
+Flags (16 bits):
+```
+bit 0:     bold
+bit 1:     italic
+bit 2:     faint
+bit 3:     blink
+bit 4:     inverse
+bit 5:     invisible
+bit 6:     strikethrough
+bit 7:     overline
+bits 8-10: underline (0=none, 1=single, 2=double, 3=curly, 4=dotted, 5=dashed)
+```
+
+Style ID 0 is always the default style (not included in table).
 
 #### Pong
 
