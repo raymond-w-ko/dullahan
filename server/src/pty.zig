@@ -9,7 +9,11 @@ const builtin = @import("builtin");
 
 const c = @cImport({
     @cInclude("sys/ioctl.h");
-    @cInclude("util.h"); // openpty() on macOS
+    if (builtin.os.tag == .macos) {
+        @cInclude("util.h"); // openpty() on macOS
+    } else {
+        @cInclude("pty.h"); // openpty() on Linux
+    }
     @cInclude("termios.h");
     @cInclude("unistd.h"); // setsid
 });
