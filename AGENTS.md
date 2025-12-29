@@ -143,7 +143,9 @@ dullahan/
 ├── protocol/                # shared definitions
 │   ├── messages.md          # wire format documentation
 │   └── schema/
-│       └── types.ts         # TypeScript type definitions
+│       ├── types.ts         # TypeScript type definitions
+│       ├── cell.ts          # Cell encode/decode (matches ghostty packed struct)
+│       └── cell.test.ts     # Cell tests (bun test)
 │
 ├── docs/                    # documentation
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes

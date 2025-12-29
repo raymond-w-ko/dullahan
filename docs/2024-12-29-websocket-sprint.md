@@ -1,43 +1,60 @@
 # 2024-12-29: WebSocket Sprint
 
-Got the basic client-server communication working over WebSocket.
+Got the basic client-server communication working over WebSocket, then upgraded to raw cell data.
 
 ## What got built
 
 **Server (Zig):**
 - `websocket.zig` - RFC 6455 framing, masking, handshake
 - `http.zig` - HTTP server with WS upgrade
-- `ws_server.zig` - manages client connections
-- `snapshot.zig` - terminal state → JSON
+- `ws_server.zig` - manages client connections, version-based updates
+- `snapshot.zig` - terminal state → JSON with raw cell bytes
 
 Server now runs HTTP+WS on port 7681 in a separate thread.
 
 **Client (Preact):**
-- `terminal/connection.ts` - WebSocket client with auto-reconnect
-- `components/App.tsx` - renders terminal content + cursor
+- `terminal/connection.ts` - WebSocket client with auto-reconnect, cell decoding
+- `components/App.tsx` - renders terminal from decoded cells
 
 **Protocol:**
-- Updated `protocol/messages.md` with actual message formats
-- Added `protocol/schema/types.ts` for TypeScript types
+- `protocol/messages.md` - wire format documentation
+- `protocol/schema/types.ts` - TypeScript types
+- `protocol/schema/cell.ts` - cell encode/decode matching ghostty's packed struct
+- `protocol/schema/cell.test.ts` - 16 tests for cell handling
 
 ## What works
 
 1. Server starts, listens on 7681
 2. Client connects via WebSocket
-3. Server sends JSON snapshot (dimensions, cursor, content)
-4. Client displays it
+3. Server sends JSON snapshot with base64-encoded raw cells
+4. Client decodes cells (8 bytes each, 64-bit packed struct)
+5. Version tracking: pane changes trigger automatic snapshot push
+6. Immediate feedback on client input
 
-Tested with a quick bun script - round trip works.
+## Cell format (64 bits)
+
+```
+bits 0-1:   content_tag (codepoint/grapheme/bg_palette/bg_rgb)
+bits 2-25:  content (codepoint u21 or color)
+bits 26-41: style_id (16 bits, index into style table)
+bits 42-43: wide (narrow/wide/spacer_tail/spacer_head)
+bit 44:     protected
+bit 45:     hyperlink
+bits 46-63: padding
+```
 
 ## Fixes along the way
 
 - Linux build: `pty.h` instead of `util.h` for `openpty()`
 - Zig 0.15: `ArrayListUnmanaged` + allocator per method
 - Zig 0.15: `{any}` format specifier for errors/complex types
-- Zig 0.15: terminal.resize() takes (allocator, cols, rows)
+- Zig 0.15: `terminal.resize()` takes `(allocator, cols, rows)`
+- Socket timeout: `SO_RCVTIMEO` for polling without blocking
 
 ## Next up
 
+- Send style table so client can render colors
 - Hook up keyboard input
-- Actually run a shell in the PTY
+- Run a shell in the PTY
+- Binary WebSocket frames (skip base64)
 - Delta updates instead of full snapshots
