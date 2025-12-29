@@ -1,4 +1,4 @@
-.PHONY: all build clean dev server client
+.PHONY: all build clean dev server client fmt
 
 all: build
 
@@ -16,3 +16,6 @@ client:
 clean:
 	cd server && zig build --clean || true
 	cd client && rm -rf dist
+
+fmt:
+	zig fmt server/src/

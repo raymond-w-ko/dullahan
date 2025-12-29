@@ -124,7 +124,7 @@ pub const Pane = struct {
 test "pane can be created" {
     var pane = try Pane.init(std.testing.allocator, .{});
     defer pane.deinit();
-    
+
     try std.testing.expectEqual(@as(u16, 80), pane.cols);
     try std.testing.expectEqual(@as(u16, 24), pane.rows);
 }
@@ -132,11 +132,11 @@ test "pane can be created" {
 test "pane can feed data" {
     var pane = try Pane.init(std.testing.allocator, .{});
     defer pane.deinit();
-    
+
     try pane.feed("Hello, World!\r\n");
-    
+
     const str = try pane.plainString();
     defer std.testing.allocator.free(str);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, str, "Hello") != null);
 }
