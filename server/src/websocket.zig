@@ -130,6 +130,20 @@ pub const Connection = struct {
         };
     }
 
+    /// Set read timeout for polling (0 = no timeout)
+    pub fn setReadTimeout(self: *Connection, timeout_ms: u32) void {
+        const timeout = std.posix.timeval{
+            .sec = @intCast(timeout_ms / 1000),
+            .usec = @intCast((timeout_ms % 1000) * 1000),
+        };
+        std.posix.setsockopt(
+            self.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+    }
+
     /// Send a text message
     pub fn sendText(self: *Connection, message: []const u8) !void {
         const frame = try createFrame(self.allocator, .text, message);

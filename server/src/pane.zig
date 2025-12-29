@@ -24,6 +24,10 @@ pub const Pane = struct {
     /// Whether this pane is active/focused
     active: bool = true,
 
+    /// Version counter - increments on any content change
+    /// Used to detect when clients need snapshot updates
+    version: u64 = 0,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -61,6 +65,9 @@ pub const Pane = struct {
         var stream = self.terminal.vtStream();
         defer stream.deinit();
         try stream.nextSlice(data);
+
+        // Increment version to signal clients need update
+        self.version +%= 1;
     }
 
     /// Get a plain string representation of the terminal contents
@@ -73,6 +80,9 @@ pub const Pane = struct {
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
+
+        // Increment version to signal clients need update
+        self.version +%= 1;
     }
 
     /// Dump pane state in compact human-readable format

@@ -58,64 +58,94 @@ pub const WsServer = struct {
 
         log.info("Client connected, sending initial snapshot", .{});
 
-        // Send initial snapshot
+        // Get the active pane
         const pane = session.activePane() orelse {
             log.err("No active pane", .{});
             return;
         };
 
-        const snap = try snapshot.generateSnapshot(self.allocator, pane);
-        defer self.allocator.free(snap);
-
-        ws.sendText(snap) catch |e| {
-            log.err("Failed to send snapshot: {any}", .{e});
-            return;
-        };
+        // Send initial snapshot
+        var last_version = pane.version;
+        try self.sendSnapshot(&ws, pane);
 
         log.info("Snapshot sent, entering message loop", .{});
 
-        // Message loop
-        while (true) {
-            const frame = ws.readFrame() catch |e| {
-                if (e == error.ConnectionClosed) {
-                    log.info("Client disconnected", .{});
-                    break;
-                }
-                log.err("Read error: {any}", .{e});
-                break;
-            };
-            defer self.allocator.free(frame.payload);
+        // Set read timeout for polling (100ms)
+        ws.setReadTimeout(100);
 
-            switch (frame.opcode) {
-                .text => {
-                    // Parse client message
-                    self.handleClientMessage(frame.payload, session, &ws) catch |e| {
-                        log.err("Failed to handle message: {any}", .{e});
-                    };
-                },
-                .binary => {
-                    log.debug("Received binary frame ({d} bytes)", .{frame.payload.len});
-                },
-                .ping => {
-                    ws.sendPong(frame.payload) catch {};
-                },
-                .pong => {
-                    // Ignore pong
-                },
-                .close => {
-                    log.info("Client sent close frame", .{});
-                    ws.sendClose() catch {};
-                    break;
-                },
-                else => {
-                    log.warn("Unknown opcode: {any}", .{@intFromEnum(frame.opcode)});
-                },
+        // Message loop with polling for pane updates
+        while (true) {
+            const frame_result = ws.readFrame();
+
+            if (frame_result) |frame| {
+                defer self.allocator.free(frame.payload);
+
+                switch (frame.opcode) {
+                    .text => {
+                        // Parse client message (this may update pane)
+                        self.handleClientMessage(frame.payload, session, &ws) catch |e| {
+                            log.err("Failed to handle message: {any}", .{e});
+                        };
+                        // Send immediate feedback if pane was modified
+                        if (pane.version != last_version) {
+                            self.sendSnapshot(&ws, pane) catch {};
+                            last_version = pane.version;
+                        }
+                    },
+                    .binary => {
+                        log.debug("Received binary frame ({d} bytes)", .{frame.payload.len});
+                    },
+                    .ping => {
+                        ws.sendPong(frame.payload) catch {};
+                    },
+                    .pong => {
+                        // Ignore pong
+                    },
+                    .close => {
+                        log.info("Client sent close frame", .{});
+                        ws.sendClose() catch {};
+                        return;
+                    },
+                    else => {
+                        log.warn("Unknown opcode: {any}", .{@intFromEnum(frame.opcode)});
+                    },
+                }
+            } else |e| {
+                // Check various timeout-related errors
+                if (e == error.WouldBlock or e == error.ConnectionTimedOut) {
+                    // Timeout - check if pane was updated
+                    if (pane.version != last_version) {
+                        log.debug("Pane updated (v{d} -> v{d}), sending snapshot", .{ last_version, pane.version });
+                        self.sendSnapshot(&ws, pane) catch |send_err| {
+                            log.err("Failed to send snapshot: {any}", .{send_err});
+                            return;
+                        };
+                        last_version = pane.version;
+                    }
+                    continue;
+                } else if (e == error.ConnectionClosed) {
+                    log.info("Client disconnected", .{});
+                    return;
+                } else {
+                    log.err("Read error (unexpected): {any}", .{e});
+                    return;
+                }
             }
         }
     }
 
+    /// Send a snapshot to a single client
+    fn sendSnapshot(self: *WsServer, ws: *websocket.Connection, pane: *Pane) !void {
+        const snap = try snapshot.generateSnapshot(self.allocator, pane);
+        defer self.allocator.free(snap);
+        try ws.sendText(snap);
+    }
+
     /// Handle a message from a client
+    /// Note: Does not send snapshots - the main loop handles that via version tracking
     fn handleClientMessage(self: *WsServer, data: []const u8, session: *Session, ws: *websocket.Connection) !void {
+        _ = self;
+
         // Simple JSON parsing - look for "type" field
         // Format: {"type":"...", ...}
 
@@ -124,14 +154,9 @@ pub const WsServer = struct {
             if (extractJsonString(data, "\"data\":\"")) |input_data| {
                 log.debug("Received input: {d} bytes", .{input_data.len});
 
-                // Feed input to terminal
+                // Feed input to terminal (this increments pane.version)
                 const pane = session.activePane() orelse return;
                 try pane.feed(input_data);
-
-                // Send updated snapshot
-                const snap = try snapshot.generateSnapshot(self.allocator, pane);
-                defer self.allocator.free(snap);
-                try ws.sendText(snap);
             }
         } else if (std.mem.indexOf(u8, data, "\"type\":\"resize\"")) |_| {
             // Resize message
@@ -140,13 +165,9 @@ pub const WsServer = struct {
 
             log.info("Resize request: {d}x{d}", .{ cols, rows });
 
+            // Resize pane (this increments pane.version)
             const pane = session.activePane() orelse return;
             try pane.resize(@intCast(cols), @intCast(rows));
-
-            // Send updated snapshot
-            const snap = try snapshot.generateSnapshot(self.allocator, pane);
-            defer self.allocator.free(snap);
-            try ws.sendText(snap);
         } else if (std.mem.indexOf(u8, data, "\"type\":\"ping\"")) |_| {
             // Ping message - send pong
             try ws.sendText("{\"type\":\"pong\"}");
