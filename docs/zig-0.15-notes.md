@@ -341,6 +341,117 @@ const pid = std.c.getpid();
 
 ---
 
+## Format String Pitfalls
+
+### Ambiguous Format Specifiers
+
+In 0.15, `{}` is ambiguous for types that have custom format methods. You'll get:
+```
+error: ambiguous format string; specify {f} to call format method, or {any} to skip it
+```
+
+**Common types that need explicit specifiers:**
+
+```zig
+// ❌ These will fail
+log.err("Error: {}", .{some_error});
+log.info("Address: {}", .{socket_address});
+log.debug("Value: {}", .{self.running});  // bool in some contexts
+
+// ✅ Use {any} for safety
+log.err("Error: {any}", .{some_error});
+log.info("Address: {any}", .{socket_address});
+log.debug("Value: {any}", .{self.running});
+
+// ✅ Or use specific formatters
+log.info("Count: {d}", .{count});      // integers
+log.info("Name: {s}", .{name});        // strings
+log.info("Flag: {}", .{@as(u8, if (flag) 1 else 0)});  // convert bool
+```
+
+**Rule of thumb**: If you're logging an error, address, or any complex type, use `{any}`.
+
+---
+
+## ArrayListUnmanaged Patterns
+
+The idiomatic pattern for building strings/buffers in 0.15:
+
+```zig
+// ✅ Correct pattern
+pub fn buildString(allocator: std.mem.Allocator) ![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+    
+    const writer = buf.writer(allocator);
+    try writer.writeAll("Hello ");
+    try writer.print("{d}", .{42});
+    
+    return buf.toOwnedSlice(allocator);
+}
+
+// ❌ Old pattern (won't compile)
+var buf = std.ArrayList(u8).init(allocator);
+const writer = buf.writer();  // writer() now needs allocator!
+```
+
+Key points:
+- Initialize with `.{}` (empty struct literal)
+- Pass `allocator` to `writer()`, `append()`, `deinit()`, `toOwnedSlice()`
+- Use `errdefer buf.deinit(allocator)` for cleanup on error
+
+---
+
+## File I/O Changes
+
+### File.writer() Requires Buffer
+
+```zig
+// ❌ Old
+const writer = file.writer();
+try writer.print("hello {}\n", .{name});
+
+// ✅ New — use writeAll + bufPrint
+var buf: [4096]u8 = undefined;
+const msg = std.fmt.bufPrint(&buf, "hello {s}\n", .{name}) catch return;
+file.writeAll(msg) catch return;
+
+// ✅ Or use ArrayListUnmanaged for dynamic sizing
+var out: std.ArrayListUnmanaged(u8) = .{};
+defer out.deinit(allocator);
+const writer = out.writer(allocator);
+try writer.print("hello {s}\n", .{name});
+try file.writeAll(out.items);
+```
+
+---
+
+## Platform-Specific Code
+
+### @cImport with Conditionals
+
+```zig
+const builtin = @import("builtin");
+
+const c = @cImport({
+    @cInclude("sys/ioctl.h");
+    if (builtin.os.tag == .macos) {
+        @cInclude("util.h");      // openpty() on macOS
+    } else {
+        @cInclude("pty.h");       // openpty() on Linux
+    }
+    @cInclude("termios.h");
+});
+```
+
+Common platform differences:
+| Function | macOS | Linux |
+|----------|-------|-------|
+| `openpty()` | `<util.h>` | `<pty.h>` |
+| `forkpty()` | `<util.h>` | `<pty.h>` |
+
+---
+
 ## Compiler Improvements (Non-Breaking)
 
 - **5x faster debug builds** with x86 backend (now default)

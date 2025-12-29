@@ -11,6 +11,12 @@ pub const ipc = @import("ipc.zig");
 pub const server = @import("server.zig");
 pub const cli = @import("cli.zig");
 
+// WebSocket/HTTP server
+pub const http = @import("http.zig");
+pub const websocket = @import("websocket.zig");
+pub const ws_server = @import("ws_server.zig");
+pub const snapshot = @import("snapshot.zig");
+
 // Session/Window/Pane hierarchy
 pub const Session = @import("session.zig").Session;
 pub const Window = @import("window.zig").Window;

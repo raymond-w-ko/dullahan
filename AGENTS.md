@@ -44,6 +44,9 @@ If that audit trail is missing, then you must act as if the operation never happ
 - Source of truth for all terminal state
 - Sends full snapshots and delta updates to connected clients
 - Runs as a daemon on Linux/macOS (Windows support planned)
+- **Two communication channels:**
+  - **IPC socket** (`/tmp/dullahan.sock`) — CLI control (ping, status, quit)
+  - **WebSocket** (port `7681`) — Client connections for terminal data
 
 ### Client (Web)
 - Browser-based UI supporting multiple simultaneous connections
@@ -84,7 +87,16 @@ The server includes an IPC system for runtime inspection. **Never run `dullahan 
 - Inspect runtime state: `dullahan status`  
 - Clean shutdown before rebuild: `dullahan quit`
 
-Socket: `/tmp/dullahan.sock` | PID file: `/tmp/dullahan.pid`
+### Ports & Paths
+
+| Resource | Location | Purpose |
+|----------|----------|---------|
+| IPC Socket | `/tmp/dullahan.sock` | CLI ↔ Server communication |
+| PID File | `/tmp/dullahan.pid` | Server process tracking |
+| WebSocket | `ws://localhost:7681` | Client ↔ Server terminal data |
+| Log File | `/tmp/dullahan.log` | Server debug logging |
+
+**Port 7681** is also used by ttyd/libwebsockets — if you run both, one will fail to bind.
 
 ### Repo Layout
 
@@ -92,13 +104,26 @@ Socket: `/tmp/dullahan.sock` | PID file: `/tmp/dullahan.pid`
 dullahan/
 ├── AGENTS.md
 ├── README.md
-├── Makefile                 # orchestrates both builds
+├── Makefile                 # orchestrates both builds (also: `make fmt`)
 │
 ├── server/
 │   ├── build.zig
 │   ├── build.zig.zon        # dependencies (libghostty-vt)
 │   └── src/
-│       └── main.zig
+│       ├── main.zig         # entry point + logging setup
+│       ├── root.zig         # library exports
+│       ├── server.zig       # main server loop (IPC + WS threads)
+│       ├── cli.zig          # CLI argument parsing
+│       ├── ipc.zig          # Unix socket IPC for CLI control
+│       ├── http.zig         # HTTP server with WebSocket upgrade
+│       ├── websocket.zig    # WebSocket frame encoding/decoding
+│       ├── ws_server.zig    # WebSocket client handler
+│       ├── snapshot.zig     # Terminal state → JSON serialization
+│       ├── session.zig      # Session (contains windows)
+│       ├── window.zig       # Window (contains panes)
+│       ├── pane.zig         # Pane (terminal + PTY)
+│       ├── terminal.zig     # ghostty-vt wrapper
+│       └── pty.zig          # PTY allocation (Linux/macOS)
 │
 ├── client/
 │   ├── package.json
@@ -106,18 +131,27 @@ dullahan/
 │   ├── tsconfig.json
 │   ├── esbuild.config.ts
 │   ├── index.html           # stub HTML
+│   ├── serve.ts             # dev server
 │   ├── src/
 │   │   ├── main.ts          # entry point
-│   │   ├── components/      # Preact components
-│   │   └── terminal/        # terminal rendering logic
+│   │   ├── components/
+│   │   │   └── App.tsx      # main terminal UI
+│   │   └── terminal/
+│   │       └── connection.ts # WebSocket client
 │   └── dist/                # build output (gitignored)
 │
 ├── protocol/                # shared definitions
-│   ├── messages.md          # documentation of wire format
-│   └── schema/              # JSON schemas, protobuf, etc.
+│   ├── messages.md          # wire format documentation
+│   └── schema/
+│       └── types.ts         # TypeScript type definitions
+│
+├── docs/                    # documentation
+│   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
+│   └── terminal-state-sync.md # state sync design doc
 │
 ├── scripts/
-│   └── update-ghostty.sh    # updates dependency + source checkout
+│   ├── update-ghostty.sh    # updates dependency + source checkout
+│   └── setup-beads.sh       # initialize beads issue tracking
 │
 └── deps/                    # gitignored, source checkouts for reference
     └── ghostty/             # ghostty source (synced to dependency version)

@@ -5,6 +5,10 @@
 const std = @import("std");
 const ipc = @import("ipc.zig");
 const Session = @import("session.zig").Session;
+const WsServer = @import("ws_server.zig").WsServer;
+const http = @import("http.zig");
+
+const log = std.log.scoped(.server);
 
 pub const ServerState = struct {
     allocator: std.mem.Allocator,
@@ -40,9 +44,9 @@ pub const ServerState = struct {
         const mins = @divFloor(@mod(up, 3600), 60);
         const secs = @mod(up, 60);
 
-        try writer.print("Uptime: {}h {}m {}s\n", .{ hours, mins, secs });
-        try writer.print("Commands processed: {}\n", .{self.commands_processed});
-        try writer.print("Running: {}\n", .{self.running});
+        try writer.print("Uptime: {d}h {d}m {d}s\n", .{ hours, mins, secs });
+        try writer.print("Commands processed: {d}\n", .{self.commands_processed});
+        try writer.print("Running: {any}\n", .{self.running});
 
         return buf.toOwnedSlice(allocator);
     }
@@ -52,20 +56,30 @@ pub fn run(allocator: std.mem.Allocator, config: ipc.Config) !void {
     var state = try ServerState.init(allocator);
     defer state.deinit();
 
-    var server = try ipc.Server.init(config);
-    defer server.deinit();
+    var ipc_server = try ipc.Server.init(config);
+    defer ipc_server.deinit();
 
     // Write PID file
-    try server.writePidFile();
+    try ipc_server.writePidFile();
 
-    std.debug.print("dullahan server started (socket: {s})\n", .{config.socket_path});
+    // Start WebSocket server on separate thread
+    var ws_server = try WsServer.init(allocator, http.DEFAULT_PORT);
+    defer ws_server.deinit();
 
-    // Main loop
+    const ws_thread = std.Thread.spawn(.{}, runWsServer, .{ &ws_server, &state.session }) catch |e| {
+        log.err("Failed to start WebSocket server thread: {any}", .{e});
+        return e;
+    };
+
+    log.info("dullahan server started (socket: {s}, ws: port {d})", .{ config.socket_path, http.DEFAULT_PORT });
+    std.debug.print("dullahan server started (socket: {s}, ws: port {d})\n", .{ config.socket_path, http.DEFAULT_PORT });
+
+    // Main IPC loop
     while (state.running) {
-        const result = server.acceptCommand(allocator) catch |e| switch (e) {
+        const result = ipc_server.acceptCommand(allocator) catch |e| switch (e) {
             error.UnknownCommand => continue,
             else => {
-                std.debug.print("Accept error: {}\n", .{e});
+                log.err("Accept error: {any}", .{e});
                 continue;
             },
         };
@@ -73,16 +87,27 @@ pub fn run(allocator: std.mem.Allocator, config: ipc.Config) !void {
         state.commands_processed += 1;
 
         const response = handleCommand(result.command, &state, allocator) catch |e| blk: {
-            std.debug.print("Command error: {}\n", .{e});
+            log.err("Command error: {any}", .{e});
             break :blk ipc.Response.err("Internal error");
         };
 
-        server.sendResponse(result.conn, response, allocator) catch |e| {
-            std.debug.print("Send error: {}\n", .{e});
+        ipc_server.sendResponse(result.conn, response, allocator) catch |e| {
+            log.err("Send error: {any}", .{e});
         };
     }
 
+    // Signal WebSocket server to stop
+    ws_server.running = false;
+    ws_thread.join();
+
+    log.info("dullahan server shutting down", .{});
     std.debug.print("dullahan server shutting down\n", .{});
+}
+
+fn runWsServer(ws_server: *WsServer, session: *Session) void {
+    ws_server.run(session) catch |e| {
+        log.err("WebSocket server error: {any}", .{e});
+    };
 }
 
 fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.Allocator) !ipc.Response {

@@ -72,7 +72,7 @@ pub const Pane = struct {
     pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
         self.cols = cols;
         self.rows = rows;
-        try self.terminal.resize(.{ .cols = cols, .rows = rows });
+        try self.terminal.resize(self.allocator, cols, rows);
     }
 
     /// Dump pane state in compact human-readable format
