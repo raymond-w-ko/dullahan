@@ -257,3 +257,6 @@ git push                # Push to remote
 - Always `bd sync` before ending session
 
 <!-- end-bv-agent-instructions -->
+
+## User Request Aliases
+- When the user says `espc`, run the End Session Protocol checklist.

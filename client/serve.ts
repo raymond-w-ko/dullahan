@@ -4,7 +4,7 @@
  * Serves static files from current directory.
  */
 
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 4000;
 
 const server = Bun.serve({
   port,
