@@ -1,14 +1,14 @@
 //! Terminal snapshot generation
 //!
 //! Converts terminal state to JSON for transmission to clients.
-//! Cell data is sent as raw binary (base64-encoded in JSON).
+//! Cell data and styles are sent as raw binary (base64-encoded in JSON).
 
 const std = @import("std");
 const Pane = @import("pane.zig").Pane;
 const ghostty = @import("ghostty-vt");
-const Page = ghostty.terminal.page.Page;
-const Cell = ghostty.terminal.page.Cell;
-const point = ghostty.terminal.point;
+const Page = ghostty.page.Page;
+const Cell = ghostty.page.Cell;
+const point = ghostty.point;
 
 const log = std.log.scoped(.snapshot);
 
@@ -17,6 +17,8 @@ const base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 
 /// Encode bytes to base64
 fn base64Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    if (data.len == 0) return try allocator.alloc(u8, 0);
+
     const out_len = ((data.len + 2) / 3) * 4;
     var out = try allocator.alloc(u8, out_len);
     errdefer allocator.free(out);
@@ -42,15 +44,87 @@ fn base64Encode(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
     return out;
 }
 
-/// Get raw cell bytes for the visible screen area
-fn getCellBytes(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
+/// Color tag values for wire format
+const ColorTag = enum(u8) {
+    none = 0,
+    palette = 1,
+    rgb = 2,
+};
+
+/// Encode a color to 4 bytes [tag, v0, v1, v2]
+/// Works with any tagged union that has none, palette, and rgb variants
+fn encodeColor(c: anytype) [4]u8 {
+    return switch (c) {
+        .none => .{ @intFromEnum(ColorTag.none), 0, 0, 0 },
+        .palette => |idx| .{ @intFromEnum(ColorTag.palette), idx, 0, 0 },
+        .rgb => |rgb| .{ @intFromEnum(ColorTag.rgb), rgb.r, rgb.g, rgb.b },
+    };
+}
+
+/// Encode style flags to u16 (matching protocol/schema/style.ts)
+fn encodeFlags(flags: anytype) u16 {
+    var result: u16 = 0;
+    if (flags.bold) result |= 0x01;
+    if (flags.italic) result |= 0x02;
+    if (flags.faint) result |= 0x04;
+    if (flags.blink) result |= 0x08;
+    if (flags.inverse) result |= 0x10;
+    if (flags.invisible) result |= 0x20;
+    if (flags.strikethrough) result |= 0x40;
+    if (flags.overline) result |= 0x80;
+    result |= @as(u16, @intFromEnum(flags.underline)) << 8;
+    return result;
+}
+
+/// Encode a single Style to 14 bytes
+/// Works with any struct that has fg_color, bg_color, underline_color, flags
+fn encodeStyle(style: anytype) [14]u8 {
+    var bytes: [14]u8 = undefined;
+
+    // fg_color (bytes 0-3)
+    const fg = encodeColor(style.fg_color);
+    bytes[0..4].* = fg;
+
+    // bg_color (bytes 4-7)
+    const bg = encodeColor(style.bg_color);
+    bytes[4..8].* = bg;
+
+    // underline_color (bytes 8-11)
+    const ul = encodeColor(style.underline_color);
+    bytes[8..12].* = ul;
+
+    // flags (bytes 12-13, little-endian)
+    const flags = encodeFlags(style.flags);
+    bytes[12] = @truncate(flags & 0xFF);
+    bytes[13] = @truncate((flags >> 8) & 0xFF);
+
+    return bytes;
+}
+
+/// Result from getCellBytesAndStyles
+const CellsAndStyles = struct {
+    cell_bytes: []u8,
+    style_bytes: []u8,
+
+    pub fn deinit(self: *CellsAndStyles, allocator: std.mem.Allocator) void {
+        allocator.free(self.cell_bytes);
+        allocator.free(self.style_bytes);
+    }
+};
+
+/// Get raw cell bytes and style table for the visible screen area
+fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndStyles {
     const cols = pane.cols;
     const rows = pane.rows;
     const total_cells = @as(usize, cols) * @as(usize, rows);
     const byte_size = total_cells * 8; // 8 bytes per cell
 
-    var bytes = try allocator.alloc(u8, byte_size);
-    errdefer allocator.free(bytes);
+    var cell_bytes = try allocator.alloc(u8, byte_size);
+    errdefer allocator.free(cell_bytes);
+
+    // Track unique style_ids we encounter
+    var style_ids = std.AutoHashMap(u16, void).init(allocator);
+    defer style_ids.deinit();
 
     // Get the pages from the terminal
     const pages = &pane.terminal.screens.active.pages;
@@ -62,7 +136,7 @@ fn getCellBytes(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
         // Get a pin at the start of this row
         const row_pin = pages.pin(.{ .screen = .{ .x = 0, .y = @intCast(y) } }) orelse {
             // Row doesn't exist, fill with zeros
-            @memset(bytes[byte_offset .. byte_offset + cols * 8], 0);
+            @memset(cell_bytes[byte_offset .. byte_offset + cols * 8], 0);
             byte_offset += cols * 8;
             continue;
         };
@@ -70,23 +144,69 @@ fn getCellBytes(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
         // Get cells for this row
         const cells = row_pin.cells(.all);
 
-        // Copy each cell as raw bytes
+        // Copy each cell as raw bytes and track style_ids
         for (cells) |cell| {
-            const cell_bytes: *const [8]u8 = @ptrCast(&cell);
-            @memcpy(bytes[byte_offset .. byte_offset + 8], cell_bytes);
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
+            @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
             byte_offset += 8;
+
+            // Track non-zero style_ids
+            if (cell.style_id > 0) {
+                try style_ids.put(cell.style_id, {});
+            }
         }
 
         // If row is shorter than expected cols, pad with zeros
         const cells_copied = cells.len;
         if (cells_copied < cols) {
             const padding = (cols - cells_copied) * 8;
-            @memset(bytes[byte_offset .. byte_offset + padding], 0);
+            @memset(cell_bytes[byte_offset .. byte_offset + padding], 0);
             byte_offset += padding;
         }
     }
 
-    return bytes;
+    // Now build the style table
+    // Format: [count: u16] [id: u16, style: 14 bytes] ...
+    const style_count = style_ids.count();
+    const style_table_size = 2 + style_count * (2 + 14);
+    var style_bytes = try allocator.alloc(u8, style_table_size);
+    errdefer allocator.free(style_bytes);
+
+    // Write count (little-endian)
+    style_bytes[0] = @truncate(style_count & 0xFF);
+    style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
+
+    // Get the page to look up styles
+    // Use the first pin's page (they should all be the same for visible area)
+    const first_pin = pages.pin(.{ .screen = .{ .x = 0, .y = 0 } });
+
+    var style_offset: usize = 2;
+    var it = style_ids.keyIterator();
+    while (it.next()) |style_id_ptr| {
+        const style_id = style_id_ptr.*;
+
+        // Write style_id (little-endian)
+        style_bytes[style_offset] = @truncate(style_id & 0xFF);
+        style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
+        style_offset += 2;
+
+        // Look up the style and encode it
+        if (first_pin) |pin| {
+            const page = &pin.node.data;
+            const style = page.styles.get(page.memory, style_id);
+            const encoded = encodeStyle(style);
+            @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
+        } else {
+            // No page, write default style (all zeros)
+            @memset(style_bytes[style_offset .. style_offset + 14], 0);
+        }
+        style_offset += 14;
+    }
+
+    return .{
+        .cell_bytes = cell_bytes,
+        .style_bytes = style_bytes,
+    };
 }
 
 /// Generate a JSON snapshot of the terminal state with raw cell data
@@ -98,12 +218,15 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const screen = pane.terminal.screens.active;
     const cursor = screen.cursor;
 
-    // Get raw cell bytes and encode to base64
-    const cell_bytes = try getCellBytes(allocator, pane);
-    defer allocator.free(cell_bytes);
+    // Get raw cell bytes and styles, encode to base64
+    var cells_and_styles = try getCellBytesAndStyles(allocator, pane);
+    defer cells_and_styles.deinit(allocator);
 
-    const cells_base64 = try base64Encode(allocator, cell_bytes);
+    const cells_base64 = try base64Encode(allocator, cells_and_styles.cell_bytes);
     defer allocator.free(cells_base64);
+
+    const styles_base64 = try base64Encode(allocator, cells_and_styles.style_bytes);
+    defer allocator.free(styles_base64);
 
     // Start JSON object
     try writer.writeAll("{\"type\":\"snapshot\",\"data\":{");
@@ -132,6 +255,11 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Raw cell data (base64 encoded)
     try writer.writeAll("\"cells\":\"");
     try writer.writeAll(cells_base64);
+    try writer.writeAll("\",");
+
+    // Style table (base64 encoded)
+    try writer.writeAll("\"styles\":\"");
+    try writer.writeAll(styles_base64);
     try writer.writeAll("\"");
 
     try writer.writeAll("}}");
@@ -183,6 +311,8 @@ test "generate empty snapshot" {
     try std.testing.expect(std.mem.startsWith(u8, json, "{\"type\":\"snapshot\""));
     // Should contain cells field
     try std.testing.expect(std.mem.indexOf(u8, json, "\"cells\":\"") != null);
+    // Should contain styles field
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"styles\":\"") != null);
 }
 
 test "base64 encode" {

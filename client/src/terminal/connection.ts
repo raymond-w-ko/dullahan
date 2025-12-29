@@ -1,7 +1,9 @@
 // WebSocket connection to dullahan server
 
 import { decodeCellsFromBase64, cellToChar } from "../../../protocol/schema/cell";
+import { decodeStyleTableFromBase64 } from "../../../protocol/schema/style";
 import type { Cell } from "../../../protocol/schema/cell";
+import type { StyleTable } from "../../../protocol/schema/style";
 
 export interface TerminalSnapshot {
   cols: number;
@@ -14,6 +16,7 @@ export interface TerminalSnapshot {
   };
   altScreen: boolean;
   cells: Cell[]; // Decoded cell data
+  styles: StyleTable; // Decoded style table
 }
 
 interface RawSnapshot {
@@ -27,6 +30,7 @@ interface RawSnapshot {
   };
   altScreen: boolean;
   cells: string; // Base64 encoded
+  styles: string; // Base64 encoded
 }
 
 export type ServerMessage =
@@ -92,14 +96,16 @@ export class TerminalConnection {
     switch (msg.type) {
       case "snapshot":
         console.log("Received snapshot:", msg.data.cols, "x", msg.data.rows);
-        // Decode cells from base64
+        // Decode cells and styles from base64
         const cells = decodeCellsFromBase64(msg.data.cells);
+        const styles = decodeStyleTableFromBase64(msg.data.styles);
         const snapshot: TerminalSnapshot = {
           cols: msg.data.cols,
           rows: msg.data.rows,
           cursor: msg.data.cursor,
           altScreen: msg.data.altScreen,
           cells,
+          styles,
         };
         this.onSnapshot?.(snapshot);
         break;
