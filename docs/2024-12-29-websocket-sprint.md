@@ -51,10 +51,23 @@ bits 46-63: padding
 - Zig 0.15: `terminal.resize()` takes `(allocator, cols, rows)`
 - Socket timeout: `SO_RCVTIMEO` for polling without blocking
 
+## Style table (also implemented)
+
+Server extracts unique style_ids from cells, looks up each style from ghostty's StyleSet, encodes to binary:
+
+```
+[count: u16]
+[id: u16, fg: 4, bg: 4, ul: 4, flags: 2] × count
+```
+
+Color encoding: `[tag, v0, v1, v2]` where tag 0=none, 1=palette, 2=rgb
+
+Flags (u16): bold, italic, faint, blink, inverse, invisible, strikethrough, overline, underline style
+
 ## Next up
 
-- Send style table so client can render colors
 - Hook up keyboard input
 - Run a shell in the PTY
+- Render colors in client using style table
 - Binary WebSocket frames (skip base64)
 - Delta updates instead of full snapshots

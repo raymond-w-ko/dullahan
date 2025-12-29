@@ -28,7 +28,8 @@ Full terminal state, sent on connection and after changes.
       "style": "block"
     },
     "altScreen": false,
-    "cells": "AAAA...base64..."
+    "cells": "AAAA...base64...",
+    "styles": "AQAB...base64..."
   }
 }
 ```
@@ -178,7 +179,7 @@ The server tracks a `version` counter on each pane:
 
 ## Future Enhancements
 
-- **Style table**: Send style definitions so client can render colors
 - **Binary frames**: Use WebSocket binary frames instead of base64 in JSON
 - **Delta updates**: Send only changed rows/cells
 - **MessagePack**: Switch to msgpack for smaller payloads
+- **Grapheme data**: Send multi-codepoint grapheme clusters
