@@ -258,7 +258,6 @@ pub const Server = struct {
                     .{ "ETag", etag },
                     .{ "Cache-Control", "no-cache" },
                     .{ "Pragma", "no-cache" },
-                    .{ "Connection", "close" },
                 }, "") catch {};
                 return;
             }
@@ -272,7 +271,6 @@ pub const Server = struct {
             .{ "Cache-Control", "no-cache" },
             .{ "Pragma", "no-cache" },
             .{ "ETag", etag },
-            .{ "Connection", "close" },
         }, file_size) catch {
             return;
         };
@@ -291,7 +289,6 @@ pub const Server = struct {
         const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
         sendResponse(stream, "404 Not Found", &.{
             .{ "Content-Type", "text/html" },
-            .{ "Connection", "close" },
         }, body) catch {};
     }
 
@@ -300,7 +297,6 @@ pub const Server = struct {
         const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
         sendResponse(stream, "403 Forbidden", &.{
             .{ "Content-Type", "text/html" },
-            .{ "Connection", "close" },
         }, body) catch {};
     }
 
@@ -309,7 +305,6 @@ pub const Server = struct {
         const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
         sendResponse(stream, "500 Internal Server Error", &.{
             .{ "Content-Type", "text/html" },
-            .{ "Connection", "close" },
         }, body) catch {};
     }
 
