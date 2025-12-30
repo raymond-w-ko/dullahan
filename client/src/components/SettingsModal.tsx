@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useRef } from "preact/hooks";
 import * as config from "../config";
 import { THEMES } from "../themes";
 
@@ -16,6 +16,55 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
   const [paddingX, setPaddingX] = useState(() => config.get('windowPaddingX'));
   const [paddingY, setPaddingY] = useState(() => config.get('windowPaddingY'));
+
+  // Drag state
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  // Reset position when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setPosition({ x: 0, y: 0 });
+    }
+  }, [isOpen]);
+
+  // Handle drag
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setPosition({
+        x: e.clientX - dragStart.current.x,
+        y: e.clientY - dragStart.current.y,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
+
+  const handleDragStart = (e: MouseEvent) => {
+    // Don't start drag if clicking on close button
+    if ((e.target as HTMLElement).closest('.settings-close')) return;
+    
+    setIsDragging(true);
+    dragStart.current = {
+      x: e.clientX - position.x,
+      y: e.clientY - position.y,
+    };
+    e.preventDefault();
+  };
 
   // Close on escape key
   useEffect(() => {
@@ -88,10 +137,22 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     config.applyToCSS();
   };
 
+  const modalStyle = {
+    transform: `translate(calc(-50% + ${position.x}px), calc(-50% + ${position.y}px))`,
+  };
+
   return (
-    <div class="settings-modal glass" onClick={(e) => e.stopPropagation()}>
+    <div 
+      ref={modalRef}
+      class={`settings-modal glass ${isDragging ? 'settings-modal--dragging' : ''}`}
+      style={modalStyle}
+      onClick={(e) => e.stopPropagation()}
+    >
       <div class="settings-inner">
-        <div class="settings-header">
+        <div 
+          class="settings-header" 
+          onMouseDown={handleDragStart}
+        >
           <h2>Settings</h2>
           <button class="settings-close" onClick={onClose} aria-label="Close">
             ×
