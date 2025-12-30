@@ -127,8 +127,8 @@ html, body {
 
 .app {
   font-family: var(--term-font);
-  background: var(--ui-bg);
-  color: var(--ui-fg);
+  background: var(--term-bg);
+  color: var(--term-fg);
   min-height: 100vh;
   padding: 1rem;
 }
@@ -179,6 +179,7 @@ html, body {
 
 .terminal {
   background: var(--term-bg);
+  color: var(--term-fg);
   padding: 0.5rem;
   border-radius: 4px;
   overflow: auto;
