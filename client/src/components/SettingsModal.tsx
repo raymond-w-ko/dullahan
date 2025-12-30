@@ -13,6 +13,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [spacing, setSpacing] = useState(() => config.get('spacing'));
   const [fontSize, setFontSize] = useState(() => config.get('fontSize'));
   const [fontFamily, setFontFamily] = useState(() => config.get('fontFamily'));
+  const [fontStyle, setFontStyle] = useState(() => config.get('fontStyle'));
+  const [fontFeature, setFontFeature] = useState(() => config.get('fontFeature'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
   const [paddingX, setPaddingX] = useState(() => config.get('windowPaddingX'));
@@ -119,6 +121,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     config.applyToCSS();
   };
 
+  const handleFontStyleChange = (e: Event) => {
+    const value = (e.target as HTMLSelectElement).value;
+    setFontStyle(value);
+    config.set('fontStyle', value);
+    config.applyToCSS();
+  };
+
+  const handleFontFeatureChange = (e: Event) => {
+    const value = (e.target as HTMLInputElement).value;
+    setFontFeature(value);
+    config.set('fontFeature', value);
+    config.applyToCSS();
+  };
+
   const handleCursorStyleChange = (e: Event) => {
     const value = (e.target as HTMLSelectElement).value as 'block' | 'bar' | 'underline';
     setCursorStyle(value);
@@ -201,6 +217,31 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 value={fontFamily}
                 onChange={handleFontFamilyChange}
                 placeholder="JetBrains Mono, monospace"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Font Weight</span>
+              <select value={fontStyle} onChange={handleFontStyleChange}>
+                <option value="100">Thin (100)</option>
+                <option value="200">ExtraLight (200)</option>
+                <option value="300">Light (300)</option>
+                <option value="normal">Normal (400)</option>
+                <option value="500">Medium (500)</option>
+                <option value="600">SemiBold (600)</option>
+                <option value="bold">Bold (700)</option>
+                <option value="800">ExtraBold (800)</option>
+                <option value="900">Black (900)</option>
+              </select>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Font Features</span>
+              <input
+                type="text"
+                value={fontFeature}
+                onChange={handleFontFeatureChange}
+                placeholder='"liga" 1, "ss01" 1'
               />
             </label>
           </div>

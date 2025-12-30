@@ -217,6 +217,8 @@ html, body {
   margin: 0;
   font-family: var(--term-font);
   font-size: var(--term-font-size);
+  font-weight: var(--term-font-weight, normal);
+  font-feature-settings: var(--term-font-feature, normal);
   line-height: var(--term-line-height);
   flex: 1;
   min-height: 0;
@@ -294,7 +296,7 @@ html, body {
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 1.5rem;
+  border-radius: 8px;
   box-shadow: 
     0 8px 32px rgba(31, 38, 135, 0.2),
     inset 0 4px 20px rgba(255, 255, 255, 0.1),
@@ -316,6 +318,8 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: var(--space-2);
+  padding-top: 0;
+  padding-bottom: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
   cursor: grab;
@@ -327,7 +331,7 @@ html, body {
 
 .settings-header h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -341,8 +345,8 @@ html, body {
   opacity: 0.7;
   transition: opacity 0.2s;
   padding: 0;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   display: flex;
   align-items: center;
   justify-content: center;

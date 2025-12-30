@@ -17,6 +17,7 @@ export interface ConfigSchema {
   fontFamily: string;
   fontSize: number;
   fontStyle: string;
+  fontFeature: string;
   lineHeight: number;
   
   // Cell adjustments
@@ -55,6 +56,7 @@ export const DEFAULTS: ConfigSchema = {
   fontFamily: 'Iosevka, JetBrains Mono, Fira Code, SF Mono, Menlo, Monaco, Courier New, monospace',
   fontSize: 12,
   fontStyle: 'normal',
+  fontFeature: '',
   lineHeight: 1.2,
   
   // Cell adjustments
@@ -191,6 +193,8 @@ export function applyToCSS(): void {
   // Font settings
   root.style.setProperty('--term-font', get('fontFamily'));
   root.style.setProperty('--term-font-size', `${get('fontSize')}px`);
+  root.style.setProperty('--term-font-weight', get('fontStyle'));
+  root.style.setProperty('--term-font-feature', get('fontFeature') || 'normal');
   root.style.setProperty('--term-line-height', String(get('lineHeight')));
   
   // Padding
