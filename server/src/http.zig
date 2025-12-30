@@ -174,7 +174,8 @@ pub const Server = struct {
     static_dir: ?[]const u8,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8) !Server {
-        const address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
+        // Only accept connections from localhost for security
+        const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
         const listener = try address.listen(.{
             .reuse_address = true,
             .kernel_backlog = 128, // Handle burst of connections on refresh
