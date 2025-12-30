@@ -10,6 +10,9 @@ export interface ConfigSchema {
   // Theme
   theme: string;
   
+  // Layout
+  spacing: 'compact' | 'comfortable';
+  
   // Font settings
   fontFamily: string;
   fontSize: number;
@@ -44,6 +47,9 @@ export interface ConfigSchema {
 export const DEFAULTS: ConfigSchema = {
   // Theme
   theme: 'selenized-light',
+  
+  // Layout
+  spacing: 'compact',
   
   // Font settings
   fontFamily: 'JetBrains Mono, Fira Code, SF Mono, Menlo, Monaco, Courier New, monospace',
@@ -173,6 +179,14 @@ export function getAll(): typeof DEFAULTS {
  */
 export function applyToCSS(): void {
   const root = document.documentElement;
+  
+  // Spacing mode (data attribute for CSS selector)
+  const spacing = get('spacing');
+  if (spacing === 'comfortable') {
+    root.dataset.spacing = 'comfortable';
+  } else {
+    delete root.dataset.spacing;
+  }
   
   // Font settings
   root.style.setProperty('--term-font', get('fontFamily'));

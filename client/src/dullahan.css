@@ -41,10 +41,19 @@ html, body {
   --term-font-size: 14px;
   --term-line-height: 1.2;
 
-  /* Layout */
-  --term-padding-x: 6px;
-  --term-padding-y: 6px;
+  /* Spacing - compact by default */
+  --space-1: 2px;
+  --space-2: 4px;
 
+  /* Layout (derived from spacing) */
+  --term-padding-x: var(--space-2);
+  --term-padding-y: var(--space-2);
+}
+
+/* Comfortable spacing for mobile/accessibility */
+[data-spacing="comfortable"] {
+  --space-1: 8px;
+  --space-2: 16px;
 }
 
 /* ==========================================================================
@@ -64,13 +73,13 @@ html, body {
    ========================================================================== */
 
 .sidebar {
-  width: 3rem;
+  width: 32px;
   background: rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0.5rem 0;
-  gap: 0.25rem;
+  padding: var(--space-2) 0;
+  gap: var(--space-1);
   flex-shrink: 0;
 }
 
@@ -127,7 +136,7 @@ html, body {
 
 .main {
   flex: 1;
-  padding: 0.5rem;
+  padding: var(--space-2);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -135,8 +144,8 @@ html, body {
 
 .error {
   color: var(--c1);  /* red */
-  padding: 0.5rem;
-  margin-bottom: 0.5rem;
+  padding: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 /* ==========================================================================
@@ -147,7 +156,7 @@ html, body {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
+  gap: var(--space-2);
   min-height: 0;
 }
 
@@ -168,7 +177,7 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.25rem 0.5rem;
+  padding: var(--space-1) var(--space-2);
   background: rgba(0, 0, 0, 0.2);
   font-size: 0.75rem;
   flex-shrink: 0;

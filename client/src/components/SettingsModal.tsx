@@ -10,6 +10,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [theme, setTheme] = useState(() => config.get('theme'));
+  const [spacing, setSpacing] = useState(() => config.get('spacing'));
   const [fontSize, setFontSize] = useState(() => config.get('fontSize'));
   const [fontFamily, setFontFamily] = useState(() => config.get('fontFamily'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
@@ -95,6 +96,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     config.set('theme', value);
     // Apply theme immediately
     document.querySelector('.app')?.setAttribute('data-theme', value);
+  };
+
+  const handleSpacingChange = (e: Event) => {
+    const value = (e.target as HTMLSelectElement).value as 'compact' | 'comfortable';
+    setSpacing(value);
+    config.set('spacing', value);
+    config.applyToCSS();
   };
 
   const handleFontSizeChange = (e: Event) => {
@@ -224,6 +232,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div class="settings-section">
             <h3>Layout</h3>
             
+            <label class="settings-field">
+              <span class="settings-label">Spacing</span>
+              <select value={spacing} onChange={handleSpacingChange}>
+                <option value="compact">Compact (2px/4px)</option>
+                <option value="comfortable">Comfortable (8px/16px)</option>
+              </select>
+            </label>
+
             <label class="settings-field">
               <span class="settings-label">Padding X</span>
               <input
