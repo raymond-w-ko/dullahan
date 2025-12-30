@@ -1,5 +1,6 @@
 import { h } from "preact";
-import { useState, useEffect, useRef } from "preact/hooks";
+import { useState, useEffect, useRef, useCallback } from "preact/hooks";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions";
 import { TerminalConnection } from "../terminal/connection";
 import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
@@ -18,7 +19,14 @@ export function App() {
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const [cursorColor, setCursorColor] = useState(() => config.get('cursorColor'));
   const [cursorText, setCursorText] = useState(() => config.get('cursorText'));
+  const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
+  const [calculatedDimensions, setCalculatedDimensions] = useState({ cols: 80, rows: 24 });
   const connectionRef = useRef<TerminalConnection | null>(null);
+  
+  const handleDimensionsChange = useCallback((cols: number, rows: number) => {
+    setCalculatedDimensions({ cols, rows });
+    // TODO(du-9yo): Send resize to server when connection supports it
+  }, []);
 
   // Apply config on mount
   useEffect(() => {
@@ -36,6 +44,8 @@ export function App() {
         setCursorColor(value as string);
       } else if (key === 'cursorText') {
         setCursorText(value as string);
+      } else if (key === 'cursorBlink') {
+        setCursorBlink(value as '' | 'true' | 'false');
       }
     });
   }, []);
@@ -96,8 +106,8 @@ export function App() {
           <div class="terminal-pane">
             <div class="terminal-titlebar">
               <span class="terminal-title">Terminal 1</span>
-              <span class="terminal-size">
-                {snapshot ? `${snapshot.cols}×${snapshot.rows}` : '—'}
+              <span class="terminal-size" title={`Server: ${snapshot?.cols}×${snapshot?.rows}, Visible: ${calculatedDimensions.cols}×${calculatedDimensions.rows}`}>
+                {snapshot ? `${calculatedDimensions.cols}×${calculatedDimensions.rows}` : '—'}
               </span>
             </div>
             {snapshot ? (
@@ -106,6 +116,8 @@ export function App() {
                 cursorStyle={cursorStyle}
                 cursorColor={cursorColor}
                 cursorText={cursorText}
+                cursorBlink={cursorBlink}
+                onDimensionsChange={handleDimensionsChange}
               />
             ) : (
               <div class="terminal terminal--empty">
@@ -149,19 +161,30 @@ interface TerminalViewProps {
   cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
   cursorColor: string;
   cursorText: string;
+  cursorBlink: '' | 'true' | 'false';
+  onDimensionsChange?: (cols: number, rows: number) => void;
 }
 
-function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
+  const terminalRef = useRef<HTMLPreElement>(null);
+  const dimensions = useTerminalDimensions(terminalRef);
+
+  // Report dimension changes
+  useEffect(() => {
+    if (onDimensionsChange && dimensions.cols > 0 && dimensions.rows > 0) {
+      onDimensionsChange(dimensions.cols, dimensions.rows);
+    }
+  }, [dimensions.cols, dimensions.rows, onDimensionsChange]);
 
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);
 
   return (
-    <pre class="terminal">
+    <pre class="terminal" ref={terminalRef}>
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
-          {renderLine(runs, y, cursor, cursorStyle, cursorColor, cursorText)}
+          {renderLine(runs, y, cursor, cursorStyle, cursorColor, cursorText, cursorBlink)}
         </div>
       ))}
     </pre>
@@ -239,7 +262,8 @@ function renderLine(
   cursor: TerminalSnapshot["cursor"],
   cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow',
   cursorColor: string,
-  cursorText: string
+  cursorText: string,
+  cursorBlink: '' | 'true' | 'false'
 ): preact.JSX.Element {
   // If cursor is not on this line, render runs directly
   if (!cursor.visible || cursor.y !== y) {
@@ -257,7 +281,9 @@ function renderLine(
   // Cursor is on this line - need to split at cursor position
   const elements: preact.JSX.Element[] = [];
   let x = 0;
-  const cursorClass = `cursor-${cursorStyle}`;
+  // '' (auto) = blink by default, 'true' = blink, 'false' = no blink
+  const shouldBlink = cursorBlink !== 'false';
+  const cursorClass = `cursor-${cursorStyle}${shouldBlink ? ' cursor-blink' : ''}`;
   // For non-block cursors, preserve original text styling
   const preserveStyle = cursorStyle !== 'block';
 

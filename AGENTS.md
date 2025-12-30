@@ -252,6 +252,27 @@ Only these should be hardcoded in `:root`:
 
 ---
 
+## Code Quality Guidelines
+
+### TODOs Must Have Issues
+
+**Never leave orphan TODOs in code.** Every `TODO` comment must reference a beads issue:
+
+```typescript
+// ❌ BAD - orphan TODO
+// TODO: Send resize to server
+
+// ✅ GOOD - linked to issue
+// TODO(du-9yo): Send resize to server when connection supports it
+```
+
+When you write a TODO:
+1. File a beads issue with `bd create`
+2. Add the issue ID to the TODO comment: `TODO(du-xxx)`
+3. Include enough context in the issue for future implementation
+
+---
+
 ### Commit Format
 
 ```

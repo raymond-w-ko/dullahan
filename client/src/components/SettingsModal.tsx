@@ -15,6 +15,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [fontFamily, setFontFamily] = useState(() => config.get('fontFamily'));
   const [fontStyle, setFontStyle] = useState(() => config.get('fontStyle'));
   const [fontFeature, setFontFeature] = useState(() => config.get('fontFeature'));
+  const [lineHeight, setLineHeight] = useState(() => config.get('lineHeight'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const [cursorColor, setCursorColor] = useState(() => config.get('cursorColor'));
   const [cursorText, setCursorText] = useState(() => config.get('cursorText'));
@@ -136,6 +137,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     config.applyToCSS();
   };
 
+  const handleLineHeightChange = (e: Event) => {
+    const value = parseFloat((e.target as HTMLInputElement).value);
+    setLineHeight(value);
+    config.set('lineHeight', value);
+    config.applyToCSS();
+  };
+
   const handleCursorStyleChange = (e: Event) => {
     const value = (e.target as HTMLSelectElement).value as 'block' | 'bar' | 'underline' | 'block_hollow';
     setCursorStyle(value);
@@ -162,7 +170,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   };
 
   const handleCursorBlinkChange = (e: Event) => {
-    const value = (e.target as HTMLInputElement).checked;
+    const value = (e.target as HTMLSelectElement).value as '' | 'true' | 'false';
     setCursorBlink(value);
     config.set('cursorBlink', value);
   };
@@ -250,6 +258,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 placeholder='"liga" 1, "ss01" 1'
               />
             </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Line Height</span>
+              <input
+                type="number"
+                min="1"
+                max="3"
+                step="0.1"
+                value={lineHeight}
+                onChange={handleLineHeightChange}
+              />
+            </label>
           </div>
 
           {/* Cursor */}
@@ -300,11 +320,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
             <label class="settings-field">
               <span class="settings-label">Blink</span>
-              <input
-                type="checkbox"
-                checked={cursorBlink}
-                onChange={handleCursorBlinkChange}
-              />
+              <select value={cursorBlink} onChange={handleCursorBlinkChange}>
+                <option value="">(auto)</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
             </label>
           </div>
 

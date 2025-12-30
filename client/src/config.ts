@@ -28,7 +28,7 @@ export interface ConfigSchema {
   cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
   cursorColor: string;  // '' = theme, 'cell-foreground', 'cell-background', or CSS color
   cursorText: string;   // '' = theme, 'cell-foreground', 'cell-background', or CSS color
-  cursorBlink: boolean;
+  cursorBlink: '' | 'true' | 'false';  // '' = auto (respect DEC Mode 12)
   cursorOpacity: number;
   
   // Window
@@ -67,7 +67,7 @@ export const DEFAULTS: ConfigSchema = {
   cursorStyle: 'block',
   cursorColor: '',      // empty = use theme --term-cursor-bg
   cursorText: '',       // empty = use theme --term-cursor-fg
-  cursorBlink: false,
+  cursorBlink: '',  // auto - respect DEC Mode 12
   cursorOpacity: 1.0,
   
   // Window

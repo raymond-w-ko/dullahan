@@ -278,6 +278,15 @@ html, body {
   opacity: var(--term-cursor-opacity, 1);
 }
 
+/* Cursor blink animation */
+.cursor-blink {
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  50% { opacity: 0; }
+}
+
 /* ==========================================================================
    Text Attributes
    ========================================================================== */
