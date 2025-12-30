@@ -28,22 +28,15 @@ html, body {
    ========================================================================== */
 
 :root {
-  /* UI colors */
-  --ui-bg: #1a1a2e;
-  --ui-bg-dark: #0d0d1a;
-  --ui-fg: #eee;
-  --ui-fg-dim: #888;
-  --ui-border: #333;
-  --ui-success: #4ade80;
-  --ui-error: #f87171;
+  /* Terminal colors - overridden by themes via data-theme attribute */
+  --term-bg: #282c34;
+  --term-fg: #abb2bf;
+  --term-cursor-bg: #528bff;
+  --term-cursor-fg: #282c34;
+  --term-selection-bg: #3e4451;
+  --term-selection-fg: #abb2bf;
 
-  /* Terminal defaults */
-  --term-bg: var(--ui-bg-dark);
-  --term-fg: var(--ui-fg);
-  --term-cursor-bg: #fff;
-  --term-cursor-fg: #000;
-
-  /* Font */
+  /* Font settings */
   --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", monospace;
   --term-font-size: 14px;
   --term-line-height: 1.2;
@@ -135,7 +128,7 @@ html, body {
 
 .header {
   margin-bottom: 1rem;
-  border-bottom: 1px solid var(--ui-border);
+  border-bottom: 1px solid var(--c8);
   padding-bottom: 0.5rem;
 }
 
@@ -151,26 +144,26 @@ html, body {
 }
 
 .status--connected {
-  color: var(--ui-success);
+  color: var(--c2);  /* green */
 }
 
 .status--disconnected {
-  color: var(--ui-error);
+  color: var(--c1);  /* red */
 }
 
 .error {
-  color: var(--ui-error);
+  color: var(--c1);  /* red */
   margin-top: 0.5rem;
 }
 
 .info {
-  color: var(--ui-fg-dim);
+  color: var(--c8);  /* gray */
 }
 
 .terminal-info {
   margin-bottom: 0.5rem;
   font-size: 0.75rem;
-  color: var(--ui-fg-dim);
+  color: var(--c8);  /* gray */
 }
 
 /* ==========================================================================
