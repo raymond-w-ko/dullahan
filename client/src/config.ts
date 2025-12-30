@@ -26,6 +26,8 @@ export interface ConfigSchema {
   
   // Cursor
   cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
+  cursorColor: string;  // '' = theme, 'cell-foreground', 'cell-background', or CSS color
+  cursorText: string;   // '' = theme, 'cell-foreground', 'cell-background', or CSS color
   cursorBlink: boolean;
   cursorOpacity: number;
   
@@ -63,6 +65,8 @@ export const DEFAULTS: ConfigSchema = {
   
   // Cursor
   cursorStyle: 'block',
+  cursorColor: '',      // empty = use theme --term-cursor-bg
+  cursorText: '',       // empty = use theme --term-cursor-fg
   cursorBlink: false,
   cursorOpacity: 1.0,
   
@@ -192,6 +196,9 @@ export function applyToCSS(): void {
   root.style.setProperty('--term-font-weight', get('fontStyle'));
   root.style.setProperty('--term-font-feature', get('fontFeature') || 'normal');
   root.style.setProperty('--term-line-height', String(get('lineHeight')));
+  
+  // Cursor
+  root.style.setProperty('--term-cursor-opacity', String(get('cursorOpacity')));
 }
 
 /**

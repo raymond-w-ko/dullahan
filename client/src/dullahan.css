@@ -229,10 +229,11 @@ html, body {
   white-space: pre;
 }
 
-/* Cursor styles */
+/* Cursor styles - use --cursor-bg if set, else theme default */
 .cursor-block {
-  background: var(--term-cursor-bg);
+  background: var(--cursor-bg, var(--term-cursor-bg));
   color: var(--term-cursor-fg);
+  opacity: var(--term-cursor-opacity, 1);
 }
 
 .cursor-bar {
@@ -246,7 +247,8 @@ html, body {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--term-cursor-bg);
+  background: var(--cursor-bg, var(--term-cursor-bg));
+  opacity: var(--term-cursor-opacity, 1);
 }
 
 .cursor-underline {
@@ -260,7 +262,8 @@ html, body {
   right: 0;
   bottom: 0;
   height: 2px;
-  background: var(--term-cursor-bg);
+  background: var(--cursor-bg, var(--term-cursor-bg));
+  opacity: var(--term-cursor-opacity, 1);
 }
 
 .cursor-block_hollow {
@@ -271,7 +274,8 @@ html, body {
   content: '';
   position: absolute;
   inset: 0;
-  border: 1px solid var(--term-cursor-bg);
+  border: 1px solid var(--cursor-bg, var(--term-cursor-bg));
+  opacity: var(--term-cursor-opacity, 1);
 }
 
 /* ==========================================================================

@@ -16,6 +16,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => config.get('theme'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
+  const [cursorColor, setCursorColor] = useState(() => config.get('cursorColor'));
+  const [cursorText, setCursorText] = useState(() => config.get('cursorText'));
   const connectionRef = useRef<TerminalConnection | null>(null);
 
   // Apply config on mount
@@ -30,6 +32,10 @@ export function App() {
         setTheme(value as string);
       } else if (key === 'cursorStyle') {
         setCursorStyle(value as typeof cursorStyle);
+      } else if (key === 'cursorColor') {
+        setCursorColor(value as string);
+      } else if (key === 'cursorText') {
+        setCursorText(value as string);
       }
     });
   }, []);
@@ -95,7 +101,12 @@ export function App() {
               </span>
             </div>
             {snapshot ? (
-              <TerminalView snapshot={snapshot} cursorStyle={cursorStyle} />
+              <TerminalView 
+                snapshot={snapshot} 
+                cursorStyle={cursorStyle}
+                cursorColor={cursorColor}
+                cursorText={cursorText}
+              />
             ) : (
               <div class="terminal terminal--empty">
                 {connected ? "Waiting..." : "Connecting..."}
@@ -136,9 +147,11 @@ export function App() {
 interface TerminalViewProps {
   snapshot: TerminalSnapshot;
   cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
+  cursorColor: string;
+  cursorText: string;
 }
 
-function TerminalView({ snapshot, cursorStyle }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
 
   // Convert cells to styled runs
@@ -148,7 +161,7 @@ function TerminalView({ snapshot, cursorStyle }: TerminalViewProps) {
     <pre class="terminal">
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
-          {renderLine(runs, y, cursor, cursorStyle)}
+          {renderLine(runs, y, cursor, cursorStyle, cursorColor, cursorText)}
         </div>
       ))}
     </pre>
@@ -196,12 +209,37 @@ function cellsToRuns(
   return lines;
 }
 
+/** Get cell color as CSS value */
+function getCellColor(style: Style, type: 'fg' | 'bg'): string | undefined {
+  const color = type === 'fg' ? style.fgColor : style.bgColor;
+  if (color.tag === ColorTag.RGB) {
+    return `rgb(${color.r},${color.g},${color.b})`;
+  } else if (color.tag === ColorTag.PALETTE) {
+    return `var(--c${color.index})`;
+  }
+  return undefined;
+}
+
+/** Resolve cursor color setting to actual CSS value */
+function resolveCursorColor(
+  setting: string,
+  cellStyle: Style,
+  defaultVar: string
+): string | undefined {
+  if (!setting) return undefined; // Use CSS default (theme color)
+  if (setting === 'cell-foreground') return getCellColor(cellStyle, 'fg');
+  if (setting === 'cell-background') return getCellColor(cellStyle, 'bg');
+  return setting; // Custom color value
+}
+
 /** Render a line of runs, inserting cursor if needed */
 function renderLine(
   runs: Run[],
   y: number,
   cursor: TerminalSnapshot["cursor"],
-  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow'
+  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow',
+  cursorColor: string,
+  cursorText: string
 ): preact.JSX.Element {
   // If cursor is not on this line, render runs directly
   if (!cursor.visible || cursor.y !== y) {
@@ -243,14 +281,30 @@ function renderLine(
         );
       }
 
-      // Cursor element - preserve original style for bar/underline/hollow
+      // Build cursor style
+      const baseStyle = preserveStyle ? styleToInline(run.style) || {} : {};
+      const cursorBg = resolveCursorColor(cursorColor, run.style, '--term-cursor-bg');
+      const cursorFg = resolveCursorColor(cursorText, run.style, '--term-cursor-fg');
+      
+      const cursorInlineStyle: h.JSX.CSSProperties = { ...baseStyle };
+      if (cursorBg) {
+        cursorInlineStyle['--cursor-bg'] = cursorBg;
+      }
+      if (cursorFg && cursorStyle === 'block') {
+        // Text color only applies to block cursor
+        cursorInlineStyle.color = cursorFg;
+      }
+      
       const classes = preserveStyle 
         ? `${cursorClass} ${styleToClasses(run.style)}`.trim()
         : cursorClass;
-      const style = preserveStyle ? styleToInline(run.style) : undefined;
       
       elements.push(
-        <span key={`${i}-cursor`} class={classes} style={style}>
+        <span 
+          key={`${i}-cursor`} 
+          class={classes} 
+          style={Object.keys(cursorInlineStyle).length ? cursorInlineStyle : undefined}
+        >
           {cursorChar}
         </span>
       );

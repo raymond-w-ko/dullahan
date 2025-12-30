@@ -16,6 +16,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [fontStyle, setFontStyle] = useState(() => config.get('fontStyle'));
   const [fontFeature, setFontFeature] = useState(() => config.get('fontFeature'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
+  const [cursorColor, setCursorColor] = useState(() => config.get('cursorColor'));
+  const [cursorText, setCursorText] = useState(() => config.get('cursorText'));
+  const [cursorOpacity, setCursorOpacity] = useState(() => config.get('cursorOpacity'));
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
 
   // Drag state
@@ -139,6 +142,25 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     config.set('cursorStyle', value);
   };
 
+  const handleCursorColorChange = (e: Event) => {
+    const value = (e.target as HTMLInputElement).value;
+    setCursorColor(value);
+    config.set('cursorColor', value);
+  };
+
+  const handleCursorTextChange = (e: Event) => {
+    const value = (e.target as HTMLInputElement).value;
+    setCursorText(value);
+    config.set('cursorText', value);
+  };
+
+  const handleCursorOpacityChange = (e: Event) => {
+    const value = parseFloat((e.target as HTMLInputElement).value);
+    setCursorOpacity(value);
+    config.set('cursorOpacity', value);
+    config.applyToCSS();
+  };
+
   const handleCursorBlinkChange = (e: Event) => {
     const value = (e.target as HTMLInputElement).checked;
     setCursorBlink(value);
@@ -242,6 +264,38 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <option value="underline">Underline</option>
                 <option value="block_hollow">Block Hollow</option>
               </select>
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Color</span>
+              <input
+                type="text"
+                value={cursorColor}
+                onChange={handleCursorColorChange}
+                placeholder="#hex, cell-foreground, cell-background"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Text Color</span>
+              <input
+                type="text"
+                value={cursorText}
+                onChange={handleCursorTextChange}
+                placeholder="#hex, cell-foreground, cell-background"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Opacity</span>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.1"
+                value={cursorOpacity}
+                onChange={handleCursorOpacityChange}
+              />
             </label>
 
             <label class="settings-field">
