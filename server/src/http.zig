@@ -1,6 +1,8 @@
-//! HTTP server with WebSocket upgrade for dullahan
+//! HTTP server with WebSocket upgrade and static file serving
 //!
-//! Listens on a port and upgrades connections to WebSocket for terminal communication.
+//! Listens on a port and either:
+//! - Upgrades connections to WebSocket for terminal communication
+//! - Serves static files from a directory
 
 const std = @import("std");
 const websocket = @import("websocket.zig");
@@ -95,7 +97,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
     };
 }
 
-/// Send HTTP response
+/// Send HTTP response with body
 pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const [2][]const u8, body: []const u8) !void {
     var buf: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -108,6 +110,22 @@ pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const
     try writer.print("Content-Length: {d}\r\n", .{body.len});
     try writer.writeAll("\r\n");
     try writer.writeAll(body);
+
+    _ = try stream.write(fbs.getWritten());
+}
+
+/// Send HTTP response headers only (for streaming body)
+pub fn sendResponseHeaders(stream: std.net.Stream, status: []const u8, headers: []const [2][]const u8, content_length: usize) !void {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const writer = fbs.writer();
+
+    try writer.print("HTTP/1.1 {s}\r\n", .{status});
+    for (headers) |header| {
+        try writer.print("{s}: {s}\r\n", .{ header[0], header[1] });
+    }
+    try writer.print("Content-Length: {d}\r\n", .{content_length});
+    try writer.writeAll("\r\n");
 
     _ = try stream.write(fbs.getWritten());
 }
@@ -129,29 +147,138 @@ pub fn sendWebSocketUpgrade(stream: std.net.Stream, client_key: []const u8) !voi
     _ = try stream.write(fbs.getWritten());
 }
 
+/// Get MIME type for file extension
+fn getMimeType(path: []const u8) []const u8 {
+    const ext = std.fs.path.extension(path);
+    if (std.mem.eql(u8, ext, ".html")) return "text/html; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".css")) return "text/css; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".js")) return "application/javascript; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".json")) return "application/json; charset=utf-8";
+    if (std.mem.eql(u8, ext, ".png")) return "image/png";
+    if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) return "image/jpeg";
+    if (std.mem.eql(u8, ext, ".gif")) return "image/gif";
+    if (std.mem.eql(u8, ext, ".svg")) return "image/svg+xml";
+    if (std.mem.eql(u8, ext, ".ico")) return "image/x-icon";
+    if (std.mem.eql(u8, ext, ".woff")) return "font/woff";
+    if (std.mem.eql(u8, ext, ".woff2")) return "font/woff2";
+    if (std.mem.eql(u8, ext, ".ttf")) return "font/ttf";
+    if (std.mem.eql(u8, ext, ".map")) return "application/json";
+    return "application/octet-stream";
+}
+
 /// HTTP/WebSocket server
 pub const Server = struct {
     listener: std.net.Server,
     allocator: std.mem.Allocator,
     port: u16,
+    static_dir: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator, port: u16) !Server {
+    pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8) !Server {
         const address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
         const listener = try address.listen(.{
             .reuse_address = true,
         });
 
-        log.info("HTTP server listening on port {d}", .{port});
+        if (static_dir) |dir| {
+            log.info("HTTP server listening on port {d}, serving static files from {s}", .{ port, dir });
+        } else {
+            log.info("HTTP server listening on port {d}", .{port});
+        }
 
         return .{
             .listener = listener,
             .allocator = allocator,
             .port = port,
+            .static_dir = static_dir,
         };
     }
 
     pub fn deinit(self: *Server) void {
         self.listener.deinit();
+    }
+
+    /// Serve a static file
+    fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8) void {
+        const static_dir = self.static_dir orelse {
+            self.serveNotFound(stream);
+            return;
+        };
+
+        // Sanitize path - remove leading slash, handle directory traversal
+        var clean_path = url_path;
+        if (clean_path.len > 0 and clean_path[0] == '/') {
+            clean_path = clean_path[1..];
+        }
+
+        // Block directory traversal
+        if (std.mem.indexOf(u8, clean_path, "..") != null) {
+            self.serveForbidden(stream);
+            return;
+        }
+
+        // Default to index.html for root
+        if (clean_path.len == 0) {
+            clean_path = "index.html";
+        }
+
+        // Build full path
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const full_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ static_dir, clean_path }) catch {
+            self.serveError(stream);
+            return;
+        };
+
+        // Open and read file
+        const file = std.fs.cwd().openFile(full_path, .{}) catch {
+            log.debug("File not found: {s}", .{full_path});
+            self.serveNotFound(stream);
+            return;
+        };
+        defer file.close();
+
+        const stat = file.stat() catch {
+            self.serveError(stream);
+            return;
+        };
+
+        const file_size = stat.size;
+        const mime_type = getMimeType(clean_path);
+
+        log.debug("Serving {s} ({d} bytes, {s})", .{ clean_path, file_size, mime_type });
+
+        // Send headers
+        sendResponseHeaders(stream, "200 OK", &.{
+            .{ "Content-Type", mime_type },
+            .{ "Cache-Control", "no-cache" },
+        }, file_size) catch {
+            return;
+        };
+
+        // Stream file content
+        var buf: [8192]u8 = undefined;
+        while (true) {
+            const n = file.read(&buf) catch return;
+            if (n == 0) break;
+            _ = stream.write(buf[0..n]) catch return;
+        }
+    }
+
+    fn serveNotFound(self: *Server, stream: std.net.Stream) void {
+        _ = self;
+        const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
+        sendResponse(stream, "404 Not Found", &.{.{ "Content-Type", "text/html" }}, body) catch {};
+    }
+
+    fn serveForbidden(self: *Server, stream: std.net.Stream) void {
+        _ = self;
+        const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
+        sendResponse(stream, "403 Forbidden", &.{.{ "Content-Type", "text/html" }}, body) catch {};
+    }
+
+    fn serveError(self: *Server, stream: std.net.Stream) void {
+        _ = self;
+        const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
+        sendResponse(stream, "500 Internal Server Error", &.{.{ "Content-Type", "text/html" }}, body) catch {};
     }
 
     /// Accept a connection and handle HTTP/WebSocket upgrade
@@ -181,15 +308,8 @@ pub const Server = struct {
 
         // Check for WebSocket upgrade
         if (!request.isWebSocketUpgrade()) {
-            // Regular HTTP - serve a simple page
-            const html =
-                \\<!DOCTYPE html>
-                \\<html><body>
-                \\<h1>Dullahan Terminal Server</h1>
-                \\<p>Connect via WebSocket on this port.</p>
-                \\</body></html>
-            ;
-            sendResponse(conn.stream, "200 OK", &.{.{ "Content-Type", "text/html" }}, html) catch {};
+            // Serve static file
+            self.serveFile(conn.stream, request.path);
             conn.stream.close();
             return null;
         }
@@ -230,4 +350,12 @@ test "parse http request" {
     try std.testing.expectEqualStrings("/ws", request.path);
     try std.testing.expect(request.isWebSocketUpgrade());
     try std.testing.expectEqualStrings("dGhlIHNhbXBsZSBub25jZQ==", request.getWebSocketKey().?);
+}
+
+test "mime types" {
+    try std.testing.expectEqualStrings("text/html; charset=utf-8", getMimeType("index.html"));
+    try std.testing.expectEqualStrings("text/css; charset=utf-8", getMimeType("style.css"));
+    try std.testing.expectEqualStrings("application/javascript; charset=utf-8", getMimeType("app.js"));
+    try std.testing.expectEqualStrings("image/png", getMimeType("logo.png"));
+    try std.testing.expectEqualStrings("application/octet-stream", getMimeType("unknown.xyz"));
 }

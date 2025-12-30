@@ -52,18 +52,24 @@ pub const ServerState = struct {
     }
 };
 
-pub fn run(allocator: std.mem.Allocator, config: ipc.Config) !void {
+pub const RunConfig = struct {
+    ipc: ipc.Config = .{},
+    static_dir: ?[]const u8 = null,
+    ws_port: u16 = http.DEFAULT_PORT,
+};
+
+pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var state = try ServerState.init(allocator);
     defer state.deinit();
 
-    var ipc_server = try ipc.Server.init(config);
+    var ipc_server = try ipc.Server.init(config.ipc);
     defer ipc_server.deinit();
 
     // Write PID file
     try ipc_server.writePidFile();
 
     // Start WebSocket server on separate thread
-    var ws_server = try WsServer.init(allocator, http.DEFAULT_PORT);
+    var ws_server = try WsServer.init(allocator, config.ws_port, config.static_dir);
     defer ws_server.deinit();
 
     const ws_thread = std.Thread.spawn(.{}, runWsServer, .{ &ws_server, &state.session }) catch |e| {
@@ -71,8 +77,11 @@ pub fn run(allocator: std.mem.Allocator, config: ipc.Config) !void {
         return e;
     };
 
-    log.info("dullahan server started (socket: {s}, ws: port {d})", .{ config.socket_path, http.DEFAULT_PORT });
-    std.debug.print("dullahan server started (socket: {s}, ws: port {d})\n", .{ config.socket_path, http.DEFAULT_PORT });
+    log.info("dullahan server started (socket: {s}, ws: port {d})", .{ config.ipc.socket_path, config.ws_port });
+    std.debug.print("dullahan server started (socket: {s}, ws: port {d})\n", .{ config.ipc.socket_path, config.ws_port });
+    if (config.static_dir) |dir| {
+        std.debug.print("Serving static files from: {s}\n", .{dir});
+    }
 
     // Main IPC loop
     while (state.running) {

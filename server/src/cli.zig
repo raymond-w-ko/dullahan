@@ -10,6 +10,8 @@ pub const CliArgs = struct {
     timeout_ms: u32 = 5000,
     socket_path: []const u8 = "/tmp/dullahan.sock",
     pid_path: []const u8 = "/tmp/dullahan.pid",
+    static_dir: ?[]const u8 = null,
+    ws_port: u16 = 7681,
     help: bool = false,
     serve: bool = false,
     no_spawn: bool = false,
@@ -33,6 +35,11 @@ pub const CliArgs = struct {
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch 5000;
             } else if (std.mem.startsWith(u8, arg, "--socket=")) {
                 args.socket_path = arg["--socket=".len..];
+            } else if (std.mem.startsWith(u8, arg, "--static-dir=")) {
+                args.static_dir = arg["--static-dir=".len..];
+            } else if (std.mem.startsWith(u8, arg, "--port=")) {
+                const val = arg["--port=".len..];
+                args.ws_port = std.fmt.parseInt(u16, val, 10) catch 7681;
             } else if (ipc.Command.fromString(arg)) |cmd| {
                 args.command = cmd;
             }
@@ -54,15 +61,18 @@ pub fn printUsage() void {
         \\  help          Show available commands
         \\
         \\Options:
-        \\  -h, --help         Show this help
-        \\  --timeout=MS       Command timeout in milliseconds (default: 5000)
-        \\  --socket=PATH      Socket path (default: /tmp/dullahan.sock)
-        \\  --no-spawn         Don't auto-spawn server if not running
+        \\  -h, --help           Show this help
+        \\  --timeout=MS         Command timeout in milliseconds (default: 5000)
+        \\  --socket=PATH        Socket path (default: /tmp/dullahan.sock)
+        \\  --static-dir=PATH    Serve static files from directory
+        \\  --port=PORT          WebSocket/HTTP port (default: 7681)
+        \\  --no-spawn           Don't auto-spawn server if not running
         \\
         \\Examples:
-        \\  dullahan serve           # Start server in foreground
-        \\  dullahan status          # Get server status
-        \\  dullahan --timeout=1000 ping  # Ping with 1s timeout
+        \\  dullahan serve                          # Start server
+        \\  dullahan serve --static-dir=./client    # Serve client files
+        \\  dullahan status                         # Get server status
+        \\  dullahan --timeout=1000 ping            # Ping with 1s timeout
         \\
     ;
     std.debug.print("{s}", .{usage});

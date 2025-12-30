@@ -17,9 +17,9 @@ pub const WsServer = struct {
     allocator: std.mem.Allocator,
     running: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, port: u16) !WsServer {
+    pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8) !WsServer {
         return .{
-            .http_server = try http.Server.init(allocator, port),
+            .http_server = try http.Server.init(allocator, port, static_dir),
             .allocator = allocator,
         };
     }

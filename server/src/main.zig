@@ -65,9 +65,13 @@ pub fn main() !void {
 
     if (args.serve) {
         // Run as server
-        const config = ipc.Config{
-            .socket_path = args.socket_path,
-            .pid_path = args.pid_path,
+        const config = server.RunConfig{
+            .ipc = .{
+                .socket_path = args.socket_path,
+                .pid_path = args.pid_path,
+            },
+            .static_dir = args.static_dir,
+            .ws_port = args.ws_port,
         };
         try server.run(allocator, config);
     } else if (args.command != null) {
