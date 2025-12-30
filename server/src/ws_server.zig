@@ -43,12 +43,23 @@ pub const WsServer = struct {
             };
 
             if (ws_conn) |conn| {
-                // Handle this client (blocking for now - single client)
-                self.handleClient(conn, session) catch |e| {
-                    log.err("Client handler error: {any}", .{e});
+                // Spawn thread for each WebSocket client so accept loop keeps running
+                const thread = std.Thread.spawn(.{}, handleClientThread, .{ self, conn, session }) catch |e| {
+                    log.err("Failed to spawn client thread: {any}", .{e});
+                    var c = conn;
+                    c.close();
+                    continue;
                 };
+                thread.detach();
             }
         }
+    }
+
+    /// Thread entry point for client handling
+    fn handleClientThread(self: *WsServer, conn: websocket.Connection, session: *Session) void {
+        self.handleClient(conn, session) catch |e| {
+            log.err("Client handler error: {any}", .{e});
+        };
     }
 
     /// Handle a single WebSocket client
