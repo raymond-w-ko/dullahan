@@ -177,6 +177,7 @@ pub const Server = struct {
         const address = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port);
         const listener = try address.listen(.{
             .reuse_address = true,
+            .kernel_backlog = 128, // Handle burst of connections on refresh
         });
 
         if (static_dir) |dir| {
@@ -256,6 +257,7 @@ pub const Server = struct {
                     .{ "ETag", etag },
                     .{ "Cache-Control", "no-cache" },
                     .{ "Pragma", "no-cache" },
+                    .{ "Connection", "close" },
                 }, "") catch {};
                 return;
             }
@@ -269,6 +271,7 @@ pub const Server = struct {
             .{ "Cache-Control", "no-cache" },
             .{ "Pragma", "no-cache" },
             .{ "ETag", etag },
+            .{ "Connection", "close" },
         }, file_size) catch {
             return;
         };
@@ -285,31 +288,44 @@ pub const Server = struct {
     fn serveNotFound(self: *Server, stream: std.net.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
-        sendResponse(stream, "404 Not Found", &.{.{ "Content-Type", "text/html" }}, body) catch {};
+        sendResponse(stream, "404 Not Found", &.{
+            .{ "Content-Type", "text/html" },
+            .{ "Connection", "close" },
+        }, body) catch {};
     }
 
     fn serveForbidden(self: *Server, stream: std.net.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
-        sendResponse(stream, "403 Forbidden", &.{.{ "Content-Type", "text/html" }}, body) catch {};
+        sendResponse(stream, "403 Forbidden", &.{
+            .{ "Content-Type", "text/html" },
+            .{ "Connection", "close" },
+        }, body) catch {};
     }
 
     fn serveError(self: *Server, stream: std.net.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
-        sendResponse(stream, "500 Internal Server Error", &.{.{ "Content-Type", "text/html" }}, body) catch {};
+        sendResponse(stream, "500 Internal Server Error", &.{
+            .{ "Content-Type", "text/html" },
+            .{ "Connection", "close" },
+        }, body) catch {};
     }
 
     /// Accept a connection and handle HTTP/WebSocket upgrade
     /// Returns a WebSocket connection if upgrade succeeded, null otherwise
     pub fn acceptWebSocket(self: *Server) !?websocket.Connection {
+        log.debug("Waiting for connection...", .{});
         const conn = try self.listener.accept();
+        log.debug("Accepted connection, reading request...", .{});
         errdefer conn.stream.close();
 
         // Read HTTP request
         var buf: [4096]u8 = undefined;
         const n = try conn.stream.read(&buf);
+        log.debug("Read {d} bytes", .{n});
         if (n == 0) {
+            log.debug("Empty request, closing", .{});
             conn.stream.close();
             return null;
         }
@@ -323,7 +339,7 @@ pub const Server = struct {
         };
         defer request.deinit();
 
-        log.debug("HTTP {s} {s}", .{ request.method, request.path });
+        log.debug("HTTP {s} {s} (upgrade={any})", .{ request.method, request.path, request.isWebSocketUpgrade() });
 
         // Check for WebSocket upgrade
         if (!request.isWebSocketUpgrade()) {
