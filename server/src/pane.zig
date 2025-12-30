@@ -4,8 +4,12 @@
 //! or command. Panes are contained within Windows.
 
 const std = @import("std");
+const posix = std.posix;
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
+const Pty = @import("pty.zig").Pty;
+
+const log = std.log.scoped(.pane);
 
 pub const Pane = struct {
     /// The terminal emulator state
@@ -27,6 +31,12 @@ pub const Pane = struct {
     /// Version counter - increments on any content change
     /// Used to detect when clients need snapshot updates
     version: u64 = 0,
+
+    /// PTY for this pane (null if no shell spawned)
+    pty: ?Pty = null,
+
+    /// Child process ID (null if no shell spawned)
+    child_pid: ?posix.pid_t = null,
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -54,7 +64,79 @@ pub const Pane = struct {
     }
 
     pub fn deinit(self: *Pane) void {
+        // Kill child process if running
+        if (self.child_pid) |pid| {
+            _ = posix.kill(pid, posix.SIG.TERM) catch {};
+            // Give it a moment, then force kill
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+            _ = posix.kill(pid, posix.SIG.KILL) catch {};
+            _ = posix.waitpid(pid, 0);
+        }
+
+        // Close PTY
+        if (self.pty) |*pty| {
+            pty.deinit();
+        }
+
         self.terminal.deinit(self.allocator);
+    }
+
+    /// Spawn a shell in this pane
+    pub fn spawnShell(self: *Pane) !void {
+        if (self.pty != null) return error.AlreadySpawned;
+
+        // Open PTY with pane dimensions
+        var pty = Pty.open(.{
+            .ws_row = self.rows,
+            .ws_col = self.cols,
+        }) catch return error.PtyOpenFailed;
+        errdefer pty.deinit();
+
+        // Get user's shell from environment, fallback to /bin/sh
+        const shell = std.posix.getenv("SHELL") orelse "/bin/sh";
+        
+        // Create null-terminated shell path
+        var shell_buf: [256:0]u8 = undefined;
+        const shell_z = std.fmt.bufPrintZ(&shell_buf, "{s}", .{shell}) catch "/bin/sh";
+
+        // Spawn shell
+        const pid = pty.spawn(&.{shell_z}, null) catch return error.SpawnFailed;
+
+        self.pty = pty;
+        self.child_pid = pid;
+
+        log.info("Spawned shell (pid={d}) in pane {d}", .{ pid, self.id });
+    }
+
+    /// Write input to the PTY (stdin to child process)
+    pub fn writeInput(self: *Pane, data: []const u8) !void {
+        if (self.pty) |*pty| {
+            _ = try pty.write(data);
+        } else {
+            return error.NoPty;
+        }
+    }
+
+    /// Get the PTY master fd for polling (returns null if no PTY)
+    pub fn getPtyFd(self: *Pane) ?posix.fd_t {
+        if (self.pty) |pty| {
+            return pty.master;
+        }
+        return null;
+    }
+
+    /// Check if child process is still alive
+    pub fn isAlive(self: *Pane) bool {
+        if (self.child_pid) |pid| {
+            const result = posix.waitpid(pid, posix.W.NOHANG);
+            if (result.pid != 0) {
+                // Child exited
+                self.child_pid = null;
+                return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     /// Feed raw bytes into the terminal (e.g., from process stdout)
@@ -81,6 +163,13 @@ pub const Pane = struct {
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
 
+        // Resize PTY if we have one
+        if (self.pty) |*pty| {
+            pty.setSize(.{ .ws_row = rows, .ws_col = cols }) catch |e| {
+                log.warn("Failed to resize PTY: {any}", .{e});
+            };
+        }
+
         // Increment version to signal clients need update
         self.version +%= 1;
     }
@@ -91,6 +180,9 @@ pub const Pane = struct {
         const cursor = screen.cursor;
 
         try writer.print("Pane[{d}] {d}x{d}", .{ self.id, self.cols, self.rows });
+        if (self.child_pid) |pid| {
+            try writer.print(" pid={d}", .{pid});
+        }
         try writer.print(" cur=({d},{d})", .{ cursor.x, cursor.y });
 
         // Cursor style

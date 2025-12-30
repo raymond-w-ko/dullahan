@@ -161,13 +161,20 @@ pub const WsServer = struct {
         // Format: {"type":"...", ...}
 
         if (std.mem.indexOf(u8, data, "\"type\":\"input\"")) |_| {
-            // Input message - extract data field
+            // Input message - extract data field and unescape
             if (extractJsonString(data, "\"data\":\"")) |input_data| {
                 log.debug("Received input: {d} bytes", .{input_data.len});
 
-                // Feed input to terminal (this increments pane.version)
+                // Write input to PTY (child's stdin)
                 const pane = session.activePane() orelse return;
-                try pane.feed(input_data);
+                
+                // Unescape JSON string (handle \r, \n, etc.)
+                var unescaped: [256]u8 = undefined;
+                const unescaped_len = unescapeJson(input_data, &unescaped);
+                
+                pane.writeInput(unescaped[0..unescaped_len]) catch |e| {
+                    log.err("Failed to write to PTY: {any}", .{e});
+                };
             }
         } else if (std.mem.indexOf(u8, data, "\"type\":\"resize\"")) |_| {
             // Resize message
@@ -187,6 +194,36 @@ pub const WsServer = struct {
         }
     }
 };
+
+/// Unescape a JSON string (handle \r, \n, \t, \\, \", etc.)
+fn unescapeJson(input: []const u8, output: []u8) usize {
+    var out_idx: usize = 0;
+    var i: usize = 0;
+    
+    while (i < input.len and out_idx < output.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            const next = input[i + 1];
+            const char: u8 = switch (next) {
+                'r' => '\r',
+                'n' => '\n',
+                't' => '\t',
+                '\\' => '\\',
+                '"' => '"',
+                '/' => '/',
+                else => next,
+            };
+            output[out_idx] = char;
+            out_idx += 1;
+            i += 2;
+        } else {
+            output[out_idx] = input[i];
+            out_idx += 1;
+            i += 1;
+        }
+    }
+    
+    return out_idx;
+}
 
 /// Extract a string value from JSON (simple, not full parser)
 fn extractJsonString(json: []const u8, prefix: []const u8) ?[]const u8 {

@@ -6,6 +6,7 @@ const std = @import("std");
 const ipc = @import("ipc.zig");
 const Session = @import("session.zig").Session;
 const WsServer = @import("ws_server.zig").WsServer;
+const PtyReader = @import("pty_reader.zig").PtyReader;
 const http = @import("http.zig");
 
 const log = std.log.scoped(.server);
@@ -87,6 +88,20 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         return e;
     };
 
+    // Start PTY reader thread
+    var pty_reader = PtyReader.init(allocator, &state.session);
+    const pty_thread = std.Thread.spawn(.{}, runPtyReader, .{&pty_reader}) catch |e| {
+        log.err("Failed to start PTY reader thread: {any}", .{e});
+        return e;
+    };
+
+    // Spawn shell in the initial pane
+    if (state.session.activePane()) |pane| {
+        pane.spawnShell() catch |e| {
+            log.err("Failed to spawn shell: {any}", .{e});
+        };
+    }
+
     log.info("dullahan server started (socket: {s}, ws: port {d})", .{ config.ipc.socket_path, config.ws_port });
     std.debug.print("dullahan server started (socket: {s}, ws: port {d})\n", .{ config.ipc.socket_path, config.ws_port });
     if (static_dir) |dir| {
@@ -115,9 +130,12 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         };
     }
 
-    // Signal WebSocket server to stop
+    // Signal servers to stop
     ws_server.running = false;
+    pty_reader.stop();
+    
     ws_thread.join();
+    pty_thread.join();
 
     log.info("dullahan server shutting down", .{});
     std.debug.print("dullahan server shutting down\n", .{});
@@ -127,6 +145,10 @@ fn runWsServer(ws_server: *WsServer, session: *Session) void {
     ws_server.run(session) catch |e| {
         log.err("WebSocket server error: {any}", .{e});
     };
+}
+
+fn runPtyReader(pty_reader: *PtyReader) void {
+    pty_reader.run();
 }
 
 fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.Allocator) !ipc.Response {
