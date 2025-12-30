@@ -42,7 +42,7 @@ export function App() {
   }, []);
 
   return (
-    <div class="app">
+    <div class="app" data-theme="selenized-light">
       <header class="header">
         <h1>
           Dullahan Terminal
