@@ -61,31 +61,65 @@ export function App() {
 
   return (
     <div class="app" data-theme={theme}>
-      <header class="header">
-        <h1>
-          Dullahan Terminal
-          <span class={`status ${connected ? "status--connected" : "status--disconnected"}`}>
-            {connected ? "● Connected" : "○ Disconnected"}
-          </span>
-        </h1>
+      <aside class="sidebar">
+        <div class="sidebar-logo" title="Dullahan">D</div>
+        <div class="sidebar-spacer" />
         <button 
-          class="settings-trigger" 
+          class={`sidebar-btn ${connected ? 'sidebar-btn--connected' : 'sidebar-btn--disconnected'}`}
+          title={connected ? 'Connected' : 'Disconnected'}
+        >
+          {connected ? '●' : '○'}
+        </button>
+        <button 
+          class="sidebar-btn" 
           onClick={() => setSettingsOpen(true)}
-          aria-label="Settings"
+          title="Settings"
         >
           ⚙
         </button>
-        {error && <div class="error">Error: {error}</div>}
-      </header>
+      </aside>
 
-      <main>
-        {snapshot ? (
-          <TerminalView snapshot={snapshot} />
-        ) : (
-          <div class="info">
-            {connected ? "Waiting for snapshot..." : "Connecting to server..."}
+      <main class="main">
+        {error && <div class="error">Error: {error}</div>}
+        
+        <div class="terminal-grid">
+          {/* Terminal 1 - Active */}
+          <div class="terminal-pane">
+            <div class="terminal-titlebar">
+              <span class="terminal-title">Terminal 1</span>
+              <span class="terminal-size">
+                {snapshot ? `${snapshot.cols}×${snapshot.rows}` : '—'}
+              </span>
+            </div>
+            {snapshot ? (
+              <TerminalView snapshot={snapshot} />
+            ) : (
+              <div class="terminal terminal--empty">
+                {connected ? "Waiting..." : "Connecting..."}
+              </div>
+            )}
           </div>
-        )}
+
+          {/* Terminal 2 - Placeholder */}
+          <div class="terminal-pane terminal-pane--placeholder">
+            <div class="terminal-titlebar">
+              <span class="terminal-title">Terminal 2</span>
+            </div>
+            <div class="terminal terminal--empty">
+              <span class="terminal-placeholder-text">Empty</span>
+            </div>
+          </div>
+
+          {/* Terminal 3 - Placeholder */}
+          <div class="terminal-pane terminal-pane--placeholder">
+            <div class="terminal-titlebar">
+              <span class="terminal-title">Terminal 3</span>
+            </div>
+            <div class="terminal terminal--empty">
+              <span class="terminal-placeholder-text">Empty</span>
+            </div>
+          </div>
+        </div>
       </main>
 
       <SettingsModal 
@@ -101,27 +135,19 @@ interface TerminalViewProps {
 }
 
 function TerminalView({ snapshot }: TerminalViewProps) {
-  const { cols, rows, cursor, cells, styles, altScreen } = snapshot;
+  const { cols, rows, cursor, cells, styles } = snapshot;
 
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);
 
   return (
-    <div>
-      <div class="terminal-info">
-        {cols}x{rows} | Cursor: ({cursor.x}, {cursor.y}) {cursor.visible ? "visible" : "hidden"} |
-        {altScreen ? " Alt Screen" : " Primary Screen"} |
-        {styles.size} styles
-      </div>
-
-      <pre class="terminal" style={{ minHeight: `${rows * 1.2}em` }}>
-        {lines.map((runs, y) => (
-          <div key={y} class="terminal-line">
-            {renderLine(runs, y, cursor)}
-          </div>
-        ))}
-      </pre>
-    </div>
+    <pre class="terminal">
+      {lines.map((runs, y) => (
+        <div key={y} class="terminal-line">
+          {renderLine(runs, y, cursor)}
+        </div>
+      ))}
+    </pre>
   );
 }
 
