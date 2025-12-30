@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 
 const c = @cImport({
     @cInclude("sys/ioctl.h");
+    @cInclude("sys/stat.h"); // stat() for directory check
     if (builtin.os.tag == .macos) {
         @cInclude("util.h"); // openpty() on macOS
     } else {
@@ -16,6 +17,7 @@ const c = @cImport({
     }
     @cInclude("termios.h");
     @cInclude("unistd.h"); // setsid
+    @cInclude("stdlib.h"); // setenv
 });
 
 pub const Winsize = extern struct {
@@ -103,6 +105,9 @@ pub const Pty = struct {
         if (pid == 0) {
             // Child process
             self.childSetup() catch posix.exit(1);
+            
+            // Set terminal environment variables
+            setTerminalEnv();
 
             // Convert argv to null-terminated pointer array
             var argv_buf: [64:null]?[*:0]const u8 = undefined;
@@ -150,6 +155,25 @@ pub const Pty = struct {
         _ = posix.system.close(self.master);
     }
 };
+
+/// Set terminal-related environment variables for Ghostty compatibility
+fn setTerminalEnv() void {
+    // Set TERM_PROGRAM to identify as Ghostty
+    _ = c.setenv("TERM_PROGRAM", "ghostty", 1);
+    
+    // Set TERM to xterm-ghostty for terminfo lookup
+    _ = c.setenv("TERM", "xterm-ghostty", 1);
+    
+    // Set TERMINFO only if Ghostty.app terminfo directory exists
+    const terminfo_path = "/Applications/Ghostty.app/Contents/Resources/terminfo";
+    var stat_buf: c.struct_stat = undefined;
+    if (c.stat(terminfo_path, &stat_buf) == 0) {
+        // Check if it's a directory (S_IFDIR = 0o40000)
+        if (stat_buf.st_mode & c.S_IFMT == c.S_IFDIR) {
+            _ = c.setenv("TERMINFO", terminfo_path, 1);
+        }
+    }
+}
 
 test "pty can be opened" {
     var pty = try Pty.open(.{});
