@@ -1,4 +1,4 @@
-.PHONY: all build clean dev server client fmt
+.PHONY: all build clean dev server client fmt themes
 
 all: build
 
@@ -10,8 +10,16 @@ dev:
 server:
 	cd server && zig build
 
-client:
-	cd client && npm run build
+client: themes
+	cd client && bun run build
+
+themes:
+	@if [ ! -d deps/themes/ghostty ]; then \
+		echo "Downloading Ghostty themes..."; \
+		mkdir -p deps/themes; \
+		curl -sL "https://deps.files.ghostty.org/ghostty-themes-release-20251222-150520-0add1e1.tgz" | tar xz -C deps/themes; \
+	fi
+	bun scripts/generate-themes.ts
 
 clean:
 	cd server && zig build --clean || true

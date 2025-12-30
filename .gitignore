@@ -8,6 +8,10 @@ node_modules/
 client/dist/*
 !client/dist/.gitkeep
 
+# Generated files
+client/src/themes.css
+client/src/themes.ts
+
 # OS
 .DS_Store
 Thumbs.db
