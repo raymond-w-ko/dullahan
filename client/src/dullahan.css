@@ -41,6 +41,10 @@ html, body {
   --term-font-size: 14px;
   --term-line-height: 1.2;
 
+  /* Layout */
+  --term-padding-x: 6px;
+  --term-padding-y: 6px;
+
   /* ==========================================================================
      256-Color Palette (xterm standard)
      ========================================================================== */
@@ -173,7 +177,7 @@ html, body {
 .terminal {
   background: var(--term-bg);
   color: var(--term-fg);
-  padding: 0.5rem;
+  padding: var(--term-padding-y) var(--term-padding-x);
   border-radius: 4px;
   overflow: auto;
   margin: 0;
@@ -351,3 +355,254 @@ html, body {
 .bg244 { background-color: var(--c244); } .bg245 { background-color: var(--c245); } .bg246 { background-color: var(--c246); } .bg247 { background-color: var(--c247); }
 .bg248 { background-color: var(--c248); } .bg249 { background-color: var(--c249); } .bg250 { background-color: var(--c250); } .bg251 { background-color: var(--c251); }
 .bg252 { background-color: var(--c252); } .bg253 { background-color: var(--c253); } .bg254 { background-color: var(--c254); } .bg255 { background-color: var(--c255); }
+
+/* ==========================================================================
+   Settings Modal - Liquid Glass Effect
+   ========================================================================== */
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.settings-modal {
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Liquid Glass Effect */
+.glass {
+  position: relative;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 1.5rem;
+  box-shadow: 
+    0 8px 32px rgba(31, 38, 135, 0.2),
+    inset 0 4px 20px rgba(255, 255, 255, 0.1);
+  color: var(--term-fg);
+}
+
+.glass::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 1.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(1px);
+  box-shadow: 
+    inset -10px -8px 40px -20px rgba(255, 255, 255, 0.4),
+    inset 0px -10px 30px -10px rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--term-fg);
+  opacity: 0.7;
+  transition: opacity 0.2s;
+  padding: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.settings-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-content {
+  padding: 1rem 1.5rem;
+}
+
+.settings-section {
+  margin-bottom: 1.5rem;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-section h3 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  gap: 1rem;
+}
+
+.settings-field:last-child {
+  margin-bottom: 0;
+}
+
+.settings-field--checkbox {
+  justify-content: flex-start;
+}
+
+.settings-field--checkbox input {
+  width: auto;
+  margin-right: 0.5rem;
+}
+
+.settings-label {
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.settings-field input,
+.settings-field select {
+  flex: 1;
+  max-width: 200px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--term-fg);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.settings-field input:focus,
+.settings-field select:focus {
+  outline: none;
+  border-color: var(--c4);
+  box-shadow: 0 0 0 2px rgba(0, 114, 212, 0.2);
+}
+
+.settings-field input[type="number"] {
+  max-width: 80px;
+}
+
+.settings-field input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--c4);
+}
+
+.settings-field select {
+  cursor: pointer;
+}
+
+.settings-field select option {
+  background: var(--term-bg);
+  color: var(--term-fg);
+}
+
+.settings-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-btn {
+  padding: 0.6rem 1.5rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: var(--c4);
+  color: white;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.settings-btn:hover {
+  filter: brightness(1.1);
+}
+
+.settings-btn:active {
+  transform: scale(0.98);
+}
+
+/* Settings Trigger Button */
+.settings-trigger {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--term-fg);
+  opacity: 0.6;
+  transition: opacity 0.2s, transform 0.2s;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  margin-left: auto;
+}
+
+.settings-trigger:hover {
+  opacity: 1;
+  transform: rotate(45deg);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+}
+
+.header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

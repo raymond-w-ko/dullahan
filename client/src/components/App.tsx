@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
+import { SettingsModal } from "./SettingsModal";
+import * as config from "../config";
 import type { TerminalSnapshot } from "../terminal/connection";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { Style, StyleTable } from "../../../protocol/schema/style";
@@ -11,7 +13,23 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState(() => config.get('theme'));
   const connectionRef = useRef<TerminalConnection | null>(null);
+
+  // Apply config on mount
+  useEffect(() => {
+    config.applyToCSS();
+  }, []);
+
+  // Listen for theme changes
+  useEffect(() => {
+    return config.onChange((key, value) => {
+      if (key === 'theme') {
+        setTheme(value as string);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const conn = new TerminalConnection();
@@ -42,7 +60,7 @@ export function App() {
   }, []);
 
   return (
-    <div class="app" data-theme="selenized-light">
+    <div class="app" data-theme={theme}>
       <header class="header">
         <h1>
           Dullahan Terminal
@@ -50,6 +68,13 @@ export function App() {
             {connected ? "● Connected" : "○ Disconnected"}
           </span>
         </h1>
+        <button 
+          class="settings-trigger" 
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
         {error && <div class="error">Error: {error}</div>}
       </header>
 
@@ -62,6 +87,11 @@ export function App() {
           </div>
         )}
       </main>
+
+      <SettingsModal 
+        isOpen={settingsOpen} 
+        onClose={() => setSettingsOpen(false)} 
+      />
     </div>
   );
 }
