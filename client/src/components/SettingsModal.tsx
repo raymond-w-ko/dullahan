@@ -218,13 +218,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               </select>
             </label>
 
-            <label class="settings-field settings-field--checkbox">
+            <label class="settings-field">
+              <span class="settings-label">Blink</span>
               <input
                 type="checkbox"
                 checked={cursorBlink}
                 onChange={handleCursorBlinkChange}
               />
-              <span class="settings-label">Blink</span>
             </label>
           </div>
 
@@ -264,9 +264,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
         </div>
 
-        <div class="settings-footer">
-          <button class="settings-btn" onClick={onClose}>Done</button>
-        </div>
       </div>
     </div>
   );

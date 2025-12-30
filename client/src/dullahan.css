@@ -315,7 +315,7 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.25rem 1.5rem;
+  padding: var(--space-2);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
   cursor: grab;
@@ -355,13 +355,13 @@ html, body {
 }
 
 .settings-content {
-  padding: 1rem 1.5rem;
+  padding: var(--space-2);
   overflow-y: auto;
   flex: 1;
 }
 
 .settings-section {
-  margin-bottom: 1.5rem;
+  margin-bottom: var(--space-2);
 }
 
 .settings-section:last-child {
@@ -369,7 +369,7 @@ html, body {
 }
 
 .settings-section h3 {
-  margin: 0 0 0.75rem 0;
+  margin: 0 0 var(--space-1) 0;
   font-size: 0.85rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -380,43 +380,35 @@ html, body {
 .settings-field {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.75rem;
-  gap: 1rem;
+  margin-bottom: var(--space-1);
+  gap: var(--space-2);
 }
 
 .settings-field:last-child {
   margin-bottom: 0;
 }
 
-.settings-field--checkbox {
-  justify-content: flex-start;
-}
-
-.settings-field--checkbox input {
-  width: auto;
-  margin-right: 0.5rem;
-}
-
 .settings-label {
-  font-size: 0.95rem;
+  width: 33%;
   flex-shrink: 0;
+  font-size: 0.9rem;
+  text-align: right;
 }
 
 .settings-field input,
 .settings-field select {
-  flex: 1;
-  max-width: 200px;
-  padding: 0.5rem 0.75rem;
+  width: 66%;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 0.5rem;
+  border-radius: var(--space-1);
   /* below has blending issues in dark mode since transparent is "black" */
   background: color-mix(in srgb, var(--term-selection-bg) 25%, transparent);
   /* this looks best, but requires CSS Color Level 5 support */
   background: rgb(from var(--term-selection-bg) r g b / 0.5);
   color: var(--term-fg);
   font-family: inherit;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  text-align: left;
 }
 
 .settings-field input:focus,
@@ -426,12 +418,8 @@ html, body {
   box-shadow: 0 0 0 2px rgba(0, 114, 212, 0.2);
 }
 
-.settings-field input[type="number"] {
-  max-width: 80px;
-}
-
 .settings-field input[type="checkbox"] {
-  width: 1.25rem;
+  width: auto;
   height: 1.25rem;
   accent-color: var(--c4);
 }
@@ -445,34 +433,7 @@ html, body {
   color: var(--term-fg);
 }
 
-.settings-footer {
-  padding: 1rem 1.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
-}
 
-.settings-btn {
-  padding: 0.6rem 1.5rem;
-  border: none;
-  border-radius: 0.5rem;
-  background: var(--c4);
-  color: white;
-  font-family: inherit;
-  font-size: 0.95rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.1s;
-}
-
-.settings-btn:hover {
-  filter: brightness(1.1);
-}
-
-.settings-btn:active {
-  transform: scale(0.98);
-}
 
 /* Settings Trigger Button */
 

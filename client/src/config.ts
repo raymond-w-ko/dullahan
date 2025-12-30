@@ -52,8 +52,8 @@ export const DEFAULTS: ConfigSchema = {
   spacing: 'compact',
   
   // Font settings
-  fontFamily: 'JetBrains Mono, Fira Code, SF Mono, Menlo, Monaco, Courier New, monospace',
-  fontSize: 14,
+  fontFamily: 'Iosevka, JetBrains Mono, Fira Code, SF Mono, Menlo, Monaco, Courier New, monospace',
+  fontSize: 12,
   fontStyle: 'normal',
   lineHeight: 1.2,
   
