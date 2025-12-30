@@ -56,6 +56,15 @@ pub const RunConfig = struct {
     ipc: ipc.Config = .{},
     static_dir: ?[]const u8 = null,
     ws_port: u16 = http.DEFAULT_PORT,
+
+    /// Get static_dir with fallback to ./client if it exists
+    pub fn getStaticDir(self: RunConfig) ?[]const u8 {
+        if (self.static_dir) |dir| return dir;
+
+        // Check if ./client exists
+        std.fs.cwd().access("client", .{}) catch return null;
+        return "client";
+    }
 };
 
 pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
@@ -69,7 +78,8 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     try ipc_server.writePidFile();
 
     // Start WebSocket server on separate thread
-    var ws_server = try WsServer.init(allocator, config.ws_port, config.static_dir);
+    const static_dir = config.getStaticDir();
+    var ws_server = try WsServer.init(allocator, config.ws_port, static_dir);
     defer ws_server.deinit();
 
     const ws_thread = std.Thread.spawn(.{}, runWsServer, .{ &ws_server, &state.session }) catch |e| {
@@ -79,7 +89,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     log.info("dullahan server started (socket: {s}, ws: port {d})", .{ config.ipc.socket_path, config.ws_port });
     std.debug.print("dullahan server started (socket: {s}, ws: port {d})\n", .{ config.ipc.socket_path, config.ws_port });
-    if (config.static_dir) |dir| {
+    if (static_dir) |dir| {
         std.debug.print("Serving static files from: {s}\n", .{dir});
     }
 

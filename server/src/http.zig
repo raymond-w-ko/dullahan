@@ -198,7 +198,7 @@ pub const Server = struct {
     }
 
     /// Serve a static file
-    fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8) void {
+    fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) void {
         const static_dir = self.static_dir orelse {
             self.serveNotFound(stream);
             return;
@@ -244,12 +244,31 @@ pub const Server = struct {
         const file_size = stat.size;
         const mime_type = getMimeType(clean_path);
 
+        // Generate ETag from mtime and size
+        var etag_buf: [64]u8 = undefined;
+        const mtime_sec: i64 = @intCast(@divFloor(stat.mtime, std.time.ns_per_s));
+        const etag = std.fmt.bufPrint(&etag_buf, "\"{x}-{x}\"", .{ @as(u64, @bitCast(mtime_sec)), file_size }) catch "\"0\"";
+
+        // Check If-None-Match for 304 response
+        if (request.getHeader("if-none-match")) |client_etag| {
+            if (std.mem.eql(u8, client_etag, etag)) {
+                sendResponse(stream, "304 Not Modified", &.{
+                    .{ "ETag", etag },
+                    .{ "Cache-Control", "no-cache" },
+                    .{ "Pragma", "no-cache" },
+                }, "") catch {};
+                return;
+            }
+        }
+
         log.debug("Serving {s} ({d} bytes, {s})", .{ clean_path, file_size, mime_type });
 
-        // Send headers
+        // Send headers with ETag
         sendResponseHeaders(stream, "200 OK", &.{
             .{ "Content-Type", mime_type },
             .{ "Cache-Control", "no-cache" },
+            .{ "Pragma", "no-cache" },
+            .{ "ETag", etag },
         }, file_size) catch {
             return;
         };
@@ -309,7 +328,7 @@ pub const Server = struct {
         // Check for WebSocket upgrade
         if (!request.isWebSocketUpgrade()) {
             // Serve static file
-            self.serveFile(conn.stream, request.path);
+            self.serveFile(conn.stream, request.path, &request);
             conn.stream.close();
             return null;
         }
