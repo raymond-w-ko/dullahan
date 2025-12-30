@@ -64,6 +64,17 @@ Color encoding: `[tag, v0, v1, v2]` where tag 0=none, 1=palette, 2=rgb
 
 Flags (u16): bold, italic, faint, blink, inverse, invisible, strikethrough, overline, underline style
 
+## Static file serving (also implemented)
+
+Server now serves static files from the same port as WebSocket:
+
+```bash
+dullahan serve --static-dir=./client
+# Open http://localhost:7681
+```
+
+No need for separate `bun serve` anymore.
+
 ## Next up
 
 - Hook up keyboard input

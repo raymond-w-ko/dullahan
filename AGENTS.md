@@ -80,6 +80,8 @@ The server includes an IPC system for runtime inspection. **Never run `dullahan 
 # Options:
 ./zig-out/bin/dullahan --timeout=1000 ping   # Custom timeout (ms)
 ./zig-out/bin/dullahan --no-spawn status     # Don't auto-spawn, fail if not running
+./zig-out/bin/dullahan serve --static-dir=./client  # Serve client files
+./zig-out/bin/dullahan serve --port=8080     # Custom port
 ```
 
 **Use this REPL to verify assumptions during development:**
