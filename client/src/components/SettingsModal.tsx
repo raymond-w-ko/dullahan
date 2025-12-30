@@ -17,8 +17,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [fontFeature, setFontFeature] = useState(() => config.get('fontFeature'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
-  const [paddingX, setPaddingX] = useState(() => config.get('windowPaddingX'));
-  const [paddingY, setPaddingY] = useState(() => config.get('windowPaddingY'));
 
   // Drag state
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -136,7 +134,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   };
 
   const handleCursorStyleChange = (e: Event) => {
-    const value = (e.target as HTMLSelectElement).value as 'block' | 'bar' | 'underline';
+    const value = (e.target as HTMLSelectElement).value as 'block' | 'bar' | 'underline' | 'block_hollow';
     setCursorStyle(value);
     config.set('cursorStyle', value);
   };
@@ -145,20 +143,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const value = (e.target as HTMLInputElement).checked;
     setCursorBlink(value);
     config.set('cursorBlink', value);
-  };
-
-  const handlePaddingXChange = (e: Event) => {
-    const value = parseInt((e.target as HTMLInputElement).value, 10);
-    setPaddingX(value);
-    config.set('windowPaddingX', value);
-    config.applyToCSS();
-  };
-
-  const handlePaddingYChange = (e: Event) => {
-    const value = parseInt((e.target as HTMLInputElement).value, 10);
-    setPaddingY(value);
-    config.set('windowPaddingY', value);
-    config.applyToCSS();
   };
 
   const modalStyle = {
@@ -256,6 +240,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <option value="block">Block</option>
                 <option value="bar">Bar</option>
                 <option value="underline">Underline</option>
+                <option value="block_hollow">Block Hollow</option>
               </select>
             </label>
 
@@ -279,28 +264,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 <option value="compact">Compact (2px/4px)</option>
                 <option value="comfortable">Comfortable (8px/16px)</option>
               </select>
-            </label>
-
-            <label class="settings-field">
-              <span class="settings-label">Padding X</span>
-              <input
-                type="number"
-                min="0"
-                max="50"
-                value={paddingX}
-                onChange={handlePaddingXChange}
-              />
-            </label>
-
-            <label class="settings-field">
-              <span class="settings-label">Padding Y</span>
-              <input
-                type="number"
-                min="0"
-                max="50"
-                value={paddingY}
-                onChange={handlePaddingYChange}
-              />
             </label>
           </div>
         </div>

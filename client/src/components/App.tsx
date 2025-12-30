@@ -15,6 +15,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => config.get('theme'));
+  const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const connectionRef = useRef<TerminalConnection | null>(null);
 
   // Apply config on mount
@@ -22,11 +23,13 @@ export function App() {
     config.applyToCSS();
   }, []);
 
-  // Listen for theme changes
+  // Listen for config changes
   useEffect(() => {
     return config.onChange((key, value) => {
       if (key === 'theme') {
         setTheme(value as string);
+      } else if (key === 'cursorStyle') {
+        setCursorStyle(value as typeof cursorStyle);
       }
     });
   }, []);
@@ -92,7 +95,7 @@ export function App() {
               </span>
             </div>
             {snapshot ? (
-              <TerminalView snapshot={snapshot} />
+              <TerminalView snapshot={snapshot} cursorStyle={cursorStyle} />
             ) : (
               <div class="terminal terminal--empty">
                 {connected ? "Waiting..." : "Connecting..."}
@@ -132,9 +135,10 @@ export function App() {
 
 interface TerminalViewProps {
   snapshot: TerminalSnapshot;
+  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
 }
 
-function TerminalView({ snapshot }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
 
   // Convert cells to styled runs
@@ -144,7 +148,7 @@ function TerminalView({ snapshot }: TerminalViewProps) {
     <pre class="terminal">
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
-          {renderLine(runs, y, cursor)}
+          {renderLine(runs, y, cursor, cursorStyle)}
         </div>
       ))}
     </pre>
@@ -196,7 +200,8 @@ function cellsToRuns(
 function renderLine(
   runs: Run[],
   y: number,
-  cursor: TerminalSnapshot["cursor"]
+  cursor: TerminalSnapshot["cursor"],
+  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow'
 ): preact.JSX.Element {
   // If cursor is not on this line, render runs directly
   if (!cursor.visible || cursor.y !== y) {
@@ -214,6 +219,9 @@ function renderLine(
   // Cursor is on this line - need to split at cursor position
   const elements: preact.JSX.Element[] = [];
   let x = 0;
+  const cursorClass = `cursor-${cursorStyle}`;
+  // For non-block cursors, preserve original text styling
+  const preserveStyle = cursorStyle !== 'block';
 
   for (let i = 0; i < runs.length; i++) {
     const run = runs[i]!;
@@ -235,8 +243,14 @@ function renderLine(
         );
       }
 
+      // Cursor element - preserve original style for bar/underline/hollow
+      const classes = preserveStyle 
+        ? `${cursorClass} ${styleToClasses(run.style)}`.trim()
+        : cursorClass;
+      const style = preserveStyle ? styleToInline(run.style) : undefined;
+      
       elements.push(
-        <span key={`${i}-cursor`} class="cursor">
+        <span key={`${i}-cursor`} class={classes} style={style}>
           {cursorChar}
         </span>
       );
@@ -262,7 +276,7 @@ function renderLine(
   // Cursor beyond end of line
   if (cursor.x >= x) {
     elements.push(
-      <span key="cursor-end" class="cursor">
+      <span key="cursor-end" class={cursorClass}>
         {" "}
       </span>
     );

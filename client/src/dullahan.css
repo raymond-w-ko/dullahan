@@ -229,9 +229,49 @@ html, body {
   white-space: pre;
 }
 
-.cursor {
+/* Cursor styles */
+.cursor-block {
   background: var(--term-cursor-bg);
   color: var(--term-cursor-fg);
+}
+
+.cursor-bar {
+  position: relative;
+}
+
+.cursor-bar::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--term-cursor-bg);
+}
+
+.cursor-underline {
+  position: relative;
+}
+
+.cursor-underline::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--term-cursor-bg);
+}
+
+.cursor-block_hollow {
+  position: relative;
+}
+
+.cursor-block_hollow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--term-cursor-bg);
 }
 
 /* ==========================================================================

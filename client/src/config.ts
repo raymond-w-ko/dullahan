@@ -25,13 +25,11 @@ export interface ConfigSchema {
   adjustCellHeight: number;
   
   // Cursor
-  cursorStyle: 'block' | 'bar' | 'underline';
+  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
   cursorBlink: boolean;
   cursorOpacity: number;
   
   // Window
-  windowPaddingX: number;
-  windowPaddingY: number;
   windowWidth: number;
   windowHeight: number;
   
@@ -69,8 +67,6 @@ export const DEFAULTS: ConfigSchema = {
   cursorOpacity: 1.0,
   
   // Window
-  windowPaddingX: 6,
-  windowPaddingY: 6,
   windowWidth: 80,
   windowHeight: 24,
   
@@ -196,10 +192,6 @@ export function applyToCSS(): void {
   root.style.setProperty('--term-font-weight', get('fontStyle'));
   root.style.setProperty('--term-font-feature', get('fontFeature') || 'normal');
   root.style.setProperty('--term-line-height', String(get('lineHeight')));
-  
-  // Padding
-  root.style.setProperty('--term-padding-x', `${get('windowPaddingX')}px`);
-  root.style.setProperty('--term-padding-y', `${get('windowPaddingY')}px`);
 }
 
 /**
