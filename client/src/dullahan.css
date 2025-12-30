@@ -401,7 +401,10 @@ html, body {
   padding: 0.5rem 0.75rem;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--term-selection-bg) 50%, transparent);
+  /* below has blending issues in dark mode since transparent is "white" */
+  background: color-mix(in srgb, var(--term-selection-bg) 25%, transparent);
+  /* this looks best, but requires CSS Color Level 5 support */
+  background: rgb(from var(--term-selection-bg) r g b / 0.5);
   color: var(--term-fg);
   font-family: inherit;
   font-size: 0.9rem;
