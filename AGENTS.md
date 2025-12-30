@@ -100,6 +100,8 @@ The server includes an IPC system for runtime inspection. **Never run `dullahan 
 
 **Port 7681** is also used by ttyd/libwebsockets — if you run both, one will fail to bind.
 
+**Security:** Server binds to `127.0.0.1` only — no remote connections accepted.
+
 ### Repo Layout
 
 ```
@@ -132,10 +134,13 @@ dullahan/
 │   ├── bun.lock             # bun lockfile
 │   ├── tsconfig.json
 │   ├── esbuild.config.ts
-│   ├── index.html           # stub HTML
+│   ├── index.html           # loads dullahan.css + themes.css
 │   ├── serve.ts             # dev server
 │   ├── src/
 │   │   ├── main.ts          # entry point
+│   │   ├── dullahan.css     # base styles + 256-color palette
+│   │   ├── themes.css       # 453 Ghostty themes (generated, gitignored)
+│   │   ├── themes.ts        # theme name index (generated, gitignored)
 │   │   ├── components/
 │   │   │   └── App.tsx      # main terminal UI
 │   │   └── terminal/
@@ -153,14 +158,18 @@ dullahan/
 │
 ├── docs/                    # documentation
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
-│   └── terminal-state-sync.md # state sync design doc
+│   ├── terminal-state-sync.md # state sync design doc
+│   ├── 2024-12-29-websocket-sprint.md      # WebSocket implementation notes
+│   └── 2024-12-29-websocket-connection-hang.md  # browser refresh bug postmortem
 │
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout
-│   └── setup-beads.sh       # initialize beads issue tracking
+│   ├── setup-beads.sh       # initialize beads issue tracking
+│   └── generate-themes.ts   # convert Ghostty themes to CSS
 │
 └── deps/                    # gitignored, source checkouts for reference
-    └── ghostty/             # ghostty source (synced to dependency version)
+    ├── ghostty/             # ghostty source (synced to dependency version)
+    └── themes/ghostty/      # 453 Ghostty theme files (downloaded)
 ```
 
 ### Dependency Source Reference
@@ -178,6 +187,68 @@ ls deps/ghostty/src/
 ```
 
 This checkout is gitignored and created/updated by the update script.
+
+---
+
+## Theming & CSS Guidelines
+
+### Theme System
+
+Dullahan uses 453 Ghostty-compatible themes, auto-generated from upstream.
+
+```bash
+make themes          # Download themes + generate CSS
+```
+
+Apply themes via `data-theme` attribute:
+```html
+<div class="app" data-theme="selenized-light">
+```
+
+### CSS Variables (from themes)
+
+Themes provide these CSS variables:
+- `--term-bg`, `--term-fg` — background/foreground
+- `--term-cursor-bg`, `--term-cursor-fg` — cursor colors
+- `--term-selection-bg`, `--term-selection-fg` — selection colors
+- `--c0` through `--c15` — ANSI color palette
+
+### **IMPORTANT: Reuse Theme Colors**
+
+**Always derive UI colors from the theme palette.** Do NOT hardcode colors.
+
+```css
+/* ✅ GOOD - uses palette colors */
+.error { color: var(--c1); }        /* red from palette */
+.success { color: var(--c2); }      /* green from palette */
+.muted { color: var(--c8); }        /* gray from palette */
+.border { border-color: var(--c8); }
+
+/* ❌ BAD - hardcoded colors break themes */
+.error { color: #ff0000; }
+.success { color: #00ff00; }
+```
+
+**Palette color meanings:**
+| Variable | Typical Use |
+|----------|-------------|
+| `--c0` | Black (often same as bg) |
+| `--c1` | Red — errors, disconnected |
+| `--c2` | Green — success, connected |
+| `--c3` | Yellow — warnings |
+| `--c4` | Blue — info, links |
+| `--c5` | Magenta — special |
+| `--c6` | Cyan — accent |
+| `--c7` | White (often same as fg) |
+| `--c8` | Bright black — dim text, borders |
+| `--c9-15` | Bright variants of above |
+
+### Static Variables (non-theme)
+
+Only these should be hardcoded in `:root`:
+- `--term-font` — font family stack
+- `--term-font-size` — font size
+- `--term-line-height` — line height
 
 ---
 
