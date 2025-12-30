@@ -1,7 +1,11 @@
 import { h } from "preact";
 import { useState, useEffect, useRef } from "preact/hooks";
-import { TerminalConnection, cellsToLines } from "../terminal/connection";
+import { TerminalConnection } from "../terminal/connection";
+import { cellToChar } from "../../../protocol/schema/cell";
+import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
 import type { TerminalSnapshot } from "../terminal/connection";
+import type { Cell } from "../../../protocol/schema/cell";
+import type { Style, StyleTable } from "../../../protocol/schema/style";
 
 export function App() {
   const [connected, setConnected] = useState(false);
@@ -38,36 +42,22 @@ export function App() {
   }, []);
 
   return (
-    <div style={{ 
-      fontFamily: "monospace", 
-      background: "#1a1a2e", 
-      color: "#eee",
-      minHeight: "100vh",
-      padding: "1rem"
-    }}>
-      <header style={{ marginBottom: "1rem", borderBottom: "1px solid #333", paddingBottom: "0.5rem" }}>
-        <h1 style={{ margin: 0, fontSize: "1.2rem" }}>
+    <div class="app">
+      <header class="header">
+        <h1>
           Dullahan Terminal
-          <span style={{ 
-            marginLeft: "1rem", 
-            fontSize: "0.8rem",
-            color: connected ? "#4ade80" : "#f87171"
-          }}>
+          <span class={`status ${connected ? "status--connected" : "status--disconnected"}`}>
             {connected ? "● Connected" : "○ Disconnected"}
           </span>
         </h1>
-        {error && (
-          <div style={{ color: "#f87171", marginTop: "0.5rem" }}>
-            Error: {error}
-          </div>
-        )}
+        {error && <div class="error">Error: {error}</div>}
       </header>
 
       <main>
         {snapshot ? (
           <TerminalView snapshot={snapshot} />
         ) : (
-          <div style={{ color: "#888" }}>
+          <div class="info">
             {connected ? "Waiting for snapshot..." : "Connecting to server..."}
           </div>
         )}
@@ -81,36 +71,23 @@ interface TerminalViewProps {
 }
 
 function TerminalView({ snapshot }: TerminalViewProps) {
-  const { cols, rows, cursor, cells, altScreen } = snapshot;
+  const { cols, rows, cursor, cells, styles, altScreen } = snapshot;
 
-  // Convert cells to lines for display
-  const lines = cellsToLines(cells, cols, rows);
+  // Convert cells to styled runs
+  const lines = cellsToRuns(cells, styles, cols, rows);
 
   return (
     <div>
-      <div style={{ 
-        marginBottom: "0.5rem", 
-        fontSize: "0.75rem", 
-        color: "#888" 
-      }}>
-        {cols}x{rows} | Cursor: ({cursor.x}, {cursor.y}) {cursor.visible ? "visible" : "hidden"} | 
+      <div class="terminal-info">
+        {cols}x{rows} | Cursor: ({cursor.x}, {cursor.y}) {cursor.visible ? "visible" : "hidden"} |
         {altScreen ? " Alt Screen" : " Primary Screen"} |
-        {cells.length} cells
+        {styles.size} styles
       </div>
 
-      <pre style={{
-        background: "#0d0d1a",
-        padding: "0.5rem",
-        borderRadius: "4px",
-        overflow: "auto",
-        margin: 0,
-        fontSize: "14px",
-        lineHeight: "1.2",
-        minHeight: `${rows * 1.2}em`,
-      }}>
-        {lines.map((line, y) => (
-          <div key={y} style={{ height: "1.2em" }}>
-            {renderLine(line, y, cursor)}
+      <pre class="terminal" style={{ minHeight: `${rows * 1.2}em` }}>
+        {lines.map((runs, y) => (
+          <div key={y} class="terminal-line">
+            {renderLine(runs, y, cursor)}
           </div>
         ))}
       </pre>
@@ -118,30 +95,197 @@ function TerminalView({ snapshot }: TerminalViewProps) {
   );
 }
 
+/** A run of consecutive cells with the same style */
+interface Run {
+  text: string;
+  styleId: number;
+  style: Style;
+}
+
+/** Convert cells to lines of styled runs */
+function cellsToRuns(
+  cells: Cell[],
+  styles: StyleTable,
+  cols: number,
+  rows: number
+): Run[][] {
+  const lines: Run[][] = [];
+
+  for (let y = 0; y < rows; y++) {
+    const runs: Run[] = [];
+    let currentRun: Run | null = null;
+
+    for (let x = 0; x < cols; x++) {
+      const idx = y * cols + x;
+      const cell = cells[idx];
+      const char = cell ? cellToChar(cell) : " ";
+      const styleId = cell?.styleId ?? 0;
+
+      if (currentRun && currentRun.styleId === styleId) {
+        currentRun.text += char;
+      } else {
+        const style = getStyle(styles, styleId);
+        currentRun = { text: char, styleId, style };
+        runs.push(currentRun);
+      }
+    }
+
+    lines.push(runs);
+  }
+
+  return lines;
+}
+
+/** Render a line of runs, inserting cursor if needed */
 function renderLine(
-  line: string, 
-  y: number, 
+  runs: Run[],
+  y: number,
   cursor: TerminalSnapshot["cursor"]
 ): preact.JSX.Element {
-  // If cursor is on this line and visible, highlight the cursor position
-  if (cursor.visible && cursor.y === y) {
-    const before = line.slice(0, cursor.x);
-    const cursorChar = line[cursor.x] || " ";
-    const after = line.slice(cursor.x + 1);
-
+  // If cursor is not on this line, render runs directly
+  if (!cursor.visible || cursor.y !== y) {
     return (
       <>
-        {before}
-        <span style={{ 
-          background: "#fff", 
-          color: "#000"
-        }}>
-          {cursorChar}
-        </span>
-        {after}
+        {runs.map((run, i) => (
+          <span key={i} class={styleToClasses(run.style)} style={styleToInline(run.style)}>
+            {run.text}
+          </span>
+        ))}
       </>
     );
   }
 
-  return <>{line || " "}</>;
+  // Cursor is on this line - need to split at cursor position
+  const elements: preact.JSX.Element[] = [];
+  let x = 0;
+
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i]!;
+    const runStart = x;
+    const runEnd = x + run.text.length;
+
+    if (cursor.x >= runStart && cursor.x < runEnd) {
+      // Cursor is in this run - split it
+      const offset = cursor.x - runStart;
+      const before = run.text.slice(0, offset);
+      const cursorChar = run.text[offset] || " ";
+      const after = run.text.slice(offset + 1);
+
+      if (before) {
+        elements.push(
+          <span key={`${i}-before`} class={styleToClasses(run.style)} style={styleToInline(run.style)}>
+            {before}
+          </span>
+        );
+      }
+
+      elements.push(
+        <span key={`${i}-cursor`} class="cursor">
+          {cursorChar}
+        </span>
+      );
+
+      if (after) {
+        elements.push(
+          <span key={`${i}-after`} class={styleToClasses(run.style)} style={styleToInline(run.style)}>
+            {after}
+          </span>
+        );
+      }
+    } else {
+      elements.push(
+        <span key={i} class={styleToClasses(run.style)} style={styleToInline(run.style)}>
+          {run.text}
+        </span>
+      );
+    }
+
+    x = runEnd;
+  }
+
+  // Cursor beyond end of line
+  if (cursor.x >= x) {
+    elements.push(
+      <span key="cursor-end" class="cursor">
+        {" "}
+      </span>
+    );
+  }
+
+  return <>{elements}</>;
+}
+
+/** Convert style to CSS class names (for palette colors + attributes) */
+function styleToClasses(style: Style): string {
+  const classes: string[] = [];
+
+  // Foreground color (palette only - RGB uses inline style)
+  if (style.fgColor.tag === ColorTag.PALETTE) {
+    classes.push(`fg${style.fgColor.index}`);
+  }
+
+  // Background color (palette only)
+  if (style.bgColor.tag === ColorTag.PALETTE) {
+    classes.push(`bg${style.bgColor.index}`);
+  }
+
+  // Attributes
+  if (style.flags.bold) classes.push("bold");
+  if (style.flags.italic) classes.push("italic");
+  if (style.flags.faint) classes.push("faint");
+  if (style.flags.blink) classes.push("blink");
+  if (style.flags.inverse) classes.push("inverse");
+  if (style.flags.invisible) classes.push("invisible");
+  if (style.flags.strikethrough) classes.push("strikethrough");
+  if (style.flags.overline) classes.push("overline");
+
+  // Underline styles
+  switch (style.flags.underline) {
+    case Underline.SINGLE:
+      classes.push("underline");
+      break;
+    case Underline.DOUBLE:
+      classes.push("underline-double");
+      break;
+    case Underline.CURLY:
+      classes.push("underline-curly");
+      break;
+    case Underline.DOTTED:
+      classes.push("underline-dotted");
+      break;
+    case Underline.DASHED:
+      classes.push("underline-dashed");
+      break;
+  }
+
+  return classes.join(" ");
+}
+
+/** Convert style to inline CSS (for RGB colors only) */
+function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
+  const css: h.JSX.CSSProperties = {};
+  let hasInline = false;
+
+  // RGB foreground
+  if (style.fgColor.tag === ColorTag.RGB) {
+    css.color = `rgb(${style.fgColor.r},${style.fgColor.g},${style.fgColor.b})`;
+    hasInline = true;
+  }
+
+  // RGB background
+  if (style.bgColor.tag === ColorTag.RGB) {
+    css.backgroundColor = `rgb(${style.bgColor.r},${style.bgColor.g},${style.bgColor.b})`;
+    hasInline = true;
+  }
+
+  // Underline color (always inline if set, CSS doesn't support this well)
+  if (style.underlineColor.tag === ColorTag.RGB) {
+    css.textDecorationColor = `rgb(${style.underlineColor.r},${style.underlineColor.g},${style.underlineColor.b})`;
+    hasInline = true;
+  } else if (style.underlineColor.tag === ColorTag.PALETTE) {
+    css.textDecorationColor = `var(--c${style.underlineColor.index})`;
+    hasInline = true;
+  }
+
+  return hasInline ? css : undefined;
 }
