@@ -127,24 +127,10 @@ export function App() {
           </div>
 
           {/* Terminal 2 - Placeholder */}
-          <div class="terminal-pane terminal-pane--placeholder">
-            <div class="terminal-titlebar">
-              <span class="terminal-title">Terminal 2</span>
-            </div>
-            <div class="terminal terminal--empty">
-              <span class="terminal-placeholder-text">Empty</span>
-            </div>
-          </div>
+          <TerminalPlaceholder title="Terminal 2" />
 
           {/* Terminal 3 - Placeholder */}
-          <div class="terminal-pane terminal-pane--placeholder">
-            <div class="terminal-titlebar">
-              <span class="terminal-title">Terminal 3</span>
-            </div>
-            <div class="terminal terminal--empty">
-              <span class="terminal-placeholder-text">Empty</span>
-            </div>
-          </div>
+          <TerminalPlaceholder title="Terminal 3" />
         </div>
       </main>
 
@@ -188,6 +174,30 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
         </div>
       ))}
     </pre>
+  );
+}
+
+/** Placeholder terminal that shows dimensions */
+interface TerminalPlaceholderProps {
+  title: string;
+}
+
+function TerminalPlaceholder({ title }: TerminalPlaceholderProps) {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const dimensions = useTerminalDimensions(terminalRef);
+
+  return (
+    <div class="terminal-pane terminal-pane--placeholder">
+      <div class="terminal-titlebar">
+        <span class="terminal-title">{title}</span>
+        <span class="terminal-size">
+          {dimensions.cols > 0 ? `${dimensions.cols}×${dimensions.rows}` : '—'}
+        </span>
+      </div>
+      <div class="terminal terminal--empty" ref={terminalRef}>
+        <span class="terminal-placeholder-text">Empty</span>
+      </div>
+    </div>
   );
 }
 
