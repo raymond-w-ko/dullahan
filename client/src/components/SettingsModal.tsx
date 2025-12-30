@@ -89,8 +89,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   };
 
   return (
-    <div class="settings-overlay" onClick={onClose}>
-      <div class="settings-modal glass" onClick={(e) => e.stopPropagation()}>
+    <div class="settings-modal glass" onClick={(e) => e.stopPropagation()}>
+      <div class="settings-inner">
         <div class="settings-header">
           <h2>Settings</h2>
           <button class="settings-close" onClick={onClose} aria-label="Close">
