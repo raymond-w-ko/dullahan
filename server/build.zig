@@ -23,9 +23,15 @@ pub fn build(b: *std.Build) void {
     }
 
     // Add snappy dependency for compression
-    if (b.lazyDependency("snappy", .{})) |snappy_dep| {
+    // Pass target/optimize so the C++ library builds correctly
+    if (b.lazyDependency("snappy", .{
+        .target = target,
+        .optimize = optimize,
+    })) |snappy_dep| {
         const snappy = snappy_dep.module("snappy");
         dullahan_mod.addImport("snappy", snappy);
+        // Link the snappy static library
+        dullahan_mod.linkLibrary(snappy_dep.artifact("snappy"));
     }
 
     // Executable
