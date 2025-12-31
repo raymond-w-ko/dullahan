@@ -128,14 +128,51 @@ Response to client ping.
 
 ### Client → Server
 
-#### Input
+#### Key
 
-Keyboard input to send to the terminal.
+Keyboard event with full fidelity (1:1 with browser KeyboardEvent).
+Server converts to byte sequences for the PTY.
+
+Design note: Full event data preserved for future Kitty keyboard protocol support.
 
 ```json
 {
-  "type": "input",
-  "data": "hello"
+  "type": "key",
+  "key": "a",           // Logical key value ("a", "Enter", "ArrowUp")
+  "code": "KeyA",       // Physical key code (layout-independent)
+  "keyCode": 65,        // Legacy keyCode (deprecated but useful)
+  "state": "down",      // "down" or "up"
+  "ctrl": false,
+  "alt": false,
+  "shift": false,
+  "meta": false,
+  "repeat": false,
+  "timestamp": 12345.67 // High-res timestamp (performance.now())
+}
+```
+
+**Special key handling:**
+- Ctrl+letter → control character (Ctrl+A = 0x01)
+- Alt+key → ESC prefix (Alt+A = ESC A)
+- Arrow keys → ANSI sequences (↑ = ESC[A)
+- Function keys → F1=ESC OP, F5=ESC[15~, etc.
+- Enter → CR (0x0d)
+- Backspace → DEL (0x7f)
+- Tab → HT (0x09), Shift+Tab → ESC[Z
+
+**Timestamp use case:** Future ML-based keystroke dynamics analysis for
+forensic fingerprinting and anomaly detection.
+
+#### Text
+
+Composed text from IME (Input Method Editor) for CJK, emoji, etc.
+Sent as UTF-8, bypasses keyboard event conversion.
+
+```json
+{
+  "type": "text",
+  "data": "日本語",
+  "timestamp": 12345.67
 }
 ```
 
@@ -183,3 +220,5 @@ The server tracks a `version` counter on each pane:
 - **Delta updates**: Send only changed rows/cells
 - **MessagePack**: Switch to msgpack for smaller payloads
 - **Grapheme data**: Send multi-codepoint grapheme clusters
+- **Kitty keyboard protocol**: Full support for key event encoding with modifiers,
+  key release events, and Unicode codepoints (requires terminal app negotiation)
