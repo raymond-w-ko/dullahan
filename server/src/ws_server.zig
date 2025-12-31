@@ -1,8 +1,10 @@
 //! WebSocket server for terminal clients
 //!
 //! Manages WebSocket connections and terminal state synchronization.
+//! Uses binary msgpack for efficient data transmission.
 
 const std = @import("std");
+const msgpack = @import("msgpack");
 const http = @import("http.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
@@ -136,9 +138,9 @@ pub const WsServer = struct {
 
                 switch (frame.opcode) {
                     .text => {
-                        // Parse client message (this may update pane)
+                        // Parse JSON client message (legacy/fallback)
                         self.handleClientMessage(frame.payload, session, &ws) catch |e| {
-                            log.err("Failed to handle message: {any}", .{e});
+                            log.err("Failed to handle text message: {any}", .{e});
                         };
                         // Send immediate feedback if pane was modified
                         if (pane.version != last_version) {
@@ -147,7 +149,15 @@ pub const WsServer = struct {
                         }
                     },
                     .binary => {
-                        log.debug("Received binary frame ({d} bytes)", .{frame.payload.len});
+                        // Parse msgpack client message
+                        self.handleBinaryMessage(frame.payload, session, &ws) catch |e| {
+                            log.err("Failed to handle binary message: {any}", .{e});
+                        };
+                        // Send immediate feedback if pane was modified
+                        if (pane.version != last_version) {
+                            self.sendSnapshot(&ws, pane) catch {};
+                            last_version = pane.version;
+                        }
                     },
                     .ping => {
                         ws.sendPong(frame.payload) catch {};
@@ -188,11 +198,11 @@ pub const WsServer = struct {
         }
     }
 
-    /// Send a snapshot to a single client
+    /// Send a binary msgpack snapshot to a single client
     fn sendSnapshot(self: *WsServer, ws: *websocket.Connection, pane: *Pane) !void {
-        const snap = try snapshot.generateSnapshot(self.allocator, pane);
+        const snap = try snapshot.generateBinarySnapshot(self.allocator, pane);
         defer self.allocator.free(snap);
-        try ws.sendText(snap);
+        try ws.sendBinary(snap);
     }
 
     /// Handle a message from a client
@@ -275,10 +285,115 @@ pub const WsServer = struct {
             const pane = session.activePane() orelse return;
             pane.scroll(scroll_msg.value.delta);
         } else if (std.mem.eql(u8, type_str, "ping")) {
-            // Ping message - send pong
-            try ws.sendText("{\"type\":\"pong\"}");
+            // Ping message - send binary pong
+            const pong = try snapshot.generateBinaryPong(self.allocator);
+            defer self.allocator.free(pong);
+            try ws.sendBinary(pong);
         } else {
             log.warn("Unknown message type: {s}", .{data});
+        }
+    }
+
+    /// Handle a binary msgpack message from a client
+    fn handleBinaryMessage(self: *WsServer, data: []const u8, session: *Session, ws: *websocket.Connection) !void {
+        // Parse msgpack message
+        var buffer: [4096]u8 = undefined;
+        @memcpy(buffer[0..data.len], data);
+
+        var write_stream = msgpack.compat.fixedBufferStream(&buffer);
+        var read_stream = msgpack.compat.fixedBufferStream(buffer[0..data.len]);
+
+        const BufferType = msgpack.compat.BufferStream;
+        var packer = msgpack.Pack(
+            *BufferType,
+            *BufferType,
+            BufferType.WriteError,
+            BufferType.ReadError,
+            BufferType.write,
+            BufferType.read,
+        ).init(&write_stream, &read_stream);
+
+        const payload = packer.read(self.allocator) catch |e| {
+            log.warn("Failed to parse msgpack: {any}", .{e});
+            return;
+        };
+        defer payload.free(self.allocator);
+
+        // Get message type
+        const type_payload = payload.mapGet("type") catch {
+            log.warn("Binary message missing 'type' field", .{});
+            return;
+        } orelse {
+            log.warn("Binary message missing 'type' field", .{});
+            return;
+        };
+
+        const type_str = type_payload.asStr() catch {
+            log.warn("Binary message 'type' is not a string", .{});
+            return;
+        };
+
+        if (std.mem.eql(u8, type_str, "key")) {
+            // Keyboard event
+            const pane = session.activePane() orelse return;
+
+            const key_payload = (payload.mapGet("key") catch return) orelse return;
+            const key = key_payload.asStr() catch return;
+
+            const state_payload = (payload.mapGet("state") catch return) orelse return;
+            const state = state_payload.asStr() catch return;
+
+            // Only process keydown events
+            if (!std.mem.eql(u8, state, "down")) return;
+
+            const ctrl = if (payload.mapGet("ctrl") catch null) |p| (p.asBool() catch false) else false;
+            const alt = if (payload.mapGet("alt") catch null) |p| (p.asBool() catch false) else false;
+            const shift = if (payload.mapGet("shift") catch null) |p| (p.asBool() catch false) else false;
+
+            var output_buf: [32]u8 = undefined;
+            const event = KeyEvent{
+                .type = "key",
+                .key = key,
+                .code = "",
+                .state = state,
+                .ctrl = ctrl,
+                .alt = alt,
+                .shift = shift,
+            };
+            const output = keyEventToBytes(event, &output_buf);
+
+            if (output.len > 0) {
+                pane.writeInput(output) catch |e| {
+                    log.err("Failed to write key to PTY: {any}", .{e});
+                };
+            }
+        } else if (std.mem.eql(u8, type_str, "text")) {
+            // IME composed text
+            const pane = session.activePane() orelse return;
+            const data_payload = (payload.mapGet("data") catch return) orelse return;
+            const text = data_payload.asStr() catch return;
+            pane.writeInput(text) catch |e| {
+                log.err("Failed to write text to PTY: {any}", .{e});
+            };
+        } else if (std.mem.eql(u8, type_str, "resize")) {
+            const pane = session.activePane() orelse return;
+            const cols_payload = (payload.mapGet("cols") catch return) orelse return;
+            const rows_payload = (payload.mapGet("rows") catch return) orelse return;
+            const cols: u16 = @intCast(cols_payload.getUint() catch return);
+            const rows: u16 = @intCast(rows_payload.getUint() catch return);
+            log.info("Binary resize request: {d}x{d}", .{ cols, rows });
+            try pane.resize(cols, rows);
+        } else if (std.mem.eql(u8, type_str, "scroll")) {
+            const pane = session.activePane() orelse return;
+            const delta_payload = (payload.mapGet("delta") catch return) orelse return;
+            const delta: i32 = @intCast(delta_payload.getInt() catch return);
+            pane.scroll(delta);
+        } else if (std.mem.eql(u8, type_str, "ping")) {
+            const pong = try snapshot.generateBinaryPong(self.allocator);
+            defer self.allocator.free(pong);
+            try ws.sendBinary(pong);
+        } else {
+            log.warn("Unknown binary message type: {s}", .{type_str});
         }
     }
 };

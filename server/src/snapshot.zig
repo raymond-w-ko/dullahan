@@ -1,9 +1,10 @@
 //! Terminal snapshot generation
 //!
-//! Converts terminal state to JSON for transmission to clients.
-//! Cell data and styles are sent as raw binary (base64-encoded in JSON).
+//! Converts terminal state to binary msgpack for transmission to clients.
+//! Cell data and styles are sent as raw binary bytes within msgpack.
 
 const std = @import("std");
+const msgpack = @import("msgpack");
 const Pane = @import("pane.zig").Pane;
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
@@ -313,6 +314,131 @@ pub fn generateOutputMessage(allocator: std.mem.Allocator, data: []const u8) ![]
 
     // Serialize to JSON using std.json
     return std.json.Stringify.valueAlloc(allocator, message, .{});
+}
+
+// ============================================================================
+// Binary Msgpack Snapshot
+// ============================================================================
+
+/// Generate a binary msgpack snapshot of the terminal state
+pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
+    // Lock pane to prevent concurrent modification during snapshot
+    pane.lock();
+    defer pane.unlock();
+
+    const screen = pane.terminal.screens.active;
+    const cursor = screen.cursor;
+
+    // Get raw cell bytes and styles (no base64)
+    var cells_and_styles = try getCellBytesAndStyles(allocator, pane);
+    defer cells_and_styles.deinit(allocator);
+
+    // Build cursor style string
+    const cursor_style_str = switch (cursor.cursor_style) {
+        .block, .block_hollow => "block",
+        .underline => "underline",
+        .bar => "bar",
+    };
+
+    // Get scrollback info
+    const pages = &screen.pages;
+    const scrollbar = pages.scrollbar();
+
+    // Build msgpack payload
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("snapshot", allocator));
+    try payload.mapPut("cols", msgpack.Payload{ .uint = pane.cols });
+    try payload.mapPut("rows", msgpack.Payload{ .uint = pane.rows });
+
+    // Cursor object
+    var cursor_map = msgpack.Payload.mapPayload(allocator);
+    try cursor_map.mapPut("x", msgpack.Payload{ .uint = cursor.x });
+    try cursor_map.mapPut("y", msgpack.Payload{ .uint = cursor.y });
+    try cursor_map.mapPut("visible", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_visible) });
+    try cursor_map.mapPut("style", try msgpack.Payload.strToPayload(cursor_style_str, allocator));
+    try payload.mapPut("cursor", cursor_map);
+
+    // Alt screen flag
+    try payload.mapPut("altScreen", msgpack.Payload{ .bool = pane.terminal.screens.active_key == .alternate });
+
+    // Scrollback info
+    var scrollback_map = msgpack.Payload.mapPayload(allocator);
+    try scrollback_map.mapPut("totalRows", msgpack.Payload{ .uint = scrollbar.total });
+    try scrollback_map.mapPut("viewportTop", msgpack.Payload{ .uint = scrollbar.offset });
+    try payload.mapPut("scrollback", scrollback_map);
+
+    // Raw binary cell data (no base64!)
+    try payload.mapPut("cells", try msgpack.Payload.binToPayload(cells_and_styles.cell_bytes, allocator));
+    try payload.mapPut("styles", try msgpack.Payload.binToPayload(cells_and_styles.style_bytes, allocator));
+
+    // Encode to msgpack bytes
+    // Use a buffer large enough for typical terminal snapshots
+    // 80x24 terminal = 1920 cells * 8 bytes = ~15KB cells + styles + overhead
+    const max_size = 256 * 1024; // 256KB should be plenty
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = msgpack.compat.fixedBufferStream(buffer);
+    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+
+    const BufferType = msgpack.compat.BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    // Free payload after encoding
+    payload.free(allocator);
+
+    // Return trimmed buffer with actual content
+    const encoded_len = write_stream.pos;
+    const result = try allocator.realloc(buffer, encoded_len);
+    return result;
+}
+
+/// Generate a binary msgpack pong message
+pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("pong", allocator));
+
+    const max_size = 64;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = msgpack.compat.fixedBufferStream(buffer);
+    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+
+    const BufferType = msgpack.compat.BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack pong: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    const encoded_len = write_stream.pos;
+    const result = try allocator.realloc(buffer, encoded_len);
+    return result;
 }
 
 test "generate empty snapshot" {
