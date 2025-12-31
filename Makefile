@@ -1,6 +1,10 @@
-.PHONY: all build clean dev server client fmt themes
+.PHONY: all build clean dev server client fmt themes release
 
 all: build
+
+# =============================================================================
+# Debug builds (default)
+# =============================================================================
 
 build: server client
 
@@ -13,6 +17,31 @@ server:
 client: themes
 	cd client && bun run build
 
+# =============================================================================
+# Release/Production builds
+# =============================================================================
+
+release: release-server release-client
+	@echo "Release build complete: dist/"
+	@ls -lh dist/
+
+release-server: themes
+	@mkdir -p dist
+	cd server && zig build -Doptimize=ReleaseFast
+	cp server/zig-out/bin/dullahan dist/
+	@echo "Built dist/dullahan (server)"
+
+release-client: themes
+	@mkdir -p dist/client
+	cd client && NODE_ENV=production bun run build
+	cp -r client/dist/* dist/client/
+	cp client/index.html dist/client/
+	@echo "Built dist/client/ (web client)"
+
+# =============================================================================
+# Utilities
+# =============================================================================
+
 themes:
 	@if [ ! -d deps/themes/ghostty ]; then \
 		echo "Downloading Ghostty themes..."; \
@@ -22,8 +51,9 @@ themes:
 	bun scripts/generate-themes.ts
 
 clean:
-	cd server && zig build --clean || true
+	cd server && rm -rf zig-out .zig-cache
 	cd client && rm -rf dist
+	rm -rf dist
 
 fmt:
 	zig fmt server/src/
