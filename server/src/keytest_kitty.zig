@@ -162,16 +162,32 @@ fn parseAndPrint(fd: posix.fd_t, buf: []const u8) void {
     const pad = if (key_name.len < 12) 12 - key_name.len else 0;
     for (0..pad) |_| w.writeByte(' ') catch {};
 
-    // Modifiers
+    // Modifiers - Kitty sends (1 + modifier_bits), so subtract 1 first
     if (mods > 1) {
-        w.writeAll(" (") catch {};
-        if (mods & 0x01 != 0) w.writeAll("Shift+") catch {}; // bit 0 after subtracting 1
         const m = mods - 1;
-        if (m & 0x01 != 0) w.writeAll("Shift+") catch {};
-        if (m & 0x02 != 0) w.writeAll("Alt+") catch {};
-        if (m & 0x04 != 0) w.writeAll("Ctrl+") catch {};
-        if (m & 0x08 != 0) w.writeAll("Super+") catch {};
-        w.writeAll(")") catch {};
+        w.writeAll(" (") catch {};
+        var first = true;
+        if (m & 0x01 != 0) {
+            if (!first) w.writeByte('+') catch {};
+            w.writeAll("Shift") catch {};
+            first = false;
+        }
+        if (m & 0x02 != 0) {
+            if (!first) w.writeByte('+') catch {};
+            w.writeAll("Alt") catch {};
+            first = false;
+        }
+        if (m & 0x04 != 0) {
+            if (!first) w.writeByte('+') catch {};
+            w.writeAll("Ctrl") catch {};
+            first = false;
+        }
+        if (m & 0x08 != 0) {
+            if (!first) w.writeByte('+') catch {};
+            w.writeAll("Super") catch {};
+            first = false;
+        }
+        w.writeByte(')') catch {};
     }
 
     // Raw bytes
