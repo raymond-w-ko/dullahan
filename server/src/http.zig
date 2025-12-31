@@ -2,10 +2,11 @@
 //!
 //! Listens on a port and either:
 //! - Upgrades connections to WebSocket for terminal communication
-//! - Serves static files from a directory
+//! - Serves static files from a directory or embedded assets
 
 const std = @import("std");
 const websocket = @import("websocket.zig");
+const embedded_assets = @import("embedded_assets.zig");
 
 const log = std.log.scoped(.http);
 
@@ -199,8 +200,13 @@ pub const Server = struct {
         self.listener.deinit();
     }
 
-    /// Serve a static file
+    /// Serve a static file (from embedded assets or filesystem)
     fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) void {
+        // Try embedded assets first (for single-binary distribution)
+        if (self.serveEmbeddedFile(stream, url_path)) {
+            return;
+        }
+
         const static_dir = self.static_dir orelse {
             self.serveNotFound(stream);
             return;
@@ -282,6 +288,32 @@ pub const Server = struct {
             if (n == 0) break;
             _ = stream.write(buf[0..n]) catch return;
         }
+    }
+
+    /// Serve a file from embedded assets, returns true if served
+    fn serveEmbeddedFile(self: *Server, stream: std.net.Stream, url_path: []const u8) bool {
+        _ = self;
+
+        // Normalize path for lookup
+        const lookup_path = if (url_path.len == 0 or std.mem.eql(u8, url_path, "/"))
+            "/"
+        else
+            url_path;
+
+        const asset = embedded_assets.get(lookup_path) orelse return false;
+
+        log.debug("Serving embedded asset: {s} ({d} bytes, {s})", .{
+            lookup_path,
+            asset.content.len,
+            asset.mime_type,
+        });
+
+        sendResponse(stream, "200 OK", &.{
+            .{ "Content-Type", asset.mime_type },
+            .{ "Cache-Control", "public, max-age=31536000, immutable" },
+        }, asset.content) catch {};
+
+        return true;
     }
 
     fn serveNotFound(self: *Server, stream: std.net.Stream) void {

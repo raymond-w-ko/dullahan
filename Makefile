@@ -18,25 +18,41 @@ client: themes
 	cd client && bun run build
 
 # =============================================================================
-# Distribution build (production)
+# Distribution build (production, single binary with embedded client)
 # =============================================================================
 
-dist: dist-server dist-client
-	@echo "Distribution build complete: dist/"
-	@ls -lh dist/
+dist: dist-client-assets dist-server-embedded
+	@echo ""
+	@echo "Distribution build complete!"
+	@echo "Single binary with embedded client: dist/dullahan"
+	@ls -lh dist/dullahan
 
-dist-server: themes
-	@mkdir -p dist
+# Build client assets for embedding
+dist-client-assets: themes
+	@mkdir -p dist/client
+	cd client && NODE_ENV=production bun run build
+	cp -r client/dist/* dist/client/
+	bun scripts/generate-embedded-assets.ts
+	@echo "Client assets prepared for embedding"
+
+# Build server with embedded client assets
+dist-server-embedded:
 	cd server && zig build -Doptimize=ReleaseFast
+	@mkdir -p dist
 	cp server/zig-out/bin/dullahan dist/
-	@echo "Built dist/dullahan (server)"
+	git checkout server/src/embedded_assets.zig 2>/dev/null || true
+	@echo "Built dist/dullahan (server with embedded client)"
 
+# Separate client files (if needed for CDN/separate deployment)
 dist-client: themes
 	@mkdir -p dist/client
 	cd client && NODE_ENV=production bun run build
 	cp -r client/dist/* dist/client/
 	cp client/index.html dist/client/
-	@echo "Built dist/client/ (web client)"
+	cp client/src/palette.css dist/client/
+	cp client/src/dullahan.css dist/client/
+	cp client/src/themes.css dist/client/
+	@echo "Built dist/client/ (standalone web client)"
 
 # =============================================================================
 # Utilities
