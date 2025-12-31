@@ -27,8 +27,12 @@ const SHOW_CURSOR = "\x1b[?25h";
 // Kitty keyboard protocol
 // CSI > flags u - push mode with flags
 // flags: 1=disambiguate, 2=report event types, 4=report alternate keys, 8=report all keys, 16=report text
-const KITTY_ENABLE = "\x1b[>3u"; // flags 1+2 = disambiguate + report events
+// Using flags 1+2+8 = 11 to get all keys including arrows as CSI u sequences
+const KITTY_ENABLE = "\x1b[>11u"; // disambiguate + report events + report all keys
 const KITTY_DISABLE = "\x1b[<u";
+
+// Log file for debugging
+var log_file: ?std.fs.File = null;
 
 const KeyState = struct {
     codepoint: u21,
@@ -47,6 +51,27 @@ var escape_count: u8 = 0;
 var alloc: std.mem.Allocator = undefined;
 var owned_strings: std.ArrayListUnmanaged([]const u8) = .{};
 
+fn log(comptime fmt: []const u8, args: anytype) void {
+    if (log_file) |f| {
+        var buf: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+        _ = f.write(msg) catch {};
+        _ = f.write("\n") catch {};
+    }
+}
+
+fn logBytes(prefix: []const u8, bytes: []const u8) void {
+    if (log_file) |f| {
+        _ = f.write(prefix) catch {};
+        var buf: [8]u8 = undefined;
+        for (bytes) |b| {
+            const hex = std.fmt.bufPrint(&buf, " 0x{x:0>2}", .{b}) catch continue;
+            _ = f.write(hex) catch {};
+        }
+        _ = f.write("\n") catch {};
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -58,6 +83,13 @@ pub fn main() !void {
         for (owned_strings.items) |s| alloc.free(s);
         owned_strings.deinit(alloc);
     }
+
+    // Open log file
+    log_file = std.fs.cwd().createFile("/tmp/keytest-kitty.log", .{ .truncate = true }) catch null;
+    defer if (log_file) |f| f.close();
+    
+    log("=== Kitty Keyboard Tester started ===", .{});
+    logBytes("Kitty enable sequence:", KITTY_ENABLE);
 
     // Set terminal to raw mode
     const stdin_fd = posix.STDIN_FILENO;
@@ -96,6 +128,9 @@ pub fn main() !void {
         last_raw_len = @min(n, last_raw.len);
         @memcpy(last_raw[0..last_raw_len], buf[0..last_raw_len]);
 
+        // Log raw bytes
+        logBytes("Raw input:", buf[0..n]);
+
         // Parse Kitty protocol or legacy
         try parseInput(buf[0..n]);
 
@@ -109,28 +144,36 @@ pub fn main() !void {
 fn parseInput(buf: []const u8) !void {
     if (buf.len == 0) return;
 
-    // Check for CSI u sequence (Kitty protocol)
-    if (buf.len >= 4 and buf[0] == 0x1b and buf[1] == '[') {
-        // Find 'u' terminator
-        var end: usize = 2;
-        while (end < buf.len and buf[end] != 'u') : (end += 1) {}
+    // Check for CSI sequence
+    if (buf.len >= 3 and buf[0] == 0x1b and buf[1] == '[') {
+        const last_byte = buf[buf.len - 1];
         
-        if (end < buf.len and buf[end] == 'u') {
-            // Parse CSI params ; modifiers ; event-type u
-            const params = buf[2..end];
+        // CSI u sequence (Kitty protocol)
+        if (last_byte == 'u') {
+            const params = buf[2 .. buf.len - 1];
+            log("CSI u sequence, params: {s}", .{params});
             try parseKittySequence(params);
             return;
         }
         
-        // Check for legacy CSI sequences (arrows, etc.)
+        // CSI ~ sequence (legacy function keys, but Kitty sends these too)
+        if (last_byte == '~') {
+            const params = buf[2 .. buf.len - 1];
+            log("CSI ~ sequence, params: {s}", .{params});
+            try parseLegacyFunction(params);
+            return;
+        }
+        
+        // Legacy CSI sequences (arrows) - fallback if Kitty not fully enabled
         if (buf.len == 3) {
+            log("Legacy CSI sequence: {c}", .{buf[2]});
             const key_cp: ?u21 = switch (buf[2]) {
-                'A' => 0xF700, // Up (private use area for special keys)
-                'B' => 0xF701, // Down
-                'C' => 0xF702, // Right
-                'D' => 0xF703, // Left
-                'H' => 0xF704, // Home
-                'F' => 0xF705, // End
+                'A' => 57352, // Up - use Kitty codepoints for consistency
+                'B' => 57353, // Down
+                'C' => 57351, // Right
+                'D' => 57350, // Left
+                'H' => 57356, // Home
+                'F' => 57357, // End
                 else => null,
             };
             if (key_cp) |cp| {
@@ -147,6 +190,9 @@ fn parseInput(buf: []const u8) !void {
             }
             return;
         }
+        
+        // Other CSI sequences - log for debugging
+        log("Unknown CSI sequence, terminator: 0x{x:0>2}", .{last_byte});
     }
 
     // Single escape (legacy mode fallback)
@@ -190,6 +236,40 @@ fn parseInput(buf: []const u8) !void {
 
 const EventType = enum { press, repeat, release };
 
+fn parseLegacyFunction(params: []const u8) !void {
+    // Format: number ~ or number;modifiers ~
+    var num_end: usize = params.len;
+    for (params, 0..) |c, i| {
+        if (c == ';') {
+            num_end = i;
+            break;
+        }
+    }
+    
+    const num = std.fmt.parseInt(u8, params[0..num_end], 10) catch return;
+    
+    // Map to Kitty codepoints
+    const cp: u21 = switch (num) {
+        2 => 57348,  // Insert
+        3 => 57349,  // Delete
+        5 => 57354,  // PageUp
+        6 => 57355,  // PageDown
+        15 => 57368, // F5
+        17 => 57369, // F6
+        18 => 57370, // F7
+        19 => 57371, // F8
+        20 => 57372, // F9
+        21 => 57373, // F10
+        23 => 57374, // F11
+        24 => 57375, // F12
+        else => return,
+    };
+    
+    const name = try codepointToName(cp);
+    log("Legacy function key: {d} -> {s}", .{ num, name });
+    try recordKey(cp, name, .press);
+}
+
 fn parseKittySequence(params: []const u8) !void {
     // Kitty format: codepoint:shifted:base ; modifiers:event-type ; text u
     // Examples:
@@ -215,13 +295,18 @@ fn parseKittySequence(params: []const u8) !void {
         parts[part_idx] = params[start..];
     }
 
+    log("  parts[0]={s} parts[1]={s} parts[2]={s}", .{ parts[0], parts[1], parts[2] });
+
     // Parse codepoint (may have :shifted_key:base_key suffix)
     var cp_str = parts[0];
     if (std.mem.indexOfScalar(u8, cp_str, ':')) |colon_idx| {
         cp_str = cp_str[0..colon_idx];
     }
     
-    const codepoint = std.fmt.parseInt(u21, cp_str, 10) catch return;
+    const codepoint = std.fmt.parseInt(u21, cp_str, 10) catch {
+        log("  Failed to parse codepoint from: {s}", .{cp_str});
+        return;
+    };
     
     // Parse modifiers:event-type from parts[1]
     // Format: "modifiers" or "modifiers:event-type"
@@ -238,11 +323,13 @@ fn parseKittySequence(params: []const u8) !void {
                 3 => .release,
                 else => .press,
             };
+            log("  event_type from '{s}': {d}", .{ et_str, et });
         }
     }
 
     // Generate name from codepoint
     const name = try codepointToName(codepoint);
+    log("  codepoint={d} name={s} event={s}", .{ codepoint, name, @tagName(event_type) });
     try recordKey(codepoint, name, event_type);
 }
 
