@@ -7,6 +7,11 @@ import type { StyleTable } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
 
+export interface ScrollbackInfo {
+  totalRows: number;    // Total rows including scrollback
+  viewportTop: number;  // Current viewport offset from top
+}
+
 export interface TerminalSnapshot {
   cols: number;
   rows: number;
@@ -17,6 +22,7 @@ export interface TerminalSnapshot {
     style: "block" | "underline" | "bar";
   };
   altScreen: boolean;
+  scrollback: ScrollbackInfo;
   cells: Cell[]; // Decoded cell data
   styles: StyleTable; // Decoded style table
 }
@@ -31,6 +37,7 @@ interface RawSnapshot {
     style: "block" | "underline" | "bar";
   };
   altScreen: boolean;
+  scrollback: ScrollbackInfo;
   cells: string; // Base64 encoded
   styles: string; // Base64 encoded
 }
@@ -44,6 +51,7 @@ export type ClientMessage =
   | KeyMessage
   | TextMessage
   | { type: "resize"; cols: number; rows: number }
+  | { type: "scroll"; delta: number }  // Scroll viewport by delta rows (negative = up)
   | { type: "ping" };
 
 export class TerminalConnection {
@@ -98,7 +106,8 @@ export class TerminalConnection {
   private handleMessage(msg: ServerMessage): void {
     switch (msg.type) {
       case "snapshot":
-        console.log("Received snapshot:", msg.data.cols, "x", msg.data.rows);
+        console.log("Received snapshot:", msg.data.cols, "x", msg.data.rows, 
+          "scrollback:", msg.data.scrollback.totalRows, "top:", msg.data.scrollback.viewportTop);
         // Decode cells and styles from base64
         const cells = decodeCellsFromBase64(msg.data.cells);
         const styles = decodeStyleTableFromBase64(msg.data.styles);
@@ -107,6 +116,7 @@ export class TerminalConnection {
           rows: msg.data.rows,
           cursor: msg.data.cursor,
           altScreen: msg.data.altScreen,
+          scrollback: msg.data.scrollback,
           cells,
           styles,
         };
@@ -158,6 +168,14 @@ export class TerminalConnection {
 
   sendResize(cols: number, rows: number): void {
     this.send({ type: "resize", cols, rows });
+  }
+
+  /**
+   * Scroll the terminal viewport by delta rows.
+   * Negative values scroll up (toward history), positive scroll down.
+   */
+  sendScroll(delta: number): void {
+    this.send({ type: "scroll", delta });
   }
 
   sendPing(): void {

@@ -199,11 +199,39 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
     };
   }, [connection]);
 
+  // Handle wheel events for scrollback
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    if (!connection?.isConnected) return;
+    
+    // Convert wheel delta to rows (roughly 3 rows per scroll tick)
+    const delta = Math.sign(e.deltaY) * 3;
+    connection.sendScroll(delta);
+  }, [connection]);
+
+  // Attach wheel handler
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el) return;
+    
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);
 
+  // Show scrollback indicator if not at bottom
+  const isScrolledUp = snapshot.scrollback.viewportTop < 
+    snapshot.scrollback.totalRows - rows;
+
   return (
     <pre class="terminal" ref={terminalRef} tabIndex={0}>
+      {isScrolledUp && (
+        <div class="scrollback-indicator">
+          ↑ {snapshot.scrollback.totalRows - snapshot.scrollback.viewportTop - rows} lines above
+        </div>
+      )}
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
           {renderLine(runs, y, cursor, cursorStyle, cursorColor, cursorText, cursorBlink)}

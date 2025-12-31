@@ -24,12 +24,19 @@ const CursorInfo = struct {
     style: []const u8,
 };
 
+/// Scrollback info for client-side scrolling
+const ScrollbackInfo = struct {
+    totalRows: usize,      // Total rows including scrollback
+    viewportTop: usize,    // Current viewport offset from top
+};
+
 /// Snapshot data payload
 const SnapshotData = struct {
     cols: u16,
     rows: u16,
     cursor: CursorInfo,
     altScreen: bool,
+    scrollback: ScrollbackInfo,
     cells: []const u8, // base64 encoded
     styles: []const u8, // base64 encoded
 };
@@ -269,6 +276,10 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
         .bar => "bar",
     };
 
+    // Get scrollback info
+    const pages = &screen.pages;
+    const scrollbar = pages.scrollbar();
+
     // Build the message struct
     const message = SnapshotMessage{
         .data = .{
@@ -281,6 +292,10 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
                 .style = cursor_style_str,
             },
             .altScreen = pane.terminal.screens.active_key == .alternate,
+            .scrollback = .{
+                .totalRows = scrollbar.total,
+                .viewportTop = scrollbar.offset,
+            },
             .cells = cells_base64,
             .styles = styles_base64,
         },

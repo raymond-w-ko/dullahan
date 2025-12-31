@@ -254,6 +254,19 @@ pub const Pane = struct {
         self.version +%= 1;
     }
 
+    /// Scroll the viewport by delta rows (negative = up, positive = down)
+    pub fn scroll(self: *Pane, delta: i32) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.terminal.screens.active.scroll(.{ .delta_row = delta });
+
+        // Increment version to signal clients need update
+        self.version +%= 1;
+
+        log.debug("Scrolled by {d} rows", .{delta});
+    }
+
     /// Dump pane state in compact human-readable format
     pub fn dump(self: *Pane, writer: anytype) !void {
         const screen = self.terminal.screens.active;

@@ -43,6 +43,12 @@ const ResizeMessage = struct {
     rows: u16,
 };
 
+/// Scroll request from client
+const ScrollMessage = struct {
+    type: []const u8,
+    delta: i32,  // Negative = scroll up (toward history), positive = scroll down
+};
+
 /// Generic message to peek at type field
 const MessageType = struct {
     type: []const u8,
@@ -256,6 +262,18 @@ pub const WsServer = struct {
             // Resize pane (this increments pane.version)
             const pane = session.activePane() orelse return;
             try pane.resize(resize_msg.value.cols, resize_msg.value.rows);
+        } else if (std.mem.eql(u8, type_str, "scroll")) {
+            // Scroll request
+            const scroll_msg = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse scroll message: {any}", .{e});
+                return;
+            };
+            defer scroll_msg.deinit();
+
+            const pane = session.activePane() orelse return;
+            pane.scroll(scroll_msg.value.delta);
         } else if (std.mem.eql(u8, type_str, "ping")) {
             // Ping message - send pong
             try ws.sendText("{\"type\":\"pong\"}");
