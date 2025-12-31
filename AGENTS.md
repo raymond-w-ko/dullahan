@@ -89,6 +89,26 @@ The server includes an IPC system for runtime inspection. **Never run `dullahan 
 - Inspect runtime state: `dullahan status`  
 - Clean shutdown before rebuild: `dullahan quit`
 
+### Keyboard Testing Tools
+
+Standalone tools for debugging keyboard input (run in a real terminal like Ghostty):
+
+```bash
+./zig-out/bin/keytest-kitty   # Kitty keyboard protocol tester
+./zig-out/bin/keytest-bytes   # Byte coverage tester (256-byte grid)
+```
+
+**keytest-kitty** — Tests Kitty keyboard protocol with full event reporting:
+- Shows press (↓), repeat (⟳), release (↑) events
+- Displays modifiers and raw bytes
+- Logs to `/tmp/keytest-kitty.log`
+- Press Escape twice to exit
+
+**keytest-bytes** — Verifies all 256 bytes can be input:
+- Grid of 0x00-0xFF, lights up when byte received
+- Detects escape sequences (shows warning instead of lighting intermediate bytes)
+- Useful for testing raw terminal input handling
+
 ### Ports & Paths
 
 | Resource | Location | Purpose |
@@ -127,7 +147,9 @@ dullahan/
 │       ├── window.zig       # Window (contains panes)
 │       ├── pane.zig         # Pane (terminal + PTY)
 │       ├── terminal.zig     # ghostty-vt wrapper
-│       └── pty.zig          # PTY allocation (Linux/macOS)
+│       ├── pty.zig          # PTY allocation (Linux/macOS)
+│       ├── keytest_kitty.zig  # Kitty keyboard protocol tester
+│       └── keytest_bytes.zig  # Byte coverage tester
 │
 ├── client/
 │   ├── package.json
