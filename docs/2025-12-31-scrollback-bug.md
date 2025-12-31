@@ -1,7 +1,7 @@
 # Scrollback Implementation Bug
 
 ## Date
-2024-12-31
+2025-12-31
 
 ## Original Issue
 User reported that pressing Ctrl+L to clear the screen caused desync issues, especially after running `ls` multiple times. The terminal would "run out of space" and get confused.
