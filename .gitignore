@@ -36,3 +36,4 @@ Thumbs.db
 
 # Dependency source checkouts (for reference only)
 deps/
+dist/
