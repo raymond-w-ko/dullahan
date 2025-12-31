@@ -191,6 +191,15 @@ fn parseInput(buf: []const u8) !void {
             return;
         }
         
+        // Kitty-extended arrow keys: CSI 1 ; modifiers : event-type <A/B/C/D>
+        // Format: 1;1:1A = Up press, 1;1:3A = Up release
+        if (last_byte >= 'A' and last_byte <= 'D') {
+            const params = buf[2 .. buf.len - 1];
+            log("Kitty arrow sequence: {s} {c}", .{ params, last_byte });
+            try parseKittyArrow(params, last_byte);
+            return;
+        }
+        
         // Other CSI sequences - log for debugging
         log("Unknown CSI sequence, terminator: 0x{x:0>2}", .{last_byte});
     }
@@ -235,6 +244,49 @@ fn parseInput(buf: []const u8) !void {
 }
 
 const EventType = enum { press, repeat, release };
+
+fn parseKittyArrow(params: []const u8, arrow: u8) !void {
+    // Format: 1;modifiers:event-type
+    // Example: "1;1:1" = no modifiers, press
+    //          "1;1:3" = no modifiers, release
+    //          "1;5:1" = Ctrl, press
+    
+    const cp: u21 = switch (arrow) {
+        'A' => 57352, // Up
+        'B' => 57353, // Down
+        'C' => 57351, // Right
+        'D' => 57350, // Left
+        'H' => 57356, // Home
+        'F' => 57357, // End
+        else => return,
+    };
+    
+    const name: []const u8 = switch (arrow) {
+        'A' => "Up",
+        'B' => "Down",
+        'C' => "Right",
+        'D' => "Left",
+        'H' => "Home",
+        'F' => "End",
+        else => "?",
+    };
+    
+    // Parse event type from params (after last colon)
+    var event_type: EventType = .press;
+    if (std.mem.lastIndexOfScalar(u8, params, ':')) |colon_idx| {
+        const et_str = params[colon_idx + 1 ..];
+        const et = std.fmt.parseInt(u8, et_str, 10) catch 1;
+        event_type = switch (et) {
+            1 => .press,
+            2 => .repeat,
+            3 => .release,
+            else => .press,
+        };
+    }
+    
+    log("  arrow={c} codepoint={d} name={s} event={s}", .{ arrow, cp, name, @tagName(event_type) });
+    try recordKey(cp, name, event_type);
+}
 
 fn parseLegacyFunction(params: []const u8) !void {
     // Format: number ~ or number;modifiers ~
