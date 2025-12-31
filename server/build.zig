@@ -16,6 +16,12 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.addImport("ghostty-vt", ghostty_vt);
     }
 
+    // Add zig-msgpack dependency for binary serialization
+    if (b.lazyDependency("zig-msgpack", .{})) |msgpack_dep| {
+        const msgpack = msgpack_dep.module("msgpack");
+        dullahan_mod.addImport("msgpack", msgpack);
+    }
+
     // Executable
     const exe = b.addExecutable(.{
         .name = "dullahan",
