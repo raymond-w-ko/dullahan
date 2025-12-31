@@ -6,6 +6,9 @@
 //! Layout: 8 bytes per row, 32 rows
 //! Format: "XX:key" where XX is hex, key is hint
 //! Gray = not yet received, Blue = received
+//!
+//! Detects escape sequences (CSI u, etc.) and shows warning instead of
+//! lighting up intermediate bytes.
 
 const std = @import("std");
 const posix = std.posix;
@@ -13,6 +16,7 @@ const posix = std.posix;
 // ANSI codes
 const RESET = "\x1b[0m";
 const BLUE = "\x1b[34;1m";
+const YELLOW = "\x1b[33;1m";
 const DIM = "\x1b[2m";
 const CLEAR = "\x1b[2J\x1b[H";
 const HIDE_CURSOR = "\x1b[?25l";
@@ -22,6 +26,10 @@ const SHOW_CURSOR = "\x1b[?25h";
 var received: [256]bool = [_]bool{false} ** 256;
 var running = true;
 var total_received: u16 = 0;
+
+// Warning message for escape sequences
+var warning_buf: [80]u8 = [_]u8{' '} ** 80;
+var warning_len: usize = 0;
 
 // Key hints for each byte
 const key_hints = [256][]const u8{
@@ -84,8 +92,9 @@ pub fn main() !void {
     raw.iflag.BRKINT = false;  // Don't send SIGINT on break
     raw.iflag.INPCK = false;   // Disable parity checking
     raw.iflag.ISTRIP = false;  // Don't strip 8th bit
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    // Use timeout for escape sequence detection
+    raw.cc[@intFromEnum(posix.V.MIN)] = 0;
+    raw.cc[@intFromEnum(posix.V.TIME)] = 1; // 100ms timeout
     try posix.tcsetattr(stdin_fd, .NOW, raw);
     defer posix.tcsetattr(stdin_fd, .NOW, original) catch {};
 
@@ -95,25 +104,120 @@ pub fn main() !void {
     render(stdout_fd);
 
     var buf: [64]u8 = undefined;
+    var seq_buf: [64]u8 = undefined;
+    var seq_len: usize = 0;
+    
     while (running) {
         const n = posix.read(stdin_fd, &buf) catch break;
-        if (n == 0) break;
+        
+        if (n == 0) {
+            // Timeout - if we have a pending ESC, it's a real escape key
+            if (seq_len > 0 and seq_buf[0] == 0x1b) {
+                if (seq_len == 1) {
+                    // Just ESC by itself
+                    markReceived(0x1b);
+                    clearWarning();
+                }
+                // Otherwise it was an incomplete sequence, ignore
+                seq_len = 0;
+            }
+            continue;
+        }
 
-        // Mark each received byte
+        // Accumulate into sequence buffer
         for (buf[0..n]) |b| {
-            if (!received[b]) {
-                received[b] = true;
-                total_received += 1;
+            if (seq_len < seq_buf.len) {
+                seq_buf[seq_len] = b;
+                seq_len += 1;
             }
         }
 
-        // Quit on 'q' or after receiving most bytes
-        if (buf[0] == 'q' or buf[0] == 'Q') {
+        // Check if this is an escape sequence
+        if (seq_buf[0] == 0x1b and seq_len > 1) {
+            // CSI sequence?
+            if (seq_len >= 2 and seq_buf[1] == '[') {
+                // Check for terminator
+                const last = seq_buf[seq_len - 1];
+                if (isCSITerminator(last)) {
+                    // Complete CSI sequence - show warning
+                    setWarning(&seq_buf, seq_len);
+                    seq_len = 0;
+                    render(stdout_fd);
+                    continue;
+                }
+                // Incomplete CSI, wait for more
+                continue;
+            }
+            // SS3 sequence (ESC O ...)
+            if (seq_len >= 2 and seq_buf[1] == 'O') {
+                if (seq_len >= 3) {
+                    setWarning(&seq_buf, seq_len);
+                    seq_len = 0;
+                    render(stdout_fd);
+                    continue;
+                }
+                continue;
+            }
+            // Alt+key (ESC + printable)
+            if (seq_len == 2 and seq_buf[1] >= 0x20 and seq_buf[1] < 0x7f) {
+                setWarning(&seq_buf, seq_len);
+                seq_len = 0;
+                render(stdout_fd);
+                continue;
+            }
+        }
+
+        // Not an escape sequence - process as raw bytes
+        if (seq_buf[0] != 0x1b or seq_len == 1) {
+            for (seq_buf[0..seq_len]) |b| {
+                markReceived(b);
+            }
+            clearWarning();
+            seq_len = 0;
+        }
+
+        // Quit on 'q'
+        if (seq_len == 0 and buf[0] == 'q') {
             running = false;
         }
 
         render(stdout_fd);
     }
+}
+
+fn isCSITerminator(c: u8) bool {
+    // CSI terminators are 0x40-0x7E
+    return c >= 0x40 and c <= 0x7E;
+}
+
+fn markReceived(b: u8) void {
+    if (!received[b]) {
+        received[b] = true;
+        total_received += 1;
+    }
+}
+
+fn clearWarning() void {
+    warning_len = 0;
+}
+
+fn setWarning(seq: []const u8, len: usize) void {
+    var w = std.io.fixedBufferStream(&warning_buf);
+    const writer = w.writer();
+    
+    writer.writeAll("Escape sequence: ") catch {};
+    for (seq[0..len]) |b| {
+        if (b == 0x1b) {
+            writer.writeAll("ESC ") catch {};
+        } else if (b >= 0x20 and b < 0x7f) {
+            writer.writeByte(b) catch {};
+            writer.writeByte(' ') catch {};
+        } else {
+            std.fmt.format(writer, "0x{X:0>2} ", .{b}) catch {};
+        }
+    }
+    
+    warning_len = w.pos;
 }
 
 fn render(fd: posix.fd_t) void {
@@ -123,10 +227,17 @@ fn render(fd: posix.fd_t) void {
 
     w.writeAll(CLEAR) catch {};
     w.writeAll("Byte Coverage Tester") catch {};
-    std.fmt.format(w, " ({d}/256 received, press 'q' to quit)\n\n", .{total_received}) catch {};
+    std.fmt.format(w, " ({d}/256 received, press 'q' to quit)\n", .{total_received}) catch {};
+    
+    // Warning line (always present to prevent shifting)
+    if (warning_len > 0) {
+        w.writeAll(YELLOW) catch {};
+        w.writeAll(warning_buf[0..warning_len]) catch {};
+        w.writeAll(RESET) catch {};
+    }
+    w.writeAll("\n\n") catch {};
 
     // 8 bytes per row, 32 rows
-    // Format: "XX:kkk " = 7-8 chars, pad to 10 for alignment
     var byte: u16 = 0;
     while (byte < 256) : (byte += 1) {
         const b: u8 = @intCast(byte);
@@ -150,10 +261,7 @@ fn render(fd: posix.fd_t) void {
     }
 
     w.writeAll("\n") catch {};
-    
-    // Show last few bytes received
-    w.writeAll(DIM ++ "Note: ^X = Ctrl+X, Esc sequences count as multiple bytes\n" ++ RESET) catch {};
-    w.writeAll(DIM ++ "      0x80-0xFF typically need special input methods\n" ++ RESET) catch {};
+    w.writeAll(DIM ++ "Note: ^X = Ctrl+X, 0x80-0xFF need special input methods\n" ++ RESET) catch {};
 
     _ = posix.write(fd, fbs.getWritten()) catch {};
 }
