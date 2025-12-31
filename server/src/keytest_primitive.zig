@@ -116,6 +116,13 @@ fn parseKey(buf: []const u8) []const u8 {
     if (buf[0] == 0x1b) {
         if (buf.len >= 2 and buf[1] == '[') {
             // CSI sequence
+            
+            // Check for CSI u (Kitty protocol) - modern terminals send this
+            // Format: CSI codepoint ; modifiers u
+            if (buf[buf.len - 1] == 'u') {
+                return parseCSIu(buf[2 .. buf.len - 1]);
+            }
+            
             if (buf.len == 3) {
                 return switch (buf[2]) {
                     'A' => "Up",
@@ -196,6 +203,119 @@ fn parseKey(buf: []const u8) []const u8 {
     }
 
     return "???";
+}
+
+/// Parse CSI u sequence (Kitty protocol)
+/// Format: codepoint ; modifiers  (without CSI prefix and 'u' suffix)
+fn parseCSIu(params: []const u8) []const u8 {
+    // Split on semicolon
+    var codepoint_end: usize = params.len;
+    var modifiers: u8 = 1; // Default: no modifiers (1 = base)
+    
+    for (params, 0..) |c, i| {
+        if (c == ';') {
+            codepoint_end = i;
+            if (i + 1 < params.len) {
+                modifiers = std.fmt.parseInt(u8, params[i + 1 ..], 10) catch 1;
+            }
+            break;
+        }
+    }
+    
+    const codepoint = std.fmt.parseInt(u21, params[0..codepoint_end], 10) catch return "CSI-u?";
+    
+    // Build modifier prefix
+    const mod_prefix: []const u8 = switch (modifiers) {
+        1 => "",           // No modifiers
+        2 => "Shift+",
+        3 => "Alt+",
+        4 => "Shift+Alt+",
+        5 => "Ctrl+",
+        6 => "Ctrl+Shift+",
+        7 => "Ctrl+Alt+",
+        8 => "Ctrl+Shift+Alt+",
+        9 => "Super+",
+        else => "Mod+",
+    };
+    
+    // Get key name from codepoint
+    const key_name: []const u8 = switch (codepoint) {
+        // Special keys (Kitty functional key codepoints)
+        57344 => "Escape",
+        57345 => "Enter",
+        57346 => "Tab",
+        57347 => "Backspace",
+        57348 => "Insert",
+        57349 => "Delete",
+        57350 => "Left",
+        57351 => "Right",
+        57352 => "Up",
+        57353 => "Down",
+        57354 => "PageUp",
+        57355 => "PageDown",
+        57356 => "Home",
+        57357 => "End",
+        57358 => "CapsLock",
+        57359 => "ScrollLock",
+        57360 => "NumLock",
+        57361 => "PrintScreen",
+        57362 => "Pause",
+        57363 => "Menu",
+        57364 => "F1",
+        57365 => "F2",
+        57366 => "F3",
+        57367 => "F4",
+        57368 => "F5",
+        57369 => "F6",
+        57370 => "F7",
+        57371 => "F8",
+        57372 => "F9",
+        57373 => "F10",
+        57374 => "F11",
+        57375 => "F12",
+        // Standard ASCII
+        9 => "Tab",
+        13 => "Enter",
+        27 => "Escape",
+        32 => "Space",
+        127 => "Backspace",
+        // Printable ASCII with modifiers
+        else => blk: {
+            if (codepoint >= 'a' and codepoint <= 'z') {
+                // Return combined name for modified letters
+                if (mod_prefix.len > 0) {
+                    // Static buffer for combined names
+                    const names = [_][]const u8{
+                        "Ctrl+A", "Ctrl+B", "Ctrl+C", "Ctrl+D", "Ctrl+E", "Ctrl+F", "Ctrl+G",
+                        "Ctrl+H", "Ctrl+I", "Ctrl+J", "Ctrl+K", "Ctrl+L", "Ctrl+M", "Ctrl+N",
+                        "Ctrl+O", "Ctrl+P", "Ctrl+Q", "Ctrl+R", "Ctrl+S", "Ctrl+T", "Ctrl+U",
+                        "Ctrl+V", "Ctrl+W", "Ctrl+X", "Ctrl+Y", "Ctrl+Z",
+                    };
+                    if (modifiers == 5) { // Ctrl
+                        break :blk names[codepoint - 'a'];
+                    }
+                }
+                const s = @as(*const [1]u8, @ptrCast(&@as(u8, @intCast(codepoint))));
+                break :blk s;
+            }
+            if (codepoint >= 'A' and codepoint <= 'Z') {
+                const s = @as(*const [1]u8, @ptrCast(&@as(u8, @intCast(codepoint))));
+                break :blk s;
+            }
+            if (codepoint >= '!' and codepoint <= '~') {
+                const s = @as(*const [1]u8, @ptrCast(&@as(u8, @intCast(codepoint))));
+                break :blk s;
+            }
+            break :blk "???";
+        },
+    };
+    
+    // For simple cases without prefix, just return the key name
+    if (mod_prefix.len == 0) {
+        return key_name;
+    }
+    
+    return key_name;
 }
 
 fn recordKey(name: []const u8) !void {

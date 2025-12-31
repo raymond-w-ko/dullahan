@@ -53,6 +53,17 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(keytest_kitty);
 
+    // Byte coverage tester - shows all 256 bytes
+    const keytest_bytes = b.addExecutable(.{
+        .name = "keytest-bytes",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/keytest_bytes.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(keytest_bytes);
+
     // Run step
     const run_step = b.step("run", "Run the server");
     const run_cmd = b.addRunArtifact(exe);
