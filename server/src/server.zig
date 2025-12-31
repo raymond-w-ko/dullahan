@@ -72,7 +72,16 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var state = try ServerState.init(allocator);
     defer state.deinit();
 
-    var ipc_server = try ipc.Server.init(config.ipc);
+    var ipc_server = ipc.Server.init(config.ipc) catch |e| {
+        if (e == error.AddressInUse) {
+            log.err("IPC socket {s} is already in use. Another server may be running.", .{config.ipc.socket_path});
+            std.debug.print("Error: IPC socket already in use. Is another dullahan running?\n", .{});
+        } else {
+            log.err("Failed to start IPC server: {any}", .{e});
+            std.debug.print("Error: Failed to start IPC server: {any}\n", .{e});
+        }
+        return e;
+    };
     defer ipc_server.deinit();
 
     // Write PID file
@@ -80,7 +89,16 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     // Start WebSocket server on separate thread
     const static_dir = config.getStaticDir();
-    var ws_server = try WsServer.init(allocator, config.ws_port, static_dir);
+    var ws_server = WsServer.init(allocator, config.ws_port, static_dir) catch |e| {
+        if (e == error.AddressInUse) {
+            log.err("Port {d} is already in use. Another server may be running.", .{config.ws_port});
+            std.debug.print("Error: Port {d} is already in use. Is another dullahan or ttyd running?\n", .{config.ws_port});
+        } else {
+            log.err("Failed to start WebSocket server: {any}", .{e});
+            std.debug.print("Error: Failed to start WebSocket server: {any}\n", .{e});
+        }
+        return e;
+    };
     defer ws_server.deinit();
 
     const ws_thread = std.Thread.spawn(.{}, runWsServer, .{ &ws_server, &state.session }) catch |e| {

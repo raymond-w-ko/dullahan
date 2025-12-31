@@ -87,13 +87,37 @@ pub const Response = struct {
     }
 };
 
+/// Check if a server is already running by reading PID file
+fn isServerRunning(pid_path: []const u8) bool {
+    const file = std.fs.cwd().openFile(pid_path, .{}) catch return false;
+    defer file.close();
+
+    var buf: [20]u8 = undefined;
+    const n = file.readAll(&buf) catch return false;
+    const pid_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
+    const pid = std.fmt.parseInt(posix.pid_t, pid_str, 10) catch return false;
+
+    // Check if process exists (kill with signal 0)
+    posix.kill(pid, 0) catch |e| switch (e) {
+        error.ProcessNotFound => return false,
+        error.PermissionDenied => return true, // Process exists but we can't signal it
+        else => return false,
+    };
+    return true;
+}
+
 /// Server-side socket listener
 pub const Server = struct {
     socket: posix.socket_t,
     config: Config,
 
     pub fn init(config: Config) !Server {
-        // Remove existing socket file if present
+        // Check if another server is already running via PID file
+        if (isServerRunning(config.pid_path)) {
+            return error.AddressInUse;
+        }
+        
+        // Remove existing socket file if present (stale from crashed server)
         std.fs.cwd().deleteFile(config.socket_path) catch |e| switch (e) {
             error.FileNotFound => {},
             else => return e,
