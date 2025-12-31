@@ -149,16 +149,11 @@ fn parseInput(buf: []const u8) !void {
         }
     }
 
-    // Single escape - track for double-escape exit
+    // Single escape (legacy mode fallback)
     if (buf.len == 1 and buf[0] == 0x1b) {
-        escape_count += 1;
-        if (escape_count >= 2) {
-            running = false;
-        }
         try recordKey(0x1b, "Escape", .press);
         return;
     }
-    escape_count = 0;
 
     // Single printable character
     if (buf.len == 1) {
@@ -196,11 +191,14 @@ fn parseInput(buf: []const u8) !void {
 const EventType = enum { press, repeat, release };
 
 fn parseKittySequence(params: []const u8) !void {
-    // Format: codepoint ; modifiers ; event-type
-    // or: codepoint ; modifiers
-    // or: codepoint
+    // Kitty format: codepoint:shifted:base ; modifiers:event-type ; text u
+    // Examples:
+    //   "106;1:3" = codepoint 106, modifiers 1, event-type 3 (release)
+    //   "57352;1:1" = Up arrow, press
+    //   "97" = 'a' press (minimal)
     
-    var parts: [3][]const u8 = .{ params, &[_]u8{}, &[_]u8{} };
+    // Split on semicolons first
+    var parts: [3][]const u8 = .{ params, "", "" };
     var part_idx: usize = 0;
     var start: usize = 0;
     
@@ -219,22 +217,28 @@ fn parseKittySequence(params: []const u8) !void {
 
     // Parse codepoint (may have :shifted_key:base_key suffix)
     var cp_str = parts[0];
-    if (std.mem.indexOf(u8, cp_str, ":")) |colon_idx| {
+    if (std.mem.indexOfScalar(u8, cp_str, ':')) |colon_idx| {
         cp_str = cp_str[0..colon_idx];
     }
     
     const codepoint = std.fmt.parseInt(u21, cp_str, 10) catch return;
     
-    // Parse event type (default = press)
+    // Parse modifiers:event-type from parts[1]
+    // Format: "modifiers" or "modifiers:event-type"
     var event_type: EventType = .press;
-    if (parts[2].len > 0) {
-        const et = std.fmt.parseInt(u8, parts[2], 10) catch 1;
-        event_type = switch (et) {
-            1 => .press,
-            2 => .repeat,
-            3 => .release,
-            else => .press,
-        };
+    if (parts[1].len > 0) {
+        var mod_part = parts[1];
+        if (std.mem.indexOfScalar(u8, mod_part, ':')) |colon_idx| {
+            // Has event type after colon
+            const et_str = mod_part[colon_idx + 1 ..];
+            const et = std.fmt.parseInt(u8, et_str, 10) catch 1;
+            event_type = switch (et) {
+                1 => .press,
+                2 => .repeat,
+                3 => .release,
+                else => .press,
+            };
+        }
     }
 
     // Generate name from codepoint
@@ -392,6 +396,19 @@ fn codepointToName(cp: u21) ![]const u8 {
 
 fn recordKey(codepoint: u21, name: []const u8, event_type: EventType) !void {
     const now = std.time.milliTimestamp();
+    
+    // Track escape presses for double-escape exit
+    // Codepoint 27 (0x1b) or 57344 (Kitty functional Escape)
+    if ((codepoint == 0x1b or codepoint == 57344) and event_type == .press) {
+        escape_count += 1;
+        if (escape_count >= 2) {
+            running = false;
+            return;
+        }
+    } else if (event_type == .press) {
+        // Any other key press resets escape count
+        escape_count = 0;
+    }
     
     if (keys.get(codepoint)) |existing| {
         var state = existing;
