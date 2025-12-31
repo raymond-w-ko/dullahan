@@ -1,7 +1,9 @@
 // WebSocket connection to dullahan server
 // Uses binary msgpack for efficient data transmission
+// Messages are compressed with Snappy
 
 import { decode } from "@msgpack/msgpack";
+import SnappyJS from "snappyjs";
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell, CellContent, WideValue } from "../../../protocol/schema/cell";
 import { ColorTag, Underline } from "../../../protocol/schema/style";
@@ -105,8 +107,10 @@ export class TerminalConnection {
     this.ws.onmessage = (event) => {
       try {
         if (event.data instanceof ArrayBuffer) {
-          // Binary msgpack message
-          const msg = decode(event.data) as BinaryServerMessage;
+          // Decompress with Snappy, then decode msgpack
+          const compressed = new Uint8Array(event.data);
+          const decompressed = SnappyJS.uncompress(compressed);
+          const msg = decode(decompressed) as BinaryServerMessage;
           this.handleBinaryMessage(msg);
         } else {
           // Legacy JSON message (shouldn't happen with new server)

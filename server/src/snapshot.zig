@@ -2,9 +2,11 @@
 //!
 //! Converts terminal state to binary msgpack for transmission to clients.
 //! Cell data and styles are sent as raw binary bytes within msgpack.
+//! Output is compressed with Snappy for efficient transmission.
 
 const std = @import("std");
 const msgpack = @import("msgpack");
+const snappy = @import("snappy");
 const Pane = @import("pane.zig").Pane;
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
@@ -401,13 +403,29 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Free payload after encoding
     payload.free(allocator);
 
-    // Return trimmed buffer with actual content
-    const encoded_len = write_stream.pos;
-    const result = try allocator.realloc(buffer, encoded_len);
+    // Compress with Snappy
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
+    const compressed_buf = try allocator.alloc(u8, compressed_max);
+    errdefer allocator.free(compressed_buf);
+
+    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
+        log.err("Failed to compress snapshot: {any}", .{e});
+        allocator.free(buffer);
+        return error.SnappyCompressFailed;
+    };
+
+    // Free the uncompressed buffer
+    allocator.free(buffer);
+
+    // Return trimmed compressed buffer
+    const result = try allocator.realloc(compressed_buf, compressed_len);
     return result;
 }
 
-/// Generate a binary msgpack pong message
+/// Generate a binary msgpack pong message (compressed with Snappy)
 pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     defer payload.free(allocator);
@@ -436,8 +454,23 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
         return error.MsgpackEncodeFailed;
     };
 
-    const encoded_len = write_stream.pos;
-    const result = try allocator.realloc(buffer, encoded_len);
+    // Compress with Snappy
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
+    const compressed_buf = try allocator.alloc(u8, compressed_max);
+    errdefer allocator.free(compressed_buf);
+
+    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
+        log.err("Failed to compress pong: {any}", .{e});
+        allocator.free(buffer);
+        return error.SnappyCompressFailed;
+    };
+
+    allocator.free(buffer);
+
+    const result = try allocator.realloc(compressed_buf, compressed_len);
     return result;
 }
 
