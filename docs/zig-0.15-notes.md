@@ -209,6 +209,32 @@ const MyStruct = struct {
 };
 ```
 
+### HashMap: Same Pattern Applies
+
+`std.HashMap`, `std.StringHashMap`, and `std.AutoHashMap` follow the same pattern:
+
+```zig
+// ❌ Old (0.14)
+var map = std.StringHashMap(Value).init(allocator);
+try map.put("key", value);
+map.deinit();
+
+// ✅ New (0.15) — use Unmanaged variants
+var map: std.StringHashMapUnmanaged(Value) = .{};
+defer map.deinit(allocator);
+try map.put(allocator, "key", value);
+
+// Also for AutoHashMap
+var auto_map: std.AutoHashMapUnmanaged(u32, Value) = .{};
+defer auto_map.deinit(allocator);
+try auto_map.put(allocator, 123, value);
+```
+
+Key differences:
+- Initialize with `.{}` (empty struct literal) not `.init(allocator)`
+- Pass `allocator` to `put()`, `get()` (if needed), `deinit()`
+- `get()` doesn't need allocator, but `put()`, `remove()`, `deinit()` do
+
 ### Writer/Reader API Rewrite
 
 Major changes to I/O types to reduce generic code bloat:
@@ -300,7 +326,10 @@ This allows:
 | `usingnamespace` | Supported | Removed |
 | `async`/`await` | Keywords | Removed (coming back as stdlib) |
 | ArrayList.append | `list.append(item)` | `list.append(allocator, item)` |
+| HashMap.put | `map.put(k, v)` | `map.put(allocator, k, v)` |
 | Writer/Reader | `std.io.Writer` | `std.Io.Writer` |
+| std.io.getStdIn() | Returns File | Removed (use posix.STDIN_FILENO) |
+| File.writer() | No args | Requires buffer argument |
 | BoundedArray | `std.BoundedArray` | Removed |
 | process.Child.term | `.Exited` field | Tagged union |
 
@@ -404,6 +433,24 @@ Key points:
 
 ## File I/O Changes
 
+### std.io.getStdIn() / getStdOut() Removed
+
+These convenience functions no longer exist. Use POSIX file descriptors directly:
+
+```zig
+// ❌ Old
+const stdin = std.io.getStdIn();
+const stdout = std.io.getStdOut().writer();
+const n = try stdin.read(&buf);
+try stdout.writeAll("hello\n");
+
+// ✅ New — use posix file descriptors
+const stdin_fd = std.posix.STDIN_FILENO;
+const stdout_fd = std.posix.STDOUT_FILENO;
+const n = try std.posix.read(stdin_fd, &buf);
+_ = try std.posix.write(stdout_fd, "hello\n");
+```
+
 ### File.writer() Requires Buffer
 
 ```zig
@@ -423,6 +470,31 @@ const writer = out.writer(allocator);
 try writer.print("hello {s}\n", .{name});
 try file.writeAll(out.items);
 ```
+
+### Pattern: Building Output with fixedBufferStream
+
+For simple programs that build output strings, use `fixedBufferStream`:
+
+```zig
+fn render(fd: std.posix.fd_t) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    // Build output using the writer
+    w.writeAll("Header\n") catch {};
+    std.fmt.format(w, "Value: 0x{x:0>2}\n", .{value}) catch {};
+    w.writeAll("Footer\n") catch {};
+
+    // Write all at once
+    _ = std.posix.write(fd, fbs.getWritten()) catch {};
+}
+```
+
+This pattern:
+- Avoids multiple syscalls (single write)
+- No allocator needed
+- Works well for terminal output, status displays, etc.
 
 ---
 
