@@ -65,10 +65,13 @@ pub fn main() !void {
     const original_termios = try posix.tcgetattr(stdin_fd);
     var raw = original_termios;
 
-    // Disable canonical mode and echo
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.lflag.ISIG = false; // Disable Ctrl+C signal
+    // Set raw mode - disable ALL special character handling
+    raw.lflag.ICANON = false;  // Disable line buffering
+    raw.lflag.ECHO = false;    // Disable echo
+    raw.lflag.ISIG = false;    // Disable Ctrl+C, Ctrl+Z, Ctrl+\ signals
+    raw.lflag.IEXTEN = false;  // Disable Ctrl+V, Ctrl+O (DISCARD)
+    raw.iflag.IXON = false;    // Disable Ctrl+S/Ctrl+Q flow control
+    raw.iflag.ICRNL = false;   // Don't translate CR to NL
     raw.cc[@intFromEnum(posix.V.MIN)] = 1;
     raw.cc[@intFromEnum(posix.V.TIME)] = 0;
 

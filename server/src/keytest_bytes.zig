@@ -72,14 +72,18 @@ pub fn main() !void {
     const stdin_fd = posix.STDIN_FILENO;
     const stdout_fd = posix.STDOUT_FILENO;
 
-    // Set raw mode
+    // Set raw mode - disable ALL special character handling
     const original = try posix.tcgetattr(stdin_fd);
     var raw = original;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.lflag.ISIG = false;
-    raw.iflag.IXON = false; // Disable Ctrl+S/Ctrl+Q flow control
-    raw.iflag.ICRNL = false; // Don't translate CR to NL
+    raw.lflag.ICANON = false;  // Disable line buffering
+    raw.lflag.ECHO = false;    // Disable echo
+    raw.lflag.ISIG = false;    // Disable Ctrl+C, Ctrl+Z, Ctrl+\ signals
+    raw.lflag.IEXTEN = false;  // Disable Ctrl+V, Ctrl+O (DISCARD)
+    raw.iflag.IXON = false;    // Disable Ctrl+S/Ctrl+Q flow control
+    raw.iflag.ICRNL = false;   // Don't translate CR to NL
+    raw.iflag.BRKINT = false;  // Don't send SIGINT on break
+    raw.iflag.INPCK = false;   // Disable parity checking
+    raw.iflag.ISTRIP = false;  // Don't strip 8th bit
     raw.cc[@intFromEnum(posix.V.MIN)] = 1;
     raw.cc[@intFromEnum(posix.V.TIME)] = 0;
     try posix.tcsetattr(stdin_fd, .NOW, raw);
