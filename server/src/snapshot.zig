@@ -12,6 +12,40 @@ const point = ghostty.point;
 
 const log = std.log.scoped(.snapshot);
 
+// ============================================================================
+// JSON Message Types
+// ============================================================================
+
+/// Cursor info for snapshot
+const CursorInfo = struct {
+    x: usize,
+    y: usize,
+    visible: bool,
+    style: []const u8,
+};
+
+/// Snapshot data payload
+const SnapshotData = struct {
+    cols: u16,
+    rows: u16,
+    cursor: CursorInfo,
+    altScreen: bool,
+    cells: []const u8, // base64 encoded
+    styles: []const u8, // base64 encoded
+};
+
+/// Snapshot message wrapper
+const SnapshotMessage = struct {
+    type: []const u8 = "snapshot",
+    data: SnapshotData,
+};
+
+/// Output message for incremental updates
+const OutputMessage = struct {
+    type: []const u8 = "output",
+    data: []const u8,
+};
+
 /// Base64 encoding table
 const base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -214,10 +248,6 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Lock pane to prevent concurrent modification during snapshot
     pane.lock();
     defer pane.unlock();
-    
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
 
     const screen = pane.terminal.screens.active;
     const cursor = screen.cursor;
@@ -232,74 +262,42 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const styles_base64 = try base64Encode(allocator, cells_and_styles.style_bytes);
     defer allocator.free(styles_base64);
 
-    // Start JSON object
-    try writer.writeAll("{\"type\":\"snapshot\",\"data\":{");
-
-    // Dimensions
-    try writer.print("\"cols\":{d},\"rows\":{d},", .{ pane.cols, pane.rows });
-
-    // Cursor
-    const cursor_visible = pane.terminal.modes.get(.cursor_visible);
-    try writer.writeAll("\"cursor\":{");
-    try writer.print("\"x\":{d},\"y\":{d},", .{ cursor.x, cursor.y });
-    try writer.print("\"visible\":{s},", .{if (cursor_visible) "true" else "false"});
-
-    const style_str = switch (cursor.cursor_style) {
+    // Build cursor style string
+    const cursor_style_str = switch (cursor.cursor_style) {
         .block, .block_hollow => "block",
         .underline => "underline",
         .bar => "bar",
     };
-    try writer.print("\"style\":\"{s}\"", .{style_str});
-    try writer.writeAll("},");
 
-    // Alt screen
-    const is_alt = pane.terminal.screens.active_key == .alternate;
-    try writer.print("\"altScreen\":{s},", .{if (is_alt) "true" else "false"});
+    // Build the message struct
+    const message = SnapshotMessage{
+        .data = .{
+            .cols = pane.cols,
+            .rows = pane.rows,
+            .cursor = .{
+                .x = cursor.x,
+                .y = cursor.y,
+                .visible = pane.terminal.modes.get(.cursor_visible),
+                .style = cursor_style_str,
+            },
+            .altScreen = pane.terminal.screens.active_key == .alternate,
+            .cells = cells_base64,
+            .styles = styles_base64,
+        },
+    };
 
-    // Raw cell data (base64 encoded)
-    try writer.writeAll("\"cells\":\"");
-    try writer.writeAll(cells_base64);
-    try writer.writeAll("\",");
-
-    // Style table (base64 encoded)
-    try writer.writeAll("\"styles\":\"");
-    try writer.writeAll(styles_base64);
-    try writer.writeAll("\"");
-
-    try writer.writeAll("}}");
-
-    return buf.toOwnedSlice(allocator);
+    // Serialize to JSON using std.json
+    return std.json.Stringify.valueAlloc(allocator, message, .{});
 }
 
 /// Generate a simple text output message (for incremental updates)
 pub fn generateOutputMessage(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    errdefer buf.deinit(allocator);
-    const writer = buf.writer(allocator);
+    const message = OutputMessage{
+        .data = data,
+    };
 
-    try writer.writeAll("{\"type\":\"output\",\"data\":\"");
-
-    // Escape the data for JSON
-    for (data) |c| {
-        switch (c) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => {
-                if (c < 0x20) {
-                    try writer.print("\\u00{x:0>2}", .{c});
-                } else {
-                    try writer.writeByte(c);
-                }
-            },
-        }
-    }
-
-    try writer.writeAll("\"}");
-
-    return buf.toOwnedSlice(allocator);
+    // Serialize to JSON using std.json
+    return std.json.Stringify.valueAlloc(allocator, message, .{});
 }
 
 test "generate empty snapshot" {
