@@ -112,10 +112,11 @@ fn parseAndPrint(fd: posix.fd_t, buf: []const u8) void {
             };
         }
     } else if (buf.len == 1) {
-        // Single byte
+        // Single byte (legacy mode fallback)
         const c = buf[0];
         if (c == 0x1b) {
             key_name = "Escape";
+            // Note: escape_count handled in parseCSIu for Kitty mode
             escape_count += 1;
             if (escape_count >= 2) running = false;
         } else if (c == 0x0d) {
@@ -132,14 +133,7 @@ fn parseAndPrint(fd: posix.fd_t, buf: []const u8) void {
         }
     }
 
-    // Reset escape count on non-escape
-    if (buf.len != 1 or buf[0] != 0x1b) {
-        if (!(buf.len >= 4 and buf[0] == 0x1b and buf[1] == '[' and
-            (std.mem.startsWith(u8, buf[2..], "27;") or std.mem.startsWith(u8, buf[2..], "27u"))))
-        {
-            escape_count = 0;
-        }
-    }
+    // Note: escape_count reset is handled in parseCSIu when a non-escape key is pressed
 
     // Event arrow
     arrow = switch (event_type) {
@@ -228,6 +222,17 @@ fn parseCSIu(params: []const u8, cp: *u21, mods: *u8, event: *u8) void {
     // Parse mods:event
     if (semi_idx < params.len) {
         parseModsEvent(params[semi_idx + 1 ..], mods, event);
+    }
+    
+    // Track Escape presses for double-escape exit
+    // Codepoint 27 = Escape
+    if (cp.* == 27 and event.* == 1) { // press event
+        escape_count += 1;
+        if (escape_count >= 2) {
+            running = false;
+        }
+    } else if (event.* == 1) { // any other key press resets
+        escape_count = 0;
     }
 }
 
