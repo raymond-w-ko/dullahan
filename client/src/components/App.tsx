@@ -24,10 +24,23 @@ export function App() {
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
   const [calculatedDimensions, setCalculatedDimensions] = useState({ cols: 80, rows: 24 });
   const connectionRef = useRef<TerminalConnection | null>(null);
+  const resizeTimeoutRef = useRef<number | null>(null);
   
   const handleDimensionsChange = useCallback((cols: number, rows: number) => {
     setCalculatedDimensions({ cols, rows });
-    // TODO(du-9yo): Send resize to server when connection supports it
+    
+    // Debounce resize messages to avoid flooding during drag resize
+    if (resizeTimeoutRef.current) {
+      clearTimeout(resizeTimeoutRef.current);
+    }
+    resizeTimeoutRef.current = window.setTimeout(() => {
+      const conn = connectionRef.current;
+      if (conn?.isConnected) {
+        console.log(`Sending resize: ${cols}x${rows}`);
+        conn.sendResize(cols, rows);
+      }
+      resizeTimeoutRef.current = null;
+    }, 100); // 100ms debounce
   }, []);
 
   // Apply config on mount
@@ -77,6 +90,10 @@ export function App() {
 
     return () => {
       conn.disconnect();
+      // Clean up resize debounce timer
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
     };
   }, []);
 
