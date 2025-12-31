@@ -2,6 +2,8 @@ import { h } from "preact";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions";
 import { TerminalConnection } from "../terminal/connection";
+import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
+import { IMEHandler, createIMEHandler } from "../terminal/ime";
 import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
 import { SettingsModal } from "./SettingsModal";
@@ -118,6 +120,7 @@ export function App() {
                 cursorText={cursorText}
                 cursorBlink={cursorBlink}
                 onDimensionsChange={handleDimensionsChange}
+                connection={connectionRef.current}
               />
             ) : (
               <div class="terminal terminal--empty">
@@ -149,11 +152,14 @@ interface TerminalViewProps {
   cursorText: string;
   cursorBlink: '' | 'true' | 'false';
   onDimensionsChange?: (cols: number, rows: number) => void;
+  connection: TerminalConnection | null;
 }
 
-function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange, connection }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
   const terminalRef = useRef<HTMLPreElement>(null);
+  const keyboardRef = useRef<KeyboardHandler | null>(null);
+  const imeRef = useRef<IMEHandler | null>(null);
   const dimensions = useTerminalDimensions(terminalRef);
 
   // Report dimension changes
@@ -163,11 +169,41 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
     }
   }, [dimensions.cols, dimensions.rows, onDimensionsChange]);
 
+  // Setup keyboard handler
+  useEffect(() => {
+    if (!terminalRef.current) return;
+
+    const keyboard = createKeyboardHandler();
+    const ime = createIMEHandler();
+    keyboardRef.current = keyboard;
+    imeRef.current = ime;
+
+    keyboard.attach(terminalRef.current, (msg) => {
+      if (connection?.isConnected) {
+        connection.sendKey(msg);
+      }
+    });
+
+    ime.setCallback((msg) => {
+      if (connection?.isConnected) {
+        connection.sendText(msg);
+      }
+    });
+
+    // Auto-focus terminal on mount
+    keyboard.focus();
+
+    return () => {
+      keyboard.detach();
+      ime.clearCallback();
+    };
+  }, [connection]);
+
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);
 
   return (
-    <pre class="terminal" ref={terminalRef}>
+    <pre class="terminal" ref={terminalRef} tabIndex={0}>
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
           {renderLine(runs, y, cursor, cursorStyle, cursorColor, cursorText, cursorBlink)}

@@ -4,6 +4,8 @@ import { decodeCellsFromBase64, cellToChar } from "../../../protocol/schema/cell
 import { decodeStyleTableFromBase64 } from "../../../protocol/schema/style";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { StyleTable } from "../../../protocol/schema/style";
+import type { KeyMessage } from "./keyboard";
+import type { TextMessage } from "./ime";
 
 export interface TerminalSnapshot {
   cols: number;
@@ -39,7 +41,8 @@ export type ServerMessage =
   | { type: "pong" };
 
 export type ClientMessage =
-  | { type: "input"; data: string }
+  | KeyMessage
+  | TextMessage
   | { type: "resize"; cols: number; rows: number }
   | { type: "ping" };
 
@@ -139,8 +142,18 @@ export class TerminalConnection {
     }
   }
 
-  sendInput(data: string): void {
-    this.send({ type: "input", data });
+  /**
+   * Send keyboard event (full fidelity for Kitty protocol support)
+   */
+  sendKey(message: KeyMessage): void {
+    this.send(message);
+  }
+
+  /**
+   * Send composed text (IME input)
+   */
+  sendText(message: TextMessage): void {
+    this.send(message);
   }
 
   sendResize(cols: number, rows: number): void {
