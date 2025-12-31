@@ -1,4 +1,4 @@
-.PHONY: all build clean dev server client fmt themes release
+.PHONY: all build clean dev server client fmt themes dist
 
 all: build
 
@@ -18,20 +18,20 @@ client: themes
 	cd client && bun run build
 
 # =============================================================================
-# Release/Production builds
+# Distribution build (production)
 # =============================================================================
 
-release: release-server release-client
-	@echo "Release build complete: dist/"
+dist: dist-server dist-client
+	@echo "Distribution build complete: dist/"
 	@ls -lh dist/
 
-release-server: themes
+dist-server: themes
 	@mkdir -p dist
 	cd server && zig build -Doptimize=ReleaseFast
 	cp server/zig-out/bin/dullahan dist/
 	@echo "Built dist/dullahan (server)"
 
-release-client: themes
+dist-client: themes
 	@mkdir -p dist/client
 	cd client && NODE_ENV=production bun run build
 	cp -r client/dist/* dist/client/
