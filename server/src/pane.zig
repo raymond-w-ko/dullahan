@@ -142,6 +142,10 @@ pub const Pane = struct {
     /// Feed raw bytes into the terminal (e.g., from process stdout)
     /// This processes VT escape sequences including colors, cursor movement, etc.
     pub fn feed(self: *Pane, data: []const u8) !void {
+        // Check for DA1 request (CSI c or CSI 0 c) and respond
+        // ghostty-vt's readonly handler ignores device_attributes, so we handle it here
+        self.handleTerminalQueries(data);
+        
         // Create a VT stream to process the input
         // vtStream() handles ANSI escape sequences properly
         var stream = self.terminal.vtStream();
@@ -150,6 +154,62 @@ pub const Pane = struct {
 
         // Increment version to signal clients need update
         self.version +%= 1;
+    }
+    
+    /// Handle terminal queries that require responses (DA1, etc.)
+    /// These are sent by shells/apps to detect terminal capabilities
+    fn handleTerminalQueries(self: *Pane, data: []const u8) void {
+        // Look for DA1: ESC [ c or ESC [ 0 c
+        // DA1 = Primary Device Attributes
+        var i: usize = 0;
+        while (i < data.len) : (i += 1) {
+            if (data[i] == 0x1b and i + 2 < data.len) {
+                if (data[i + 1] == '[') {
+                    // CSI sequence
+                    if (data[i + 2] == 'c') {
+                        // ESC [ c - DA1 request
+                        self.sendDA1Response();
+                        i += 2;
+                    } else if (i + 3 < data.len and data[i + 2] == '0' and data[i + 3] == 'c') {
+                        // ESC [ 0 c - DA1 request (explicit)
+                        self.sendDA1Response();
+                        i += 3;
+                    } else if (data[i + 2] == '>' and i + 3 < data.len and data[i + 3] == 'c') {
+                        // ESC [ > c - DA2 (Secondary Device Attributes)
+                        self.sendDA2Response();
+                        i += 3;
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Send Primary Device Attributes response
+    /// Response format: CSI ? <params> c
+    /// We claim VT220 with color support (like Ghostty)
+    fn sendDA1Response(self: *Pane) void {
+        // Response: ESC [ ? 62 ; 22 c
+        // 62 = VT220 (Level 2)
+        // 22 = ANSI color
+        const response = "\x1b[?62;22c";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send DA1 response: {any}", .{e});
+        };
+        log.debug("Sent DA1 response", .{});
+    }
+    
+    /// Send Secondary Device Attributes response  
+    /// Response format: CSI > <params> c
+    fn sendDA2Response(self: *Pane) void {
+        // Response: ESC [ > 1 ; 10 ; 0 c
+        // 1 = VT220
+        // 10 = firmware version (arbitrary)
+        // 0 = ROM cartridge (none)
+        const response = "\x1b[>1;10;0c";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send DA2 response: {any}", .{e});
+        };
+        log.debug("Sent DA2 response", .{});
     }
 
     /// Get a plain string representation of the terminal contents

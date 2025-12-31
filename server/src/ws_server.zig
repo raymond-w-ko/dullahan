@@ -160,20 +160,32 @@ pub const WsServer = struct {
         // Simple JSON parsing - look for "type" field
         // Format: {"type":"...", ...}
 
-        if (std.mem.indexOf(u8, data, "\"type\":\"input\"")) |_| {
-            // Input message - extract data field and unescape
-            if (extractJsonString(data, "\"data\":\"")) |input_data| {
-                log.debug("Received input: {d} bytes", .{input_data.len});
+        if (std.mem.indexOf(u8, data, "\"type\":\"key\"")) |_| {
+            // Keyboard event - convert to PTY input
+            // Full fidelity preserved for future Kitty keyboard protocol support
+            const pane = session.activePane() orelse return;
+            
+            var output_buf: [32]u8 = undefined;
+            const output = keyEventToBytes(data, &output_buf);
+            
+            if (output.len > 0) {
+                pane.writeInput(output) catch |e| {
+                    log.err("Failed to write key to PTY: {any}", .{e});
+                };
+            }
+        } else if (std.mem.indexOf(u8, data, "\"type\":\"text\"")) |_| {
+            // IME composed text - send UTF-8 directly
+            if (extractJsonString(data, "\"data\":\"")) |text_data| {
+                log.debug("Received text: {d} bytes", .{text_data.len});
 
-                // Write input to PTY (child's stdin)
                 const pane = session.activePane() orelse return;
                 
-                // Unescape JSON string (handle \r, \n, etc.)
-                var unescaped: [256]u8 = undefined;
-                const unescaped_len = unescapeJson(input_data, &unescaped);
+                // Unescape JSON string
+                var unescaped: [1024]u8 = undefined;
+                const unescaped_len = unescapeJson(text_data, &unescaped);
                 
                 pane.writeInput(unescaped[0..unescaped_len]) catch |e| {
-                    log.err("Failed to write to PTY: {any}", .{e});
+                    log.err("Failed to write text to PTY: {any}", .{e});
                 };
             }
         } else if (std.mem.indexOf(u8, data, "\"type\":\"resize\"")) |_| {
@@ -194,6 +206,233 @@ pub const WsServer = struct {
         }
     }
 };
+
+/// Convert a keyboard event JSON to PTY byte sequence
+/// Returns slice of output buffer with bytes to send
+/// 
+/// Note: This preserves full event data for future Kitty keyboard protocol support.
+/// Currently converts to legacy/VT sequences for shell compatibility.
+fn keyEventToBytes(json: []const u8, output: []u8) []u8 {
+    // Only process keydown events
+    if (std.mem.indexOf(u8, json, "\"state\":\"down\"") == null) {
+        return output[0..0];
+    }
+    
+    // Extract modifiers
+    const ctrl = std.mem.indexOf(u8, json, "\"ctrl\":true") != null;
+    const alt = std.mem.indexOf(u8, json, "\"alt\":true") != null;
+    const shift = std.mem.indexOf(u8, json, "\"shift\":true") != null;
+    
+    // Extract key value
+    const key = extractJsonString(json, "\"key\":\"") orelse return output[0..0];
+    
+    // Handle special keys first
+    if (key.len == 1) {
+        const c = key[0];
+        
+        // Ctrl + letter -> control character
+        if (ctrl and c >= 'a' and c <= 'z') {
+            output[0] = c - 'a' + 1; // Ctrl+A = 0x01, Ctrl+Z = 0x1A
+            return output[0..1];
+        }
+        if (ctrl and c >= 'A' and c <= 'Z') {
+            output[0] = c - 'A' + 1;
+            return output[0..1];
+        }
+        
+        // Ctrl + special characters
+        if (ctrl) {
+            const ctrl_char: ?u8 = switch (c) {
+                '@' => 0x00,
+                '[' => 0x1b, // Escape
+                '\\' => 0x1c,
+                ']' => 0x1d,
+                '^' => 0x1e,
+                '_' => 0x1f,
+                '?' => 0x7f, // Delete
+                else => null,
+            };
+            if (ctrl_char) |cc| {
+                output[0] = cc;
+                return output[0..1];
+            }
+        }
+        
+        // Alt + character -> ESC + character
+        if (alt) {
+            output[0] = 0x1b;
+            output[1] = c;
+            return output[0..2];
+        }
+        
+        // Regular character - encode as UTF-8 (already is for ASCII)
+        output[0] = c;
+        return output[0..1];
+    }
+    
+    // Multi-character key names
+    if (std.mem.eql(u8, key, "Enter")) {
+        output[0] = '\r';
+        return output[0..1];
+    }
+    if (std.mem.eql(u8, key, "Backspace")) {
+        output[0] = 0x7f;
+        return output[0..1];
+    }
+    if (std.mem.eql(u8, key, "Tab")) {
+        if (shift) {
+            // Shift+Tab = CSI Z (backtab)
+            output[0] = 0x1b;
+            output[1] = '[';
+            output[2] = 'Z';
+            return output[0..3];
+        }
+        output[0] = '\t';
+        return output[0..1];
+    }
+    if (std.mem.eql(u8, key, "Escape")) {
+        output[0] = 0x1b;
+        return output[0..1];
+    }
+    if (std.mem.eql(u8, key, "Delete")) {
+        // CSI 3 ~
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = '3';
+        output[3] = '~';
+        return output[0..4];
+    }
+    
+    // Arrow keys
+    if (std.mem.eql(u8, key, "ArrowUp")) {
+        return writeArrowKey(output, 'A', ctrl, alt);
+    }
+    if (std.mem.eql(u8, key, "ArrowDown")) {
+        return writeArrowKey(output, 'B', ctrl, alt);
+    }
+    if (std.mem.eql(u8, key, "ArrowRight")) {
+        return writeArrowKey(output, 'C', ctrl, alt);
+    }
+    if (std.mem.eql(u8, key, "ArrowLeft")) {
+        return writeArrowKey(output, 'D', ctrl, alt);
+    }
+    
+    // Home/End
+    if (std.mem.eql(u8, key, "Home")) {
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = 'H';
+        return output[0..3];
+    }
+    if (std.mem.eql(u8, key, "End")) {
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = 'F';
+        return output[0..3];
+    }
+    
+    // Page Up/Down
+    if (std.mem.eql(u8, key, "PageUp")) {
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = '5';
+        output[3] = '~';
+        return output[0..4];
+    }
+    if (std.mem.eql(u8, key, "PageDown")) {
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = '6';
+        output[3] = '~';
+        return output[0..4];
+    }
+    
+    // Insert
+    if (std.mem.eql(u8, key, "Insert")) {
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = '2';
+        output[3] = '~';
+        return output[0..4];
+    }
+    
+    // Function keys F1-F12
+    if (key.len >= 2 and key[0] == 'F') {
+        const fnum = std.fmt.parseInt(u8, key[1..], 10) catch return output[0..0];
+        return writeFunctionKey(output, fnum);
+    }
+    
+    // Multi-byte UTF-8 characters (e.g., from dead keys or special input)
+    // The key value is already UTF-8 encoded, just copy it
+    if (key.len > 1 and key.len <= output.len) {
+        // Unescape the key value first
+        const len = unescapeJson(key, output);
+        if (alt and len > 0) {
+            // Alt + UTF-8 char: prepend ESC
+            // Shift existing content right by 1
+            var i: usize = len;
+            while (i > 0) : (i -= 1) {
+                output[i] = output[i - 1];
+            }
+            output[0] = 0x1b;
+            return output[0 .. len + 1];
+        }
+        return output[0..len];
+    }
+    
+    return output[0..0];
+}
+
+/// Write arrow key escape sequence with modifiers
+fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool) []u8 {
+    if (ctrl or alt) {
+        // CSI 1 ; <mod> <arrow>
+        // mod: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt
+        var mod: u8 = 1;
+        if (alt) mod += 2;
+        if (ctrl) mod += 4;
+        output[0] = 0x1b;
+        output[1] = '[';
+        output[2] = '1';
+        output[3] = ';';
+        output[4] = '0' + mod;
+        output[5] = arrow;
+        return output[0..6];
+    }
+    // Simple: CSI <arrow>
+    output[0] = 0x1b;
+    output[1] = '[';
+    output[2] = arrow;
+    return output[0..3];
+}
+
+/// Write function key escape sequence
+fn writeFunctionKey(output: []u8, fnum: u8) []u8 {
+    // F1-F4: SS3 P, Q, R, S (or CSI 11~, etc.)
+    // F5-F12: CSI 15~, 17~, 18~, 19~, 20~, 21~, 23~, 24~
+    const codes = [_]struct { prefix: []const u8, suffix: u8 }{
+        .{ .prefix = "\x1bOP", .suffix = 0 }, // F1
+        .{ .prefix = "\x1bOQ", .suffix = 0 }, // F2
+        .{ .prefix = "\x1bOR", .suffix = 0 }, // F3
+        .{ .prefix = "\x1bOS", .suffix = 0 }, // F4
+        .{ .prefix = "\x1b[15~", .suffix = 0 }, // F5
+        .{ .prefix = "\x1b[17~", .suffix = 0 }, // F6
+        .{ .prefix = "\x1b[18~", .suffix = 0 }, // F7
+        .{ .prefix = "\x1b[19~", .suffix = 0 }, // F8
+        .{ .prefix = "\x1b[20~", .suffix = 0 }, // F9
+        .{ .prefix = "\x1b[21~", .suffix = 0 }, // F10
+        .{ .prefix = "\x1b[23~", .suffix = 0 }, // F11
+        .{ .prefix = "\x1b[24~", .suffix = 0 }, // F12
+    };
+    
+    if (fnum >= 1 and fnum <= 12) {
+        const code = codes[fnum - 1];
+        @memcpy(output[0..code.prefix.len], code.prefix);
+        return output[0..code.prefix.len];
+    }
+    
+    return output[0..0];
+}
 
 /// Unescape a JSON string (handle \r, \n, \t, \\, \", etc.)
 fn unescapeJson(input: []const u8, output: []u8) usize {
