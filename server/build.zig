@@ -31,17 +31,6 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Key tester - primitive (legacy VT)
-    const keytest_primitive = b.addExecutable(.{
-        .name = "keytest-primitive",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/keytest_primitive.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(keytest_primitive);
-
     // Key tester - Kitty protocol
     const keytest_kitty = b.addExecutable(.{
         .name = "keytest-kitty",
