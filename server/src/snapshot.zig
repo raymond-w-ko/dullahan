@@ -174,8 +174,8 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     var byte_offset: usize = 0;
     var y: usize = 0;
     while (y < rows) : (y += 1) {
-        // Get a pin at the start of this row
-        const row_pin = pages.pin(.{ .screen = .{ .x = 0, .y = @intCast(y) } }) orelse {
+        // Get a pin at the start of this row (viewport-relative coordinates)
+        const row_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse {
             // Row doesn't exist, fill with zeros
             @memset(cell_bytes[byte_offset .. byte_offset + cols * 8], 0);
             byte_offset += cols * 8;
@@ -219,7 +219,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
     // Get the page to look up styles
     // Use the first pin's page (they should all be the same for visible area)
-    const first_pin = pages.pin(.{ .screen = .{ .x = 0, .y = 0 } });
+    const first_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } });
 
     var style_offset: usize = 2;
     var it = style_ids.keyIterator();
