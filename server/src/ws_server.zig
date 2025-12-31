@@ -218,13 +218,32 @@ fn keyEventToBytes(json: []const u8, output: []u8) []u8 {
         return output[0..0];
     }
     
+    // Extract key value first
+    const key = extractJsonString(json, "\"key\":\"") orelse return output[0..0];
+    
+    // Ignore modifier-only keys in legacy mode
+    // These only generate output with Kitty keyboard protocol
+    if (std.mem.eql(u8, key, "Meta") or
+        std.mem.eql(u8, key, "Control") or
+        std.mem.eql(u8, key, "Alt") or
+        std.mem.eql(u8, key, "Shift") or
+        std.mem.eql(u8, key, "CapsLock") or
+        std.mem.eql(u8, key, "NumLock") or
+        std.mem.eql(u8, key, "ScrollLock") or
+        std.mem.eql(u8, key, "Hyper") or
+        std.mem.eql(u8, key, "Super") or
+        std.mem.eql(u8, key, "OS") or // Windows key on some platforms
+        std.mem.eql(u8, key, "AltGraph") or
+        std.mem.eql(u8, key, "Fn") or
+        std.mem.eql(u8, key, "FnLock"))
+    {
+        return output[0..0];
+    }
+    
     // Extract modifiers
     const ctrl = std.mem.indexOf(u8, json, "\"ctrl\":true") != null;
     const alt = std.mem.indexOf(u8, json, "\"alt\":true") != null;
     const shift = std.mem.indexOf(u8, json, "\"shift\":true") != null;
-    
-    // Extract key value
-    const key = extractJsonString(json, "\"key\":\"") orelse return output[0..0];
     
     // Handle special keys first
     if (key.len == 1) {
