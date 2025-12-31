@@ -211,6 +211,10 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
 /// Generate a JSON snapshot of the terminal state with raw cell data
 pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
+    // Lock pane to prevent concurrent modification during snapshot
+    pane.lock();
+    defer pane.unlock();
+    
     var buf: std.ArrayListUnmanaged(u8) = .{};
     errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);

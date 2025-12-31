@@ -37,6 +37,10 @@ pub const Pane = struct {
 
     /// Child process ID (null if no shell spawned)
     child_pid: ?posix.pid_t = null,
+    
+    /// Mutex protecting terminal state access
+    /// Required because PTY reader and WebSocket snapshot run on different threads
+    mutex: std.Thread.Mutex = .{},
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -138,6 +142,16 @@ pub const Pane = struct {
         }
         return false;
     }
+    
+    /// Lock terminal state for reading (used by snapshot generation)
+    pub fn lock(self: *Pane) void {
+        self.mutex.lock();
+    }
+    
+    /// Unlock terminal state
+    pub fn unlock(self: *Pane) void {
+        self.mutex.unlock();
+    }
 
     /// Feed raw bytes into the terminal (e.g., from process stdout)
     /// This processes VT escape sequences including colors, cursor movement, etc.
@@ -145,6 +159,9 @@ pub const Pane = struct {
         // Check for DA1 request (CSI c or CSI 0 c) and respond
         // ghostty-vt's readonly handler ignores device_attributes, so we handle it here
         self.handleTerminalQueries(data);
+        
+        self.mutex.lock();
+        defer self.mutex.unlock();
         
         // Create a VT stream to process the input
         // vtStream() handles ANSI escape sequences properly
@@ -219,6 +236,9 @@ pub const Pane = struct {
 
     /// Resize the pane
     pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
