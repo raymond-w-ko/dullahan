@@ -22,6 +22,12 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.addImport("msgpack", msgpack);
     }
 
+    // Add snappy dependency for compression
+    if (b.lazyDependency("snappy", .{})) |snappy_dep| {
+        const snappy = snappy_dep.module("snappy");
+        dullahan_mod.addImport("snappy", snappy);
+    }
+
     // Executable
     const exe = b.addExecutable(.{
         .name = "dullahan",
