@@ -531,3 +531,224 @@ Common platform differences:
 - **Threaded codegen** for faster release builds
 - **LLVM 20** backend
 - **Fuzzer** built-in support
+
+---
+
+## zig-msgpack Library
+
+MessagePack binary serialization library for efficient data encoding. Used in dullahan for WebSocket binary messages.
+
+**Source**: [github.com/zigcc/zig-msgpack](https://github.com/zigcc/zig-msgpack)
+
+### Adding as Dependency
+
+`build.zig.zon`:
+```zig
+.@"zig-msgpack" = .{
+    .url = "git+https://github.com/zigcc/zig-msgpack#COMMIT_HASH",
+    .hash = "...",  // zig build will tell you the correct hash
+},
+```
+
+`build.zig`:
+```zig
+if (b.lazyDependency("zig-msgpack", .{})) |msgpack_dep| {
+    const msgpack = msgpack_dep.module("msgpack");
+    my_module.addImport("msgpack", msgpack);
+}
+```
+
+### Basic Types
+
+```zig
+const msgpack = @import("msgpack");
+const Payload = msgpack.Payload;
+
+// Primitives (no allocation)
+const nil_val = Payload.nilToPayload();
+const bool_val = Payload.boolToPayload(true);
+const int_val = Payload.intToPayload(-42);
+const uint_val = Payload.uintToPayload(42);
+const float_val = Payload.floatToPayload(3.14);
+
+// Strings/Binary (allocates, must free)
+const str_val = try Payload.strToPayload("hello", allocator);
+defer str_val.free(allocator);
+
+const bin_val = try Payload.binToPayload(&[_]u8{1, 2, 3}, allocator);
+defer bin_val.free(allocator);
+
+// Timestamp
+const ts = Payload.timestampToPayload(1234567890, 123456789);  // secs, nanos
+```
+
+### Arrays
+
+```zig
+// Create array with fixed length
+var arr = try Payload.arrPayload(3, allocator);
+defer arr.free(allocator);
+
+// Set elements by index
+try arr.setArrElement(0, Payload.intToPayload(1));
+try arr.setArrElement(1, Payload.intToPayload(2));
+try arr.setArrElement(2, Payload.intToPayload(3));
+
+// Read back
+const len = try arr.getArrLen();
+const elem = try arr.getArrElement(0);
+std.debug.print("First: {d}\n", .{elem.int});
+```
+
+### Maps
+
+```zig
+// Create map
+var map = Payload.mapPayload(allocator);
+defer map.free(allocator);
+
+// String keys (common case)
+try map.mapPut("name", try Payload.strToPayload("Alice", allocator));
+try map.mapPut("age", Payload.uintToPayload(30));
+
+// Read back
+if (try map.mapGet("name")) |name| {
+    std.debug.print("Name: {s}\n", .{name.str.value()});
+}
+
+// Generic keys (any Payload type)
+try map.mapPutGeneric(Payload.intToPayload(1), Payload.strToPayload("one", allocator));
+```
+
+### Encoding/Decoding with compat layer (Recommended)
+
+The `compat` layer works across Zig 0.14, 0.15, and 0.16:
+
+```zig
+const msgpack = @import("msgpack");
+const compat = msgpack.compat;
+
+// Create buffer streams
+var buffer: [4096]u8 = undefined;
+var write_stream = compat.fixedBufferStream(&buffer);
+var read_stream = compat.fixedBufferStream(&buffer);
+
+// Create packer
+const BufferType = compat.BufferStream;
+var packer = msgpack.Pack(
+    *BufferType, *BufferType,
+    BufferType.WriteError, BufferType.ReadError,
+    BufferType.write, BufferType.read,
+).init(&write_stream, &read_stream);
+
+// Encode
+var payload = Payload.mapPayload(allocator);
+defer payload.free(allocator);
+try payload.mapPut("type", try Payload.strToPayload("snapshot", allocator));
+try payload.mapPut("cols", Payload.uintToPayload(80));
+try packer.write(payload);
+
+// Decode
+read_stream.pos = 0;  // Reset read position
+const decoded = try packer.read(allocator);
+defer decoded.free(allocator);
+
+const msg_type = (try decoded.mapGet("type")).?.str.value();
+const cols = (try decoded.mapGet("cols")).?.uint;
+```
+
+### Type Conversion
+
+```zig
+// Lenient (allows conversion)
+const int_as_i64 = try payload.getInt();   // uint -> i64 if fits
+const uint_as_u64 = try payload.getUint(); // positive int -> u64
+
+// Strict (no conversion)
+const strict_int = try payload.asInt();    // only .int type
+const strict_uint = try payload.asUint();  // only .uint type
+const strict_str = try payload.asStr();    // only .str type
+
+// Type checking
+if (payload.isNil()) { ... }
+if (payload.isNumber()) { ... }      // int, uint, or float
+if (payload.isInteger()) { ... }     // int or uint only
+```
+
+### Security Limits
+
+For parsing untrusted data, use `PackWithLimits`:
+
+```zig
+const SafePacker = msgpack.PackWithLimits(
+    *BufferType, *BufferType,
+    BufferType.WriteError, BufferType.ReadError,
+    BufferType.write, BufferType.read,
+    .{
+        .max_depth = 50,              // Max nesting
+        .max_array_length = 10_000,   // Max array elements
+        .max_map_size = 10_000,       // Max map pairs
+        .max_string_length = 1024 * 1024,  // Max 1MB strings
+    },
+);
+```
+
+Possible security errors:
+- `MaxDepthExceeded` — nesting too deep
+- `ArrayTooLarge` — array claims too many elements
+- `MapTooLarge` — map claims too many pairs
+- `StringTooLong` — string data too large
+
+### Memory Management
+
+**Important**: Payloads that allocate memory must be freed:
+- `strToPayload` — allocates string copy
+- `binToPayload` — allocates binary copy
+- `arrPayload` — allocates array
+- `mapPayload` — allocates map
+- `extToPayload` — allocates extension data
+
+```zig
+const payload = try Payload.strToPayload("hello", allocator);
+defer payload.free(allocator);  // REQUIRED
+
+// For nested structures, free only the root
+var map = Payload.mapPayload(allocator);
+try map.mapPut("nested", try Payload.strToPayload("value", allocator));
+defer map.free(allocator);  // Frees map AND nested string
+```
+
+### Binary Data Pattern for WebSocket
+
+Typical pattern for sending binary msgpack over WebSocket:
+
+```zig
+fn encodeSnapshot(allocator: Allocator, cols: u16, rows: u16, cells: []const u8) ![]u8 {
+    var buffer: [65536]u8 = undefined;
+    var write_stream = compat.fixedBufferStream(&buffer);
+    var read_stream = compat.fixedBufferStream(&buffer);
+
+    const BufferType = compat.BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType, *BufferType,
+        BufferType.WriteError, BufferType.ReadError,
+        BufferType.write, BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    var payload = Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try Payload.strToPayload("snapshot", allocator));
+    try payload.mapPut("cols", Payload.uintToPayload(cols));
+    try payload.mapPut("rows", Payload.uintToPayload(rows));
+    try payload.mapPut("cells", try Payload.binToPayload(cells, allocator));
+
+    try packer.write(payload);
+
+    // Return copy of encoded bytes
+    const encoded_len = write_stream.pos;
+    const result = try allocator.alloc(u8, encoded_len);
+    @memcpy(result, buffer[0..encoded_len]);
+    return result;
+}
+```
