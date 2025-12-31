@@ -11,6 +11,43 @@ const Pane = @import("pane.zig").Pane;
 
 const log = std.log.scoped(.ws_server);
 
+// ============================================================================
+// Message Types (parsed from client JSON)
+// ============================================================================
+
+/// Keyboard event from client
+const KeyEvent = struct {
+    type: []const u8,
+    key: []const u8,
+    code: []const u8,
+    state: []const u8,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+    repeat: bool = false,
+    timestamp: f64 = 0,
+    keyCode: u16 = 0,
+};
+
+/// IME composed text from client
+const TextMessage = struct {
+    type: []const u8,
+    data: []const u8,
+};
+
+/// Terminal resize request from client
+const ResizeMessage = struct {
+    type: []const u8,
+    cols: u16,
+    rows: u16,
+};
+
+/// Generic message to peek at type field
+const MessageType = struct {
+    type: []const u8,
+};
+
 /// WebSocket server for terminal clients
 pub const WsServer = struct {
     http_server: http.Server,
@@ -155,50 +192,71 @@ pub const WsServer = struct {
     /// Handle a message from a client
     /// Note: Does not send snapshots - the main loop handles that via version tracking
     fn handleClientMessage(self: *WsServer, data: []const u8, session: *Session, ws: *websocket.Connection) !void {
-        _ = self;
+        // Parse message type first
+        const msg_type = std.json.parseFromSlice(MessageType, self.allocator, data, .{
+            .ignore_unknown_fields = true,
+        }) catch |e| {
+            log.warn("Failed to parse message type: {any}", .{e});
+            return;
+        };
+        defer msg_type.deinit();
 
-        // Simple JSON parsing - look for "type" field
-        // Format: {"type":"...", ...}
+        const type_str = msg_type.value.type;
 
-        if (std.mem.indexOf(u8, data, "\"type\":\"key\"")) |_| {
+        if (std.mem.eql(u8, type_str, "key")) {
             // Keyboard event - convert to PTY input
-            // Full fidelity preserved for future Kitty keyboard protocol support
+            const key_event = std.json.parseFromSlice(KeyEvent, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse key event: {any}", .{e});
+                return;
+            };
+            defer key_event.deinit();
+
             const pane = session.activePane() orelse return;
-            
+
             var output_buf: [32]u8 = undefined;
-            const output = keyEventToBytes(data, &output_buf);
-            
+            const output = keyEventToBytes(key_event.value, &output_buf);
+
             if (output.len > 0) {
                 pane.writeInput(output) catch |e| {
                     log.err("Failed to write key to PTY: {any}", .{e});
                 };
             }
-        } else if (std.mem.indexOf(u8, data, "\"type\":\"text\"")) |_| {
+        } else if (std.mem.eql(u8, type_str, "text")) {
             // IME composed text - send UTF-8 directly
-            if (extractJsonString(data, "\"data\":\"")) |text_data| {
-                log.debug("Received text: {d} bytes", .{text_data.len});
+            const text_msg = std.json.parseFromSlice(TextMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse text message: {any}", .{e});
+                return;
+            };
+            defer text_msg.deinit();
 
-                const pane = session.activePane() orelse return;
-                
-                // Unescape JSON string
-                var unescaped: [1024]u8 = undefined;
-                const unescaped_len = unescapeJson(text_data, &unescaped);
-                
-                pane.writeInput(unescaped[0..unescaped_len]) catch |e| {
-                    log.err("Failed to write text to PTY: {any}", .{e});
-                };
-            }
-        } else if (std.mem.indexOf(u8, data, "\"type\":\"resize\"")) |_| {
+            log.debug("Received text: {d} bytes", .{text_msg.value.data.len});
+
+            const pane = session.activePane() orelse return;
+
+            // Data is already unescaped by JSON parser
+            pane.writeInput(text_msg.value.data) catch |e| {
+                log.err("Failed to write text to PTY: {any}", .{e});
+            };
+        } else if (std.mem.eql(u8, type_str, "resize")) {
             // Resize message
-            const cols = extractJsonInt(data, "\"cols\":") orelse return;
-            const rows = extractJsonInt(data, "\"rows\":") orelse return;
+            const resize_msg = std.json.parseFromSlice(ResizeMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse resize message: {any}", .{e});
+                return;
+            };
+            defer resize_msg.deinit();
 
-            log.info("Resize request: {d}x{d}", .{ cols, rows });
+            log.info("Resize request: {d}x{d}", .{ resize_msg.value.cols, resize_msg.value.rows });
 
             // Resize pane (this increments pane.version)
             const pane = session.activePane() orelse return;
-            try pane.resize(@intCast(cols), @intCast(rows));
-        } else if (std.mem.indexOf(u8, data, "\"type\":\"ping\"")) |_| {
+            try pane.resize(resize_msg.value.cols, resize_msg.value.rows);
+        } else if (std.mem.eql(u8, type_str, "ping")) {
             // Ping message - send pong
             try ws.sendText("{\"type\":\"pong\"}");
         } else {
@@ -207,20 +265,19 @@ pub const WsServer = struct {
     }
 };
 
-/// Convert a keyboard event JSON to PTY byte sequence
+/// Convert a keyboard event to PTY byte sequence
 /// Returns slice of output buffer with bytes to send
-/// 
+///
 /// Note: This preserves full event data for future Kitty keyboard protocol support.
 /// Currently converts to legacy/VT sequences for shell compatibility.
-fn keyEventToBytes(json: []const u8, output: []u8) []u8 {
+fn keyEventToBytes(event: KeyEvent, output: []u8) []u8 {
     // Only process keydown events
-    if (std.mem.indexOf(u8, json, "\"state\":\"down\"") == null) {
+    if (!std.mem.eql(u8, event.state, "down")) {
         return output[0..0];
     }
-    
-    // Extract key value first
-    const key = extractJsonString(json, "\"key\":\"") orelse return output[0..0];
-    
+
+    const key = event.key;
+
     // Ignore modifier-only keys in legacy mode
     // These only generate output with Kitty keyboard protocol
     if (std.mem.eql(u8, key, "Meta") or
@@ -239,11 +296,11 @@ fn keyEventToBytes(json: []const u8, output: []u8) []u8 {
     {
         return output[0..0];
     }
-    
-    // Extract modifiers
-    const ctrl = std.mem.indexOf(u8, json, "\"ctrl\":true") != null;
-    const alt = std.mem.indexOf(u8, json, "\"alt\":true") != null;
-    const shift = std.mem.indexOf(u8, json, "\"shift\":true") != null;
+
+    // Get modifiers from parsed struct
+    const ctrl = event.ctrl;
+    const alt = event.alt;
+    const shift = event.shift;
     
     // Handle special keys first
     if (key.len == 1) {
@@ -382,23 +439,22 @@ fn keyEventToBytes(json: []const u8, output: []u8) []u8 {
     }
     
     // Multi-byte UTF-8 characters (e.g., from dead keys or special input)
-    // The key value is already UTF-8 encoded, just copy it
+    // The key value is already UTF-8 encoded and unescaped by JSON parser
     if (key.len > 1 and key.len <= output.len) {
-        // Unescape the key value first
-        const len = unescapeJson(key, output);
-        if (alt and len > 0) {
+        @memcpy(output[0..key.len], key);
+        if (alt) {
             // Alt + UTF-8 char: prepend ESC
             // Shift existing content right by 1
-            var i: usize = len;
+            var i: usize = key.len;
             while (i > 0) : (i -= 1) {
                 output[i] = output[i - 1];
             }
             output[0] = 0x1b;
-            return output[0 .. len + 1];
+            return output[0 .. key.len + 1];
         }
-        return output[0..len];
+        return output[0..key.len];
     }
-    
+
     return output[0..0];
 }
 
@@ -453,76 +509,81 @@ fn writeFunctionKey(output: []u8, fnum: u8) []u8 {
     return output[0..0];
 }
 
-/// Unescape a JSON string (handle \r, \n, \t, \\, \", etc.)
-fn unescapeJson(input: []const u8, output: []u8) usize {
-    var out_idx: usize = 0;
-    var i: usize = 0;
-    
-    while (i < input.len and out_idx < output.len) {
-        if (input[i] == '\\' and i + 1 < input.len) {
-            const next = input[i + 1];
-            const char: u8 = switch (next) {
-                'r' => '\r',
-                'n' => '\n',
-                't' => '\t',
-                '\\' => '\\',
-                '"' => '"',
-                '/' => '/',
-                else => next,
-            };
-            output[out_idx] = char;
-            out_idx += 1;
-            i += 2;
-        } else {
-            output[out_idx] = input[i];
-            out_idx += 1;
-            i += 1;
-        }
-    }
-    
-    return out_idx;
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "parse key event" {
+    const allocator = std.testing.allocator;
+    const json = "{\"type\":\"key\",\"key\":\"a\",\"code\":\"KeyA\",\"state\":\"down\",\"ctrl\":false,\"alt\":false,\"shift\":false,\"meta\":false}";
+
+    const parsed = try std.json.parseFromSlice(KeyEvent, allocator, json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("key", parsed.value.type);
+    try std.testing.expectEqualStrings("a", parsed.value.key);
+    try std.testing.expectEqualStrings("KeyA", parsed.value.code);
+    try std.testing.expectEqualStrings("down", parsed.value.state);
+    try std.testing.expect(!parsed.value.ctrl);
 }
 
-/// Extract a string value from JSON (simple, not full parser)
-fn extractJsonString(json: []const u8, prefix: []const u8) ?[]const u8 {
-    const start_idx = std.mem.indexOf(u8, json, prefix) orelse return null;
-    const value_start = start_idx + prefix.len;
-
-    // Find closing quote (handling escapes simply)
-    var end_idx = value_start;
-    while (end_idx < json.len) : (end_idx += 1) {
-        if (json[end_idx] == '"' and (end_idx == value_start or json[end_idx - 1] != '\\')) {
-            break;
-        }
-    }
-
-    if (end_idx >= json.len) return null;
-    return json[value_start..end_idx];
-}
-
-/// Extract an integer value from JSON
-fn extractJsonInt(json: []const u8, prefix: []const u8) ?i64 {
-    const start_idx = std.mem.indexOf(u8, json, prefix) orelse return null;
-    const value_start = start_idx + prefix.len;
-
-    var end_idx = value_start;
-    while (end_idx < json.len and (json[end_idx] >= '0' and json[end_idx] <= '9')) {
-        end_idx += 1;
-    }
-
-    if (end_idx == value_start) return null;
-
-    return std.fmt.parseInt(i64, json[value_start..end_idx], 10) catch null;
-}
-
-test "extract json string" {
-    const json = "{\"type\":\"input\",\"data\":\"hello\"}";
-    const data = extractJsonString(json, "\"data\":\"");
-    try std.testing.expectEqualStrings("hello", data.?);
-}
-
-test "extract json int" {
+test "parse resize message" {
+    const allocator = std.testing.allocator;
     const json = "{\"type\":\"resize\",\"cols\":80,\"rows\":24}";
-    try std.testing.expectEqual(@as(i64, 80), extractJsonInt(json, "\"cols\":").?);
-    try std.testing.expectEqual(@as(i64, 24), extractJsonInt(json, "\"rows\":").?);
+
+    const parsed = try std.json.parseFromSlice(ResizeMessage, allocator, json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("resize", parsed.value.type);
+    try std.testing.expectEqual(@as(u16, 80), parsed.value.cols);
+    try std.testing.expectEqual(@as(u16, 24), parsed.value.rows);
+}
+
+test "parse text message" {
+    const allocator = std.testing.allocator;
+    const json = "{\"type\":\"text\",\"data\":\"hello\\nworld\"}";
+
+    const parsed = try std.json.parseFromSlice(TextMessage, allocator, json, .{
+        .ignore_unknown_fields = true,
+    });
+    defer parsed.deinit();
+
+    try std.testing.expectEqualStrings("text", parsed.value.type);
+    try std.testing.expectEqualStrings("hello\nworld", parsed.value.data); // Already unescaped!
+}
+
+test "keyEventToBytes basic" {
+    var output: [32]u8 = undefined;
+
+    // Regular key
+    const result = keyEventToBytes(.{
+        .type = "key",
+        .key = "a",
+        .code = "KeyA",
+        .state = "down",
+    }, &output);
+    try std.testing.expectEqualStrings("a", result);
+
+    // Ctrl+C
+    const ctrl_c = keyEventToBytes(.{
+        .type = "key",
+        .key = "c",
+        .code = "KeyC",
+        .state = "down",
+        .ctrl = true,
+    }, &output);
+    try std.testing.expectEqual(@as(u8, 0x03), ctrl_c[0]);
+
+    // Keyup should be ignored
+    const keyup = keyEventToBytes(.{
+        .type = "key",
+        .key = "a",
+        .code = "KeyA",
+        .state = "up",
+    }, &output);
+    try std.testing.expectEqual(@as(usize, 0), keyup.len);
 }
