@@ -29,6 +29,7 @@ export interface TerminalSnapshot {
   scrollback: ScrollbackInfo;
   cells: Cell[]; // Decoded cell data
   styles: StyleTable; // Decoded style table
+  rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
 }
 
 /** Binary msgpack snapshot from server */
@@ -49,6 +50,7 @@ interface BinarySnapshot {
   };
   cells: Uint8Array;   // Raw cell bytes
   styles: Uint8Array;  // Raw style bytes
+  rowIds: Uint8Array;  // Packed u64 row IDs (little-endian)
 }
 
 export type BinaryServerMessage =
@@ -127,9 +129,10 @@ export class TerminalConnection {
       case "snapshot":
         console.log("Received binary snapshot:", msg.cols, "x", msg.rows, 
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
-        // Decode cells and styles from raw bytes
+        // Decode cells, styles, and row IDs from raw bytes
         const cells = this.decodeCellsFromBytes(msg.cells);
         const styles = this.decodeStyleTableFromBytes(msg.styles);
+        const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
         const snapshot: TerminalSnapshot = {
           cols: msg.cols,
           rows: msg.rows,
@@ -143,6 +146,7 @@ export class TerminalConnection {
           scrollback: msg.scrollback,
           cells,
           styles,
+          rowIds,
         };
         this.onSnapshot?.(snapshot);
         break;
@@ -237,6 +241,22 @@ export class TerminalConnection {
       default:
         return { tag: ColorTag.NONE };
     }
+  }
+
+  /** Decode row IDs from packed u64 bytes (little-endian) */
+  private decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
+    const rowIds: bigint[] = [];
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    
+    for (let i = 0; i < data.length; i += 8) {
+      // Read u64 as two u32s in little-endian and combine
+      const lo = view.getUint32(i, true);
+      const hi = view.getUint32(i + 4, true);
+      const rowId = BigInt(lo) | (BigInt(hi) << 32n);
+      rowIds.push(rowId);
+    }
+    
+    return rowIds;
   }
 
   /** Decode style table from raw bytes */

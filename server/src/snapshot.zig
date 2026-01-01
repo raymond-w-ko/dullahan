@@ -16,6 +16,21 @@ const point = ghostty.point;
 const log = std.log.scoped(.snapshot);
 
 // ============================================================================
+// Row ID Computation (for delta sync protocol)
+// ============================================================================
+
+/// Page size for row_id computation. Matches ghostty's typical page size.
+/// row_id = (page_serial * PAGE_SIZE) + row_index_in_page
+/// See docs/delta-sync-design.md for details.
+pub const PAGE_SIZE: u64 = 1000;
+
+/// Compute stable row_id from a pin's page serial and row index.
+/// Returns a unique, monotonic ID that persists until the row is pruned.
+pub fn computeRowId(pin: anytype) u64 {
+    return pin.node.serial * PAGE_SIZE + pin.y;
+}
+
+// ============================================================================
 // JSON Message Types
 // ============================================================================
 
@@ -149,14 +164,16 @@ fn encodeStyle(style: anytype) [14]u8 {
 const CellsAndStyles = struct {
     cell_bytes: []u8,
     style_bytes: []u8,
+    row_ids: []u64, // Stable row IDs for delta sync
 
     pub fn deinit(self: *CellsAndStyles, allocator: std.mem.Allocator) void {
         allocator.free(self.cell_bytes);
         allocator.free(self.style_bytes);
+        allocator.free(self.row_ids);
     }
 };
 
-/// Get raw cell bytes and style table for the visible screen area
+/// Get raw cell bytes, style table, and row IDs for the visible screen area
 fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndStyles {
     const cols = pane.cols;
     const rows = pane.rows;
@@ -165,6 +182,10 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
     var cell_bytes = try allocator.alloc(u8, byte_size);
     errdefer allocator.free(cell_bytes);
+
+    // Allocate row_ids array
+    var row_ids = try allocator.alloc(u64, rows);
+    errdefer allocator.free(row_ids);
 
     // Track unique style_ids we encounter
     var style_ids = std.AutoHashMap(u16, void).init(allocator);
@@ -181,9 +202,13 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         const row_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse {
             // Row doesn't exist, fill with zeros
             @memset(cell_bytes[byte_offset .. byte_offset + cols * 8], 0);
+            row_ids[y] = 0; // Invalid row_id for non-existent rows
             byte_offset += cols * 8;
             continue;
         };
+
+        // Compute stable row_id for this row
+        row_ids[y] = computeRowId(row_pin);
 
         // Get cells for this row
         const cells = row_pin.cells(.all);
@@ -250,6 +275,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     return .{
         .cell_bytes = cell_bytes,
         .style_bytes = style_bytes,
+        .row_ids = row_ids,
     };
 }
 
@@ -374,6 +400,10 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Raw binary cell data (no base64!)
     try payload.mapPut("cells", try msgpack.Payload.binToPayload(cells_and_styles.cell_bytes, allocator));
     try payload.mapPut("styles", try msgpack.Payload.binToPayload(cells_and_styles.style_bytes, allocator));
+
+    // Row IDs for delta sync (as binary packed u64 array, little-endian)
+    const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
+    try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
     // Encode to msgpack bytes
     // Use a buffer large enough for typical terminal snapshots
@@ -503,4 +533,39 @@ test "base64 encode" {
     const empty = try base64Encode(allocator, "");
     defer allocator.free(empty);
     try std.testing.expectEqualStrings("", empty);
+}
+
+test "row_id computation" {
+    // Test the row_id formula: (page_serial * PAGE_SIZE) + row_index
+    // PAGE_SIZE = 1000
+
+    // Mock pin structure for testing
+    const MockNode = struct {
+        serial: u64,
+    };
+    const MockPin = struct {
+        node: *const MockNode,
+        y: u32,
+    };
+
+    const node1 = MockNode{ .serial = 0 };
+    const pin1 = MockPin{ .node = &node1, .y = 0 };
+    try std.testing.expectEqual(@as(u64, 0), computeRowId(pin1));
+
+    const node2 = MockNode{ .serial = 0 };
+    const pin2 = MockPin{ .node = &node2, .y = 42 };
+    try std.testing.expectEqual(@as(u64, 42), computeRowId(pin2));
+
+    const node3 = MockNode{ .serial = 5 };
+    const pin3 = MockPin{ .node = &node3, .y = 0 };
+    try std.testing.expectEqual(@as(u64, 5000), computeRowId(pin3));
+
+    const node4 = MockNode{ .serial = 5 };
+    const pin4 = MockPin{ .node = &node4, .y = 123 };
+    try std.testing.expectEqual(@as(u64, 5123), computeRowId(pin4));
+
+    // Test larger serials
+    const node5 = MockNode{ .serial = 1000000 };
+    const pin5 = MockPin{ .node = &node5, .y = 999 };
+    try std.testing.expectEqual(@as(u64, 1000000999), computeRowId(pin5));
 }
