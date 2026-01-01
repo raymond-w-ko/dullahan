@@ -1,4 +1,4 @@
-# 2024-12-30: Client Settings & PTY Infrastructure
+# 2025-12-30: Client Settings & PTY Infrastructure
 
 Major session: implemented comprehensive client settings UI and persistent PTY infrastructure for real shell sessions.
 

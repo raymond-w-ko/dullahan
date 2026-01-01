@@ -1,9 +1,9 @@
 # WebSocket Connection Hang on Browser Refresh
 
-**Date:** 2024-12-29  
+**Date:** 2025-12-29  
 **Status:** Fixed in commit `5b454ad`, but issue is returning (Linux-only)
 
-## 2024-12-30 Update
+## 2025-12-30 Update
 
 Issue is starting to reoccur, though rarely. Confirmed it **only happens on Linux**, not macOS. Removed `Connection: close` headers to debug further. Likely related to Linux TCP stack / keep-alive behavior differences.
 

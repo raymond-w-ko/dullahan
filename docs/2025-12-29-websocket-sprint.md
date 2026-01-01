@@ -1,4 +1,4 @@
-# 2024-12-29: WebSocket Sprint
+# 2025-12-29: WebSocket Sprint
 
 Got the basic client-server communication working over WebSocket, then upgraded to raw cell data.
 
