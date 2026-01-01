@@ -8,6 +8,7 @@ const posix = std.posix;
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
 const Pty = @import("pty.zig").Pty;
+const snapshot = @import("snapshot.zig");
 
 const log = std.log.scoped(.pane);
 
@@ -32,6 +33,14 @@ pub const Pane = struct {
     /// Used for delta sync protocol to detect what changed
     /// See docs/delta-sync-design.md
     generation: u64 = 0,
+
+    /// Dirty row tracking for delta sync
+    /// Set of row IDs that changed since last clearDirtyRows() call
+    dirty_rows: std.AutoHashMap(u64, void),
+
+    /// Generation when dirty_rows was last cleared
+    /// Clients with generation < this need full resync
+    dirty_base_gen: u64 = 0,
 
     /// PTY for this pane (null if no shell spawned)
     pty: ?Pty = null,
@@ -65,6 +74,7 @@ pub const Pane = struct {
             .rows = opts.rows,
             .id = opts.id,
             .allocator = allocator,
+            .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
         };
     }
 
@@ -83,6 +93,7 @@ pub const Pane = struct {
             pty.deinit();
         }
 
+        self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
     }
 
@@ -170,8 +181,33 @@ pub const Pane = struct {
         defer stream.deinit();
         try stream.nextSlice(data);
 
-        // Increment version to signal clients need update
+        // Collect dirty rows from ghostty's dirty tracking
+        self.collectDirtyRows();
+
+        // Increment generation to signal clients need update
         self.generation +%= 1;
+    }
+
+    /// Collect dirty row IDs from ghostty's dirty tracking into our dirty_rows set.
+    /// Clears ghostty's dirty flags after collecting.
+    fn collectDirtyRows(self: *Pane) void {
+        const pages = &self.terminal.screens.active.pages;
+
+        // Iterate through viewport rows to find dirty ones
+        var y: usize = 0;
+        while (y < self.rows) : (y += 1) {
+            const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
+
+            if (pin.isDirty()) {
+                const row_id = snapshot.computeRowId(pin);
+                self.dirty_rows.put(row_id, {}) catch {
+                    log.warn("Failed to track dirty row {d}", .{row_id});
+                };
+            }
+        }
+
+        // Clear ghostty's dirty flags
+        self.terminal.screens.active.pages.clearDirty();
     }
     
     /// Handle terminal queries that require responses (DA1, etc.)
@@ -251,7 +287,10 @@ pub const Pane = struct {
             };
         }
 
-        // Increment version to signal clients need update
+        // Resize affects all rows - mark them all dirty
+        self.markAllRowsDirty();
+
+        // Increment generation to signal clients need update
         self.generation +%= 1;
     }
 
@@ -262,10 +301,51 @@ pub const Pane = struct {
 
         self.terminal.screens.active.scroll(.{ .delta_row = delta });
 
-        // Increment version to signal clients need update
+        // Scrolling changes which rows are visible - mark all dirty
+        self.markAllRowsDirty();
+
+        // Increment generation to signal clients need update
         self.generation +%= 1;
 
         log.debug("Scrolled by {d} rows", .{delta});
+    }
+
+    /// Mark all visible rows as dirty (used for resize/scroll)
+    fn markAllRowsDirty(self: *Pane) void {
+        const pages = &self.terminal.screens.active.pages;
+
+        var y: usize = 0;
+        while (y < self.rows) : (y += 1) {
+            const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
+            const row_id = snapshot.computeRowId(pin);
+            self.dirty_rows.put(row_id, {}) catch {
+                log.warn("Failed to track dirty row {d}", .{row_id});
+            };
+        }
+    }
+
+    /// Get the set of dirty row IDs since last clear.
+    /// Caller should NOT modify the returned map.
+    pub fn getDirtyRows(self: *Pane) *const std.AutoHashMap(u64, void) {
+        return &self.dirty_rows;
+    }
+
+    /// Get count of dirty rows
+    pub fn getDirtyRowCount(self: *Pane) usize {
+        return self.dirty_rows.count();
+    }
+
+    /// Clear dirty row tracking and update base generation.
+    /// Called after successfully sending delta to client.
+    pub fn clearDirtyRows(self: *Pane) void {
+        self.dirty_rows.clearRetainingCapacity();
+        self.dirty_base_gen = self.generation;
+    }
+
+    /// Check if a client with given generation needs full resync.
+    /// Returns true if client is too far behind (dirty tracking doesn't go back that far).
+    pub fn needsFullResync(self: *Pane, client_gen: u64) bool {
+        return client_gen < self.dirty_base_gen;
     }
 
     /// Dump pane state in compact human-readable format
@@ -335,4 +415,29 @@ test "pane can feed data" {
     defer std.testing.allocator.free(str);
 
     try std.testing.expect(std.mem.indexOf(u8, str, "Hello") != null);
+}
+
+test "dirty row tracking" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 5 });
+    defer pane.deinit();
+
+    // Initially no dirty rows
+    try std.testing.expectEqual(@as(usize, 0), pane.getDirtyRowCount());
+
+    // Feed some data - should mark rows dirty
+    try pane.feed("Line 1\r\n");
+    try std.testing.expect(pane.getDirtyRowCount() > 0);
+
+    // Generation should have increased
+    try std.testing.expect(pane.generation > 0);
+
+    // Clear dirty rows
+    const gen_before_clear = pane.generation;
+    pane.clearDirtyRows();
+    try std.testing.expectEqual(@as(usize, 0), pane.getDirtyRowCount());
+    try std.testing.expectEqual(gen_before_clear, pane.dirty_base_gen);
+
+    // Client with old generation needs resync
+    try std.testing.expect(pane.needsFullResync(0));
+    try std.testing.expect(!pane.needsFullResync(gen_before_clear));
 }
