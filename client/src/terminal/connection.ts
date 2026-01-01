@@ -61,6 +61,13 @@ interface BinaryDelta {
   gen: number;         // New generation after applying
   cols: number;
   rows: number;
+  cursor: {
+    x: number;
+    y: number;
+    visible: boolean;
+    style: string;
+  };
+  altScreen: boolean;
   vp: {
     totalRows: number;
     viewportTop: number;
@@ -69,6 +76,8 @@ interface BinaryDelta {
     id: number;        // Row ID (as number, fits in 53 bits)
     cells: Uint8Array; // Raw cell bytes for this row
   }>;
+  rowIds: Uint8Array;  // Packed u64 row IDs for viewport (little-endian)
+  styles: Uint8Array;  // Raw style bytes for dirty rows
 }
 
 export type BinaryServerMessage =
@@ -105,6 +114,8 @@ export class TerminalConnection {
   private _rowCache: Map<bigint, Cell[]> = new Map();
   private _cols: number = 80;
   private _rows: number = 24;
+  private _lastStyles: StyleTable | null = null;  // Cached styles for delta merging
+  private _lastRowIds: bigint[] | null = null;    // Cached row IDs for delta merging
 
   // Stats for debugging
   private _deltaCount: number = 0;
@@ -175,6 +186,10 @@ export class TerminalConnection {
           // Decompress if needed, then decode msgpack
           const decompressed = isCompressed ? SnappyJS.uncompress(payload) : payload;
           const msg = decode(decompressed) as BinaryServerMessage;
+          // Log raw message keys for debugging
+          if (msg && typeof msg === 'object') {
+            console.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
+          }
           this.handleBinaryMessage(msg);
         } else {
           // Legacy JSON message (shouldn't happen with new server)
@@ -220,7 +235,7 @@ export class TerminalConnection {
         // Rebuild row cache from snapshot
         this._rowCache.clear();
         for (let y = 0; y < msg.rows; y++) {
-          const rowId = rowIds[y];
+          const rowId = rowIds[y] ?? 0n;
           if (rowId !== 0n) { // Skip invalid row IDs
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
             this._rowCache.set(rowId, rowCells);
@@ -231,9 +246,22 @@ export class TerminalConnection {
           }
         }
 
+        // Save for delta merging
+        this._lastStyles = styles;
+        this._lastRowIds = rowIds;
+        
+        console.log(`Snapshot stored ${this._rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
+
         this.onSnapshot?.(snapshot);
         break;
       case "delta":
+        console.log("Raw delta message:", {
+          type: msg.type,
+          gen: msg.gen,
+          hasRowIds: 'rowIds' in msg,
+          rowIdsType: typeof (msg as any).rowIds,
+          rowIdsConstructor: (msg as any).rowIds?.constructor?.name,
+        });
         this.applyDelta(msg);
         break;
       case "output":
@@ -331,10 +359,18 @@ export class TerminalConnection {
 
   /** Decode row IDs from packed u64 bytes (little-endian) */
   private decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
-    const rowIds: bigint[] = [];
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    if (!data || data.length === 0) {
+      console.warn("decodeRowIdsFromBytes: empty or missing data");
+      return [];
+    }
     
-    for (let i = 0; i < data.length; i += 8) {
+    // Ensure we have a proper Uint8Array
+    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+    
+    const rowIds: bigint[] = [];
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    
+    for (let i = 0; i < bytes.length; i += 8) {
       // Read u64 as two u32s in little-endian and combine
       const lo = view.getUint32(i, true);
       const hi = view.getUint32(i + 4, true);
@@ -455,24 +491,31 @@ export class TerminalConnection {
   }
 
   /**
-   * Apply a delta update to the local cache
+   * Apply a delta update to the local cache and notify as snapshot
    */
   private applyDelta(delta: BinaryDelta): void {
     console.log(`Applying delta: gen ${this._generation} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
+    console.log(`Delta details:`, {
+      cols: delta.cols,
+      rows: delta.rows,
+      cursor: delta.cursor,
+      altScreen: delta.altScreen,
+      vp: delta.vp,
+      rowIdsLen: delta.rowIds?.length,
+      stylesLen: delta.styles?.length,
+      dirtyRowIds: delta.dirtyRows.map(r => r.id),
+    });
 
     this._deltaCount++;
     this._cols = delta.cols;
     this._rows = delta.rows;
 
-    const changedRowIds: bigint[] = [];
-
-    // Apply each dirty row
+    // Apply each dirty row to cache
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
       const cells = this.decodeCellsFromBytes(row.cells);
       
       this._rowCache.set(rowId, cells);
-      changedRowIds.push(rowId);
 
       // Update min row ID tracking
       if (this._minRowId === 0n || rowId < this._minRowId) {
@@ -483,17 +526,94 @@ export class TerminalConnection {
     // Update generation
     this._generation = delta.gen;
 
-    // Notify listener
-    this.onDelta?.({
+    // Decode styles from delta
+    const styles = this.decodeStyleTableFromBytes(delta.styles);
+
+    // Merge with existing styles from last snapshot
+    // Delta styles take precedence (they're the current ones)
+    if (this._lastStyles) {
+      for (const [id, style] of this._lastStyles) {
+        if (!styles.has(id)) {
+          styles.set(id, style);
+        }
+      }
+    }
+    this._lastStyles = styles;
+
+    // Decode row IDs from delta (tells us which rows are in viewport)
+    if (!delta.rowIds || delta.rowIds.length === 0) {
+      console.error("Delta missing rowIds!", delta);
+      // Fall back to last known rowIds
+    }
+    const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (this._lastRowIds ?? []);
+    this._lastRowIds = rowIds;
+    console.log(`Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
+    console.log(`Row cache size: ${this._rowCache.size}, keys:`, [...this._rowCache.keys()].map(String));
+    
+    // Check which rowIds are in cache
+    const inCache = rowIds.filter(id => this._rowCache.has(id));
+    const notInCache = rowIds.filter(id => id !== 0n && !this._rowCache.has(id));
+    console.log(`RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
+    if (notInCache.length > 0) {
+      console.log(`Missing rowIds:`, notInCache.map(String));
+      console.log(`Cache has:`, [...this._rowCache.keys()].map(String));
+    }
+
+    // Build cells array from cache for current viewport
+    // This requires knowing which row IDs are in the viewport
+    const cells: Cell[] = [];
+    let fromCache = 0;
+    let filled = 0;
+    for (let y = 0; y < delta.rows; y++) {
+      const rowId = rowIds[y];
+      if (rowId !== undefined && rowId !== 0n) {
+        const rowCells = this._rowCache.get(rowId);
+        if (rowCells) {
+          if (rowCells.length !== delta.cols) {
+            console.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
+          }
+          cells.push(...rowCells);
+          fromCache++;
+          continue;
+        }
+      }
+      // Fill with empty cells if row not in cache
+      filled++;
+      for (let x = 0; x < delta.cols; x++) {
+        cells.push({
+          content: { tag: 0, codepoint: 32 }, // space
+          styleId: 0,
+          wide: 0,
+          protected: false,
+          hyperlink: false,
+        });
+      }
+    }
+    console.log(`Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
+
+    // Build merged snapshot
+    const snapshot: TerminalSnapshot = {
       gen: delta.gen,
       cols: delta.cols,
       rows: delta.rows,
+      cursor: {
+        x: delta.cursor.x,
+        y: delta.cursor.y,
+        visible: delta.cursor.visible,
+        style: delta.cursor.style as "block" | "underline" | "bar",
+      },
+      altScreen: delta.altScreen,
       scrollback: {
         totalRows: delta.vp.totalRows,
         viewportTop: delta.vp.viewportTop,
       },
-      changedRowIds,
-    });
+      cells,
+      styles,
+      rowIds,
+    };
+
+    // Notify via onSnapshot (unified handler)
+    this.onSnapshot?.(snapshot);
   }
 
   private send(msg: ClientMessage): void {

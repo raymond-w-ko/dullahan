@@ -14,11 +14,17 @@ pub const DEFAULT_PORT: u16 = 7681;
 
 /// HTTP request parsed from raw data
 pub const Request = struct {
+    allocator: std.mem.Allocator,
     method: []const u8,
     path: []const u8,
     headers: std.StringHashMap([]const u8),
 
     pub fn deinit(self: *Request) void {
+        // Free the allocated lowercase header keys
+        var it = self.headers.keyIterator();
+        while (it.next()) |key| {
+            self.allocator.free(key.*);
+        }
         self.headers.deinit();
     }
 
@@ -73,7 +79,13 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
 
     // Parse headers
     var headers = std.StringHashMap([]const u8).init(allocator);
-    errdefer headers.deinit();
+    errdefer {
+        var it = headers.keyIterator();
+        while (it.next()) |key| {
+            allocator.free(key.*);
+        }
+        headers.deinit();
+    }
 
     while (lines.next()) |line| {
         if (line.len == 0) break; // Empty line ends headers
@@ -84,6 +96,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
 
         // Store header name in lowercase for easier lookup
         const lower_name = try allocator.alloc(u8, name.len);
+        errdefer allocator.free(lower_name);
         for (name, 0..) |c, i| {
             lower_name[i] = std.ascii.toLower(c);
         }
@@ -92,6 +105,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
     }
 
     return .{
+        .allocator = allocator,
         .method = method,
         .path = path,
         .headers = headers,

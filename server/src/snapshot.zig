@@ -528,6 +528,8 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     const pages = &screen.pages;
     const scrollbar = pages.scrollbar();
 
+    const cursor = screen.cursor;
+
     var payload = msgpack.Payload.mapPayload(allocator);
     errdefer payload.free(allocator);
 
@@ -543,6 +545,22 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     // Dimensions
     try payload.mapPut("cols", msgpack.Payload{ .uint = pane.cols });
     try payload.mapPut("rows", msgpack.Payload{ .uint = pane.rows });
+
+    // Cursor object (same as snapshot)
+    const cursor_style_str = switch (cursor.cursor_style) {
+        .block, .block_hollow => "block",
+        .underline => "underline",
+        .bar => "bar",
+    };
+    var cursor_map = msgpack.Payload.mapPayload(allocator);
+    try cursor_map.mapPut("x", msgpack.Payload{ .uint = cursor.x });
+    try cursor_map.mapPut("y", msgpack.Payload{ .uint = cursor.y });
+    try cursor_map.mapPut("visible", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_visible) });
+    try cursor_map.mapPut("style", try msgpack.Payload.strToPayload(cursor_style_str, allocator));
+    try payload.mapPut("cursor", cursor_map);
+
+    // Alt screen flag
+    try payload.mapPut("altScreen", msgpack.Payload{ .bool = pane.terminal.screens.active_key == .alternate });
 
     // Build list of dirty rows, prioritizing visible viewport rows
     // Viewport rows come first for faster perceived rendering
@@ -592,6 +610,10 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     var rows_array = try msgpack.Payload.arrPayload(total_dirty, allocator);
     var array_idx: usize = 0;
 
+    // Track style IDs used by dirty rows
+    var style_ids = std.AutoHashMap(u16, void).init(allocator);
+    defer style_ids.deinit();
+
     // Add viewport rows first (visible, high priority)
     for (viewport_dirty.items) |item| {
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
@@ -608,6 +630,14 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         for (cells, 0..) |cell, i| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
             @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
+
+            // Collect style ID (bits 26-31 of first u32, bits 0-9 of second u32)
+            const lo: u32 = @bitCast(cell_bytes_ptr[0..4].*);
+            const hi: u32 = @bitCast(cell_bytes_ptr[4..8].*);
+            const style_id: u16 = @truncate(((lo >> 26) & 0x3f) | ((hi & 0x3ff) << 6));
+            if (style_id != 0) {
+                try style_ids.put(style_id, {});
+            }
         }
 
         try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
@@ -624,6 +654,69 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     }
 
     try payload.mapPut("dirtyRows", rows_array);
+
+    // Build row IDs array for current viewport (same as snapshot)
+    // This tells the client which row IDs are in each viewport position
+    var row_ids = try allocator.alloc(u64, pane.rows);
+    defer allocator.free(row_ids);
+
+    for (0..pane.rows) |y| {
+        const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } });
+        if (pin) |p| {
+            row_ids[y] = computeRowId(p);
+        } else {
+            row_ids[y] = 0;
+        }
+    }
+
+    const row_ids_bytes = std.mem.sliceAsBytes(row_ids);
+    try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
+
+    log.debug("Delta: {d} dirty rows, {d} row IDs ({d} bytes), first rowId={d}", .{
+        total_dirty,
+        pane.rows,
+        row_ids_bytes.len,
+        if (pane.rows > 0) row_ids[0] else 0,
+    });
+
+    // Build style table for dirty rows
+    // Format: [count: u16] [id: u16, style: 14 bytes] ...
+    const style_count = style_ids.count();
+    const style_table_size = 2 + style_count * (2 + 14);
+    var style_bytes = try allocator.alloc(u8, style_table_size);
+    defer allocator.free(style_bytes);
+
+    // Write count (little-endian)
+    style_bytes[0] = @truncate(style_count & 0xFF);
+    style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
+
+    // Get the page to look up styles
+    const first_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } });
+
+    var style_offset: usize = 2;
+    var style_it = style_ids.keyIterator();
+    while (style_it.next()) |style_id_ptr| {
+        const style_id = style_id_ptr.*;
+
+        // Write style_id (little-endian)
+        style_bytes[style_offset] = @truncate(style_id & 0xFF);
+        style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
+        style_offset += 2;
+
+        // Look up the style and encode it
+        if (first_pin) |pin| {
+            const page = &pin.node.data;
+            const style = page.styles.get(page.memory, style_id);
+            const encoded = encodeStyle(style);
+            @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
+        } else {
+            // No page, write default style (all zeros)
+            @memset(style_bytes[style_offset .. style_offset + 14], 0);
+        }
+        style_offset += 14;
+    }
+
+    try payload.mapPut("styles", try msgpack.Payload.binToPayload(style_bytes, allocator));
 
     // Encode and compress
     const max_size = 256 * 1024;

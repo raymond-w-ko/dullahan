@@ -130,6 +130,8 @@ pub const WsServer = struct {
         // Send initial snapshot
         var last_generation = pane.generation;
         try self.sendSnapshot(&ws, pane);
+        // Clear dirty tracking - client now has full state
+        pane.clearDirtyRows();
 
         log.info("Snapshot sent, entering message loop", .{});
 
@@ -151,7 +153,7 @@ pub const WsServer = struct {
                         };
                         // Send immediate feedback if pane was modified
                         if (pane.generation != last_generation) {
-                            self.sendSnapshot(&ws, pane) catch {};
+                            self.sendUpdate(&ws, pane, last_generation) catch {};
                             last_generation = pane.generation;
                         }
                     },
@@ -162,7 +164,7 @@ pub const WsServer = struct {
                         };
                         // Send immediate feedback if pane was modified
                         if (pane.generation != last_generation) {
-                            self.sendSnapshot(&ws, pane) catch {};
+                            self.sendUpdate(&ws, pane, last_generation) catch {};
                             last_generation = pane.generation;
                         }
                     },
@@ -186,9 +188,9 @@ pub const WsServer = struct {
                 if (e == error.WouldBlock or e == error.ConnectionTimedOut) {
                     // Timeout - check if pane was updated
                     if (pane.generation != last_generation) {
-                        log.debug("Pane updated (v{d} -> v{d}), sending snapshot", .{ last_generation, pane.generation });
-                        self.sendSnapshot(&ws, pane) catch |send_err| {
-                            log.err("Failed to send snapshot: {any}", .{send_err});
+                        log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
+                        self.sendUpdate(&ws, pane, last_generation) catch |send_err| {
+                            log.err("Failed to send update: {any}", .{send_err});
                             return;
                         };
                         last_generation = pane.generation;
@@ -210,6 +212,37 @@ pub const WsServer = struct {
         const snap = try snapshot.generateBinarySnapshot(self.allocator, pane);
         defer self.allocator.free(snap);
         try ws.sendBinary(snap);
+    }
+
+    /// Send update to client - delta if possible, full snapshot if needed
+    /// client_gen is the generation the client last received
+    fn sendUpdate(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64) !void {
+        // Check if client is too far behind (needs full resync)
+        if (pane.needsFullResync(client_gen)) {
+            log.debug("Client gen {d} too old (base {d}), sending full snapshot", .{
+                client_gen,
+                pane.dirty_base_gen,
+            });
+            try self.sendSnapshot(ws, pane);
+            // Clear dirty tracking after full snapshot (client is now up to date)
+            pane.clearDirtyRows();
+            return;
+        }
+
+        // Send delta with dirty rows
+        const dirty_count = pane.getDirtyRowCount();
+        log.debug("Sending delta: gen {d} -> {d}, {d} dirty rows", .{
+            client_gen,
+            pane.generation,
+            dirty_count,
+        });
+
+        const delta = try snapshot.generateDelta(self.allocator, pane, false);
+        defer self.allocator.free(delta);
+        try ws.sendBinary(delta);
+
+        // Clear dirty tracking after successful send (client now has these rows)
+        pane.clearDirtyRows();
     }
 
     /// Handle sync request - send delta or full snapshot based on client state
