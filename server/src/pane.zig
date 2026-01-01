@@ -55,6 +55,9 @@ pub const Pane = struct {
     /// Debug capture file for recording PTY output as hex
     /// Set via startCapture(), cleared via stopCapture()
     capture_file: ?std.fs.File = null,
+    
+    /// VT stream parser - persists between feed() calls to handle split escape sequences
+    vt_stream: @TypeOf(Terminal.vtStream(undefined)),
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -79,6 +82,7 @@ pub const Pane = struct {
             .id = opts.id,
             .allocator = allocator,
             .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
+            .vt_stream = terminal.vtStream(),
         };
     }
 
@@ -97,6 +101,7 @@ pub const Pane = struct {
             pty.deinit();
         }
 
+        self.vt_stream.deinit();
         self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
     }
@@ -184,11 +189,9 @@ pub const Pane = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         
-        // Create a VT stream to process the input
-        // vtStream() handles ANSI escape sequences properly
-        var stream = self.terminal.vtStream();
-        defer stream.deinit();
-        try stream.nextSlice(data);
+        // Use persistent VT stream to handle escape sequences split across reads
+        // The stream maintains parser state between calls
+        try self.vt_stream.nextSlice(data);
 
         // Collect dirty rows from ghostty's dirty tracking
         self.collectDirtyRows();

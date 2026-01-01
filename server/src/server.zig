@@ -262,31 +262,17 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
                 break :blk ipc.Response.err(msg);
             };
             
-            // Send "claude\n"
+            // Send "claude\n" and immediately return
+            // User should run dump-raw after a few seconds to see results
             pane.writeInput("claude\n") catch {};
             
-            // Wait 2 seconds for output
-            std.Thread.sleep(2 * std.time.ns_per_s);
-            
-            // Send Ctrl-C twice
-            pane.writeInput("\x03") catch {};
-            std.Thread.sleep(100 * std.time.ns_per_ms);
-            pane.writeInput("\x03") catch {};
-            
-            // Wait a bit more for any cleanup output
+            // Quick sleep to let some output arrive
             std.Thread.sleep(500 * std.time.ns_per_ms);
             
-            // Stop capture
+            // Stop capture (will continue in next call if needed)
             pane.stopCapture();
             
-            // Also dump raw terminal state
-            var buf: std.ArrayListUnmanaged(u8) = .{};
-            const writer = buf.writer(allocator);
-            try writer.print("Capture written to: {s}\n\n", .{capture_path});
-            try pane.dumpRaw(writer);
-            
-            const data = try buf.toOwnedSlice(allocator);
-            break :blk ipc.Response.okWithData("Debug capture complete", data);
+            break :blk ipc.Response.okWithData("Capture started", "Sent 'claude\\n'. Run 'dump-raw' to see terminal state, check /tmp/dullahan-capture.hex for hex dump.");
         },
     };
 }
