@@ -21,21 +21,21 @@ export function useTerminalDimensions(
     cellHeight: 0,
   });
   
-  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Create hidden measurement element
-    const measure = document.createElement('span');
+    // Create hidden measurement element that matches terminal line styling
+    const measure = document.createElement('div');
+    measure.className = 'terminal-line'; // Use same class as actual lines
     measure.style.cssText = `
       position: absolute;
       visibility: hidden;
-      white-space: pre;
-      font: inherit;
+      pointer-events: none;
     `;
-    measure.textContent = 'X'; // Single character to measure
+    measure.textContent = 'X'; // Single character to measure width
     container.appendChild(measure);
     measureRef.current = measure;
 
@@ -43,9 +43,11 @@ export function useTerminalDimensions(
       if (!measure || !container) return;
 
       // Get cell dimensions from the measurement element
+      // Width: measure single character
+      // Height: use the line's actual height (includes line-height)
       const rect = measure.getBoundingClientRect();
-      const cellWidth = rect.width;
-      const cellHeight = rect.height;
+      const cellWidth = rect.width; // Width of 'X'
+      const cellHeight = rect.height; // Height of line (1.2em)
 
       if (cellWidth === 0 || cellHeight === 0) return;
 
