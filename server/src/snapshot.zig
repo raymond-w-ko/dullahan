@@ -261,9 +261,10 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     var row_ids = try allocator.alloc(u64, rows);
     errdefer allocator.free(row_ids);
 
-    // Track unique style_ids we encounter
-    var style_ids = std.AutoHashMap(u16, void).init(allocator);
-    defer style_ids.deinit();
+    // Track unique styles we encounter (keyed by style_id)
+    // We store the encoded style bytes directly to avoid cross-page lookup issues
+    var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
+    defer styles_map.deinit();
 
     // Get the pages from the terminal
     const pages = &pane.terminal.screens.active.pages;
@@ -287,15 +288,20 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         // Get cells for this row
         const cells = row_pin.cells(.all);
 
-        // Copy each cell as raw bytes and track style_ids
+        // Get page for style lookups (must use THIS row's page, not first row's)
+        const page = &row_pin.node.data;
+
+        // Copy each cell as raw bytes and collect styles
         for (cells) |cell| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
             @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
             byte_offset += 8;
 
-            // Track non-zero style_ids
-            if (cell.style_id > 0) {
-                try style_ids.put(cell.style_id, {});
+            // Collect non-zero styles (encode immediately from correct page)
+            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
+                const style = page.styles.get(page.memory, cell.style_id);
+                const encoded = encodeStyle(style);
+                try styles_map.put(cell.style_id, encoded);
             }
         }
 
@@ -308,9 +314,9 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         }
     }
 
-    // Now build the style table
+    // Now build the style table from collected styles
     // Format: [count: u16] [id: u16, style: 14 bytes] ...
-    const style_count = style_ids.count();
+    const style_count = styles_map.count();
     const style_table_size = 2 + style_count * (2 + 14);
     var style_bytes = try allocator.alloc(u8, style_table_size);
     errdefer allocator.free(style_bytes);
@@ -319,30 +325,19 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     style_bytes[0] = @truncate(style_count & 0xFF);
     style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
 
-    // Get the page to look up styles
-    // Use the first pin's page (they should all be the same for visible area)
-    const first_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } });
-
     var style_offset: usize = 2;
-    var it = style_ids.keyIterator();
-    while (it.next()) |style_id_ptr| {
-        const style_id = style_id_ptr.*;
+    var it = styles_map.iterator();
+    while (it.next()) |entry| {
+        const style_id = entry.key_ptr.*;
+        const encoded = entry.value_ptr.*;
 
         // Write style_id (little-endian)
         style_bytes[style_offset] = @truncate(style_id & 0xFF);
         style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
         style_offset += 2;
 
-        // Look up the style and encode it
-        if (first_pin) |pin| {
-            const page = &pin.node.data;
-            const style = page.styles.get(page.memory, style_id);
-            const encoded = encodeStyle(style);
-            @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
-        } else {
-            // No page, write default style (all zeros)
-            @memset(style_bytes[style_offset .. style_offset + 14], 0);
-        }
+        // Write pre-encoded style
+        @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
         style_offset += 14;
     }
 
@@ -651,13 +646,16 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     var rows_array = try msgpack.Payload.arrPayload(total_dirty, allocator);
     var array_idx: usize = 0;
 
-    // Track style IDs used by dirty rows
-    var style_ids = std.AutoHashMap(u16, void).init(allocator);
-    defer style_ids.deinit();
+    // Track styles used by dirty rows (store encoded bytes to avoid cross-page issues)
+    var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
+    defer styles_map.deinit();
 
     // Add viewport rows first (visible, high priority)
     for (viewport_dirty.items) |item| {
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
+
+        // Get page for style lookups (must use THIS row's page)
+        const page = &pin.node.data;
 
         // Encode the row
         var row_map = msgpack.Payload.mapPayload(allocator);
@@ -672,12 +670,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
             @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
 
-            // Collect style ID (bits 26-31 of first u32, bits 0-9 of second u32)
-            const lo: u32 = @bitCast(cell_bytes_ptr[0..4].*);
-            const hi: u32 = @bitCast(cell_bytes_ptr[4..8].*);
-            const style_id: u16 = @truncate(((lo >> 26) & 0x3f) | ((hi & 0x3ff) << 6));
-            if (style_id != 0) {
-                try style_ids.put(style_id, {});
+            // Collect style (encode immediately from correct page)
+            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
+                const style = page.styles.get(page.memory, cell.style_id);
+                const encoded = encodeStyle(style);
+                try styles_map.put(cell.style_id, encoded);
             }
         }
 
@@ -720,9 +717,9 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         if (pane.rows > 0) row_ids[0] else 0,
     });
 
-    // Build style table for dirty rows
+    // Build style table for dirty rows from collected styles
     // Format: [count: u16] [id: u16, style: 14 bytes] ...
-    const style_count = style_ids.count();
+    const style_count = styles_map.count();
     const style_table_size = 2 + style_count * (2 + 14);
     var style_bytes = try allocator.alloc(u8, style_table_size);
     defer allocator.free(style_bytes);
@@ -731,29 +728,19 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     style_bytes[0] = @truncate(style_count & 0xFF);
     style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
 
-    // Get the page to look up styles
-    const first_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } });
-
     var style_offset: usize = 2;
-    var style_it = style_ids.keyIterator();
-    while (style_it.next()) |style_id_ptr| {
-        const style_id = style_id_ptr.*;
+    var style_it = styles_map.iterator();
+    while (style_it.next()) |entry| {
+        const style_id = entry.key_ptr.*;
+        const encoded = entry.value_ptr.*;
 
         // Write style_id (little-endian)
         style_bytes[style_offset] = @truncate(style_id & 0xFF);
         style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
         style_offset += 2;
 
-        // Look up the style and encode it
-        if (first_pin) |pin| {
-            const page = &pin.node.data;
-            const style = page.styles.get(page.memory, style_id);
-            const encoded = encodeStyle(style);
-            @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
-        } else {
-            // No page, write default style (all zeros)
-            @memset(style_bytes[style_offset .. style_offset + 14], 0);
-        }
+        // Write pre-encoded style
+        @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
         style_offset += 14;
     }
 
