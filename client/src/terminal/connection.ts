@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 // WebSocket connection to dullahan server
 // Uses binary msgpack for efficient data transmission
 // Messages are compressed with Snappy
@@ -154,16 +155,16 @@ export class TerminalConnection {
       this.ws.close();
     }
 
-    console.log(`Connecting to ${this.url}...`);
+    debug.log(`Connecting to ${this.url}...`);
     this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
-      console.log("WebSocket connected");
+      debug.log("WebSocket connected");
       this.onConnect?.();
     };
 
     this.ws.onclose = () => {
-      console.log("WebSocket disconnected");
+      debug.log("WebSocket disconnected");
       this.onDisconnect?.();
       this.scheduleReconnect();
     };
@@ -188,7 +189,7 @@ export class TerminalConnection {
           const msg = decode(decompressed) as BinaryServerMessage;
           // Log raw message keys for debugging
           if (msg && typeof msg === 'object') {
-            console.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
+            debug.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
           }
           this.handleBinaryMessage(msg);
         } else {
@@ -204,7 +205,7 @@ export class TerminalConnection {
   private handleBinaryMessage(msg: BinaryServerMessage): void {
     switch (msg.type) {
       case "snapshot":
-        console.log("Received binary snapshot:", msg.cols, "x", msg.rows, 
+        debug.log("Received binary snapshot:", msg.cols, "x", msg.rows, 
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
         // Decode cells, styles, and row IDs from raw bytes
         const cells = this.decodeCellsFromBytes(msg.cells);
@@ -256,12 +257,12 @@ export class TerminalConnection {
         this._lastStyles = styles;
         this._lastRowIds = rowIds;
         
-        console.log(`Snapshot stored ${this._rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
+        debug.log(`Snapshot stored ${this._rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
 
         this.onSnapshot?.(snapshot);
         break;
       case "delta":
-        console.log("Raw delta message:", {
+        debug.log("Raw delta message:", {
           type: msg.type,
           gen: msg.gen,
           hasRowIds: 'rowIds' in msg,
@@ -434,7 +435,7 @@ export class TerminalConnection {
       clearTimeout(this.reconnectTimer);
     }
     this.reconnectTimer = window.setTimeout(() => {
-      console.log("Attempting to reconnect...");
+      debug.log("Attempting to reconnect...");
       this.connect();
     }, 2000);
   }
@@ -500,8 +501,8 @@ export class TerminalConnection {
    * Apply a delta update to the local cache and notify as snapshot
    */
   private applyDelta(delta: BinaryDelta): void {
-    console.log(`Applying delta: gen ${this._generation} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
-    console.log(`Delta details:`, {
+    debug.log(`Applying delta: gen ${this._generation} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
+    debug.log(`Delta details:`, {
       cols: delta.cols,
       rows: delta.rows,
       cursor: delta.cursor,
@@ -553,17 +554,17 @@ export class TerminalConnection {
     }
     const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (this._lastRowIds ?? []);
     this._lastRowIds = rowIds;
-    console.log(`Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
-    console.log(`Row cache size: ${this._rowCache.size}, keys:`, [...this._rowCache.keys()].map(String));
+    debug.log(`Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
+    debug.log(`Row cache size: ${this._rowCache.size}, keys:`, [...this._rowCache.keys()].map(String));
     
     // Check which rowIds are in cache
     // NOTE: rowId=0 IS valid (page serial 0, row index 0)
     const inCache = rowIds.filter(id => this._rowCache.has(id));
     const notInCache = rowIds.filter(id => !this._rowCache.has(id));
-    console.log(`RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
+    debug.log(`RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
     if (notInCache.length > 0) {
-      console.log(`Missing rowIds:`, notInCache.map(String));
-      console.log(`Cache has:`, [...this._rowCache.keys()].map(String));
+      debug.log(`Missing rowIds:`, notInCache.map(String));
+      debug.log(`Cache has:`, [...this._rowCache.keys()].map(String));
     }
 
     // Build cells array from cache for current viewport
@@ -597,7 +598,7 @@ export class TerminalConnection {
         });
       }
     }
-    console.log(`Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
+    debug.log(`Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
 
     // Build merged snapshot
     const snapshot: TerminalSnapshot = {

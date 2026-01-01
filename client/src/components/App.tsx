@@ -1,3 +1,4 @@
+import { debug } from "../debug";
 import { h } from "preact";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions";
@@ -45,7 +46,7 @@ export function App() {
       // Double-check dimensions haven't been sent already
       if (conn?.isConnected && 
           (cols !== lastSentDimensions.current.cols || rows !== lastSentDimensions.current.rows)) {
-        console.log(`Sending resize: ${cols}x${rows}`);
+        debug.log(`Sending resize: ${cols}x${rows}`);
         lastSentDimensions.current = { cols, rows };
         conn.sendResize(cols, rows);
       }
@@ -109,7 +110,7 @@ export function App() {
         resyncs: conn.resyncCount,
         gen: delta.gen,
       });
-      console.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
+      debug.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
     };
 
     conn.connect();
