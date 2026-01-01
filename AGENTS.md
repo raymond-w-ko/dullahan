@@ -185,7 +185,7 @@ dullahan/
 │   ├── terminal-state-sync.md # state sync design doc
 │   ├── 2025-12-29-websocket-sprint.md      # WebSocket implementation notes
 │   ├── 2025-12-29-websocket-connection-hang.md  # browser refresh bug postmortem
-│   └── 2025-12-31-stray-m-bug.md  # VT parser state bug (split escape sequences)
+│   └── 2026-01-01-stray-m-bug.md  # VT parser state bug (split escape sequences)
 │
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout

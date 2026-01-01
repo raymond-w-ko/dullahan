@@ -1,6 +1,6 @@
 # Stray 'm' Character Bug
 
-**Date:** 2025-12-31  
+**Date:** 2026-01-01  
 **Fixed in:** Commit `9613967`  
 **Severity:** Visual corruption
 
