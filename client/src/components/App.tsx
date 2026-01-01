@@ -26,8 +26,14 @@ export function App() {
   const [calculatedDimensions, setCalculatedDimensions] = useState({ cols: 80, rows: 24 });
   const connectionRef = useRef<TerminalConnection | null>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
+  const lastSentDimensions = useRef({ cols: 0, rows: 0 });
   
   const handleDimensionsChange = useCallback((cols: number, rows: number) => {
+    // Only update if dimensions actually changed
+    if (cols === lastSentDimensions.current.cols && rows === lastSentDimensions.current.rows) {
+      return;
+    }
+    
     setCalculatedDimensions({ cols, rows });
     
     // Debounce resize messages to avoid flooding during drag resize
@@ -36,8 +42,11 @@ export function App() {
     }
     resizeTimeoutRef.current = window.setTimeout(() => {
       const conn = connectionRef.current;
-      if (conn?.isConnected) {
+      // Double-check dimensions haven't been sent already
+      if (conn?.isConnected && 
+          (cols !== lastSentDimensions.current.cols || rows !== lastSentDimensions.current.rows)) {
         console.log(`Sending resize: ${cols}x${rows}`);
+        lastSentDimensions.current = { cols, rows };
         conn.sendResize(cols, rows);
       }
       resizeTimeoutRef.current = null;
@@ -201,11 +210,17 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
   const dimensions = useTerminalDimensions(terminalRef);
+  const lastReportedDimensions = useRef({ cols: 0, rows: 0 });
 
-  // Report dimension changes
+  // Report dimension changes (with deduplication)
   useEffect(() => {
     if (onDimensionsChange && dimensions.cols > 0 && dimensions.rows > 0) {
-      onDimensionsChange(dimensions.cols, dimensions.rows);
+      // Only call if actually changed
+      if (dimensions.cols !== lastReportedDimensions.current.cols || 
+          dimensions.rows !== lastReportedDimensions.current.rows) {
+        lastReportedDimensions.current = { cols: dimensions.cols, rows: dimensions.rows };
+        onDimensionsChange(dimensions.cols, dimensions.rows);
+      }
     }
   }, [dimensions.cols, dimensions.rows, onDimensionsChange]);
 
