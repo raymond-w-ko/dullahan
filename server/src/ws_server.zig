@@ -51,6 +51,13 @@ const ScrollMessage = struct {
     delta: i32,  // Negative = scroll up (toward history), positive = scroll down
 };
 
+/// Sync request from client for delta updates
+const SyncMessage = struct {
+    type: []const u8,
+    gen: u64,      // Client's current generation
+    minRowId: u64, // Oldest row ID client has
+};
+
 /// Generic message to peek at type field
 const MessageType = struct {
     type: []const u8,
@@ -205,6 +212,42 @@ pub const WsServer = struct {
         try ws.sendBinary(snap);
     }
 
+    /// Handle sync request - send delta or full snapshot based on client state
+    fn handleSyncRequest(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64, client_min_row: u64) !void {
+        _ = client_min_row; // TODO: use for pruning info
+
+        // Check if client is too far behind
+        if (pane.needsFullResync(client_gen)) {
+            log.debug("Client gen {d} too old (base {d}), sending full snapshot", .{
+                client_gen,
+                pane.dirty_base_gen,
+            });
+            try self.sendSnapshot(ws, pane);
+            return;
+        }
+
+        // Check if client is already up to date
+        if (client_gen == pane.generation) {
+            log.debug("Client already at gen {d}, no update needed", .{client_gen});
+            // Send empty delta
+            const delta = try snapshot.generateDelta(self.allocator, pane, true);
+            defer self.allocator.free(delta);
+            try ws.sendBinary(delta);
+            return;
+        }
+
+        // Send delta with dirty rows
+        log.debug("Sending delta: client gen {d} -> {d}, {d} dirty rows", .{
+            client_gen,
+            pane.generation,
+            pane.getDirtyRowCount(),
+        });
+
+        const delta = try snapshot.generateDelta(self.allocator, pane, false);
+        defer self.allocator.free(delta);
+        try ws.sendBinary(delta);
+    }
+
     /// Handle a message from a client
     /// Note: Does not send snapshots - the main loop handles that via version tracking
     fn handleClientMessage(self: *WsServer, data: []const u8, session: *Session, ws: *websocket.Connection) !void {
@@ -289,6 +332,18 @@ pub const WsServer = struct {
             const pong = try snapshot.generateBinaryPong(self.allocator);
             defer self.allocator.free(pong);
             try ws.sendBinary(pong);
+        } else if (std.mem.eql(u8, type_str, "sync")) {
+            // Sync request - send delta or full snapshot
+            const sync_msg = std.json.parseFromSlice(SyncMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse sync message: {any}", .{e});
+                return;
+            };
+            defer sync_msg.deinit();
+
+            const pane = session.activePane() orelse return;
+            try self.handleSyncRequest(ws, pane, sync_msg.value.gen, sync_msg.value.minRowId);
         } else {
             log.warn("Unknown message type: {s}", .{data});
         }

@@ -55,8 +55,25 @@ interface BinarySnapshot {
   rowIds: Uint8Array;  // Packed u64 row IDs (little-endian)
 }
 
+/** Binary msgpack delta update from server */
+interface BinaryDelta {
+  type: "delta";
+  gen: number;         // New generation after applying
+  cols: number;
+  rows: number;
+  vp: {
+    totalRows: number;
+    viewportTop: number;
+  };
+  dirtyRows: Array<{
+    id: number;        // Row ID (as number, fits in 53 bits)
+    cells: Uint8Array; // Raw cell bytes for this row
+  }>;
+}
+
 export type BinaryServerMessage =
   | BinarySnapshot
+  | BinaryDelta
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -65,7 +82,8 @@ export type ClientMessage =
   | TextMessage
   | { type: "resize"; cols: number; rows: number }
   | { type: "scroll"; delta: number }  // Scroll viewport by delta rows (negative = up)
-  | { type: "ping" };
+  | { type: "ping" }
+  | { type: "sync"; gen: number; minRowId: number };
 
 export class TerminalConnection {
   private ws: WebSocket | null = null;
@@ -152,6 +170,11 @@ export class TerminalConnection {
           rowIds,
         };
         this.onSnapshot?.(snapshot);
+        break;
+      case "delta":
+        console.log("Received delta:", msg.gen, "dirty rows:", msg.dirtyRows.length);
+        // TODO: Apply delta to local state (du-pxn)
+        // For now, just log it
         break;
       case "output":
         this.onOutput?.(msg.data);
@@ -353,6 +376,15 @@ export class TerminalConnection {
 
   sendPing(): void {
     this.send({ type: "ping" });
+  }
+
+  /**
+   * Request delta update from server.
+   * @param gen Client's current generation
+   * @param minRowId Oldest row ID client has cached
+   */
+  sendSync(gen: number, minRowId: number): void {
+    this.send({ type: "sync", gen, minRowId });
   }
 
   private send(msg: ClientMessage): void {

@@ -505,6 +505,122 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     return result;
 }
 
+/// Generate a delta update message with only dirty rows
+/// If empty is true, generates a minimal delta with no row changes
+pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]u8 {
+    pane.lock();
+    defer pane.unlock();
+
+    const screen = pane.terminal.screens.active;
+    const pages = &screen.pages;
+    const scrollbar = pages.scrollbar();
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("delta", allocator));
+    try payload.mapPut("gen", msgpack.Payload{ .uint = pane.generation });
+
+    // Viewport info
+    var vp_map = msgpack.Payload.mapPayload(allocator);
+    try vp_map.mapPut("totalRows", msgpack.Payload{ .uint = scrollbar.total });
+    try vp_map.mapPut("viewportTop", msgpack.Payload{ .uint = scrollbar.offset });
+    try payload.mapPut("vp", vp_map);
+
+    // Dimensions
+    try payload.mapPut("cols", msgpack.Payload{ .uint = pane.cols });
+    try payload.mapPut("rows", msgpack.Payload{ .uint = pane.rows });
+
+    // Build list of dirty rows that are in the current viewport
+    const DirtyEntry = struct { id: u64, y: usize };
+    var visible_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
+    defer visible_dirty.deinit(allocator);
+
+    if (!empty) {
+        const dirty_rows = pane.getDirtyRows();
+
+        // Find which dirty rows are visible
+        var y: usize = 0;
+        while (y < pane.rows) : (y += 1) {
+            const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
+            const row_id = computeRowId(pin);
+            if (dirty_rows.contains(row_id)) {
+                try visible_dirty.append(allocator, .{ .id = row_id, .y = y });
+            }
+        }
+    }
+
+    // Create array with correct size
+    var rows_array = try msgpack.Payload.arrPayload(visible_dirty.items.len, allocator);
+
+    for (visible_dirty.items, 0..) |item, idx| {
+        const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
+
+        // Encode the row
+        var row_map = msgpack.Payload.mapPayload(allocator);
+        try row_map.mapPut("id", msgpack.Payload{ .uint = item.id });
+
+        // Get cells for this row
+        const cells = pin.cells(.all);
+        const cell_bytes = try allocator.alloc(u8, cells.len * 8);
+        defer allocator.free(cell_bytes);
+
+        for (cells, 0..) |cell, i| {
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
+            @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
+        }
+
+        try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
+        try rows_array.setArrElement(idx, row_map);
+    }
+
+    try payload.mapPut("dirtyRows", rows_array);
+
+    // Encode and compress
+    const max_size = 256 * 1024;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = msgpack.compat.fixedBufferStream(buffer);
+    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+
+    const BufferType = msgpack.compat.BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack delta: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    payload.free(allocator);
+
+    // Compress
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
+    const compressed_buf = try allocator.alloc(u8, compressed_max);
+    errdefer allocator.free(compressed_buf);
+
+    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
+        log.err("Failed to compress delta: {any}", .{e});
+        allocator.free(buffer);
+        return error.SnappyCompressFailed;
+    };
+
+    allocator.free(buffer);
+
+    const result = try allocator.realloc(compressed_buf, compressed_len);
+    return result;
+}
+
 test "generate empty snapshot" {
     const allocator = std.testing.allocator;
 
