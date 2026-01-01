@@ -24,6 +24,7 @@ pub const Command = enum {
     @"pty-demo",
     dump,
     @"dump-raw",
+    @"debug-capture",
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -35,6 +36,7 @@ pub const Command = enum {
             .{ "pty-demo", .@"pty-demo" },
             .{ "dump", .dump },
             .{ "dump-raw", .@"dump-raw" },
+            .{ "debug-capture", .@"debug-capture" },
         });
         return map.get(s);
     }
@@ -49,6 +51,7 @@ pub const Command = enum {
             .@"pty-demo" => "Run ls -al --color via PTY (isatty=true)",
             .dump => "Dump terminal state (compact, human-readable)",
             .@"dump-raw" => "Dump raw terminal cells with escape codes visible",
+            .@"debug-capture" => "Run 'claude', capture PTY output as hex to /tmp/dullahan-capture.hex",
         };
     }
 };

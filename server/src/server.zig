@@ -248,6 +248,46 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
             const data = try buf.toOwnedSlice(allocator);
             break :blk ipc.Response.okWithData("Raw cell dump", data);
         },
+
+        .@"debug-capture" => blk: {
+            const pane = state.session.activePane() orelse
+                break :blk ipc.Response.err("No active pane");
+
+            const capture_path = "/tmp/dullahan-capture.hex";
+            
+            // Start capture
+            pane.startCapture(capture_path) catch |e| {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Failed to start capture: {any}", .{e}) catch "Failed to start capture";
+                break :blk ipc.Response.err(msg);
+            };
+            
+            // Send "claude\n"
+            pane.writeInput("claude\n") catch {};
+            
+            // Wait 2 seconds for output
+            std.Thread.sleep(2 * std.time.ns_per_s);
+            
+            // Send Ctrl-C twice
+            pane.writeInput("\x03") catch {};
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+            pane.writeInput("\x03") catch {};
+            
+            // Wait a bit more for any cleanup output
+            std.Thread.sleep(500 * std.time.ns_per_ms);
+            
+            // Stop capture
+            pane.stopCapture();
+            
+            // Also dump raw terminal state
+            var buf: std.ArrayListUnmanaged(u8) = .{};
+            const writer = buf.writer(allocator);
+            try writer.print("Capture written to: {s}\n\n", .{capture_path});
+            try pane.dumpRaw(writer);
+            
+            const data = try buf.toOwnedSlice(allocator);
+            break :blk ipc.Response.okWithData("Debug capture complete", data);
+        },
     };
 }
 

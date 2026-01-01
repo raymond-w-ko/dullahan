@@ -51,6 +51,10 @@ pub const Pane = struct {
     /// Mutex protecting terminal state access
     /// Required because PTY reader and WebSocket snapshot run on different threads
     mutex: std.Thread.Mutex = .{},
+    
+    /// Debug capture file for recording PTY output as hex
+    /// Set via startCapture(), cleared via stopCapture()
+    capture_file: ?std.fs.File = null,
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -168,6 +172,11 @@ pub const Pane = struct {
     /// Feed raw bytes into the terminal (e.g., from process stdout)
     /// This processes VT escape sequences including colors, cursor movement, etc.
     pub fn feed(self: *Pane, data: []const u8) !void {
+        // Write to capture file if enabled
+        if (self.capture_file) |file| {
+            self.writeCaptureHex(file, data);
+        }
+
         // Check for DA1 request (CSI c or CSI 0 c) and respond
         // ghostty-vt's readonly handler ignores device_attributes, so we handle it here
         self.handleTerminalQueries(data);
@@ -464,6 +473,77 @@ pub const Pane = struct {
         }
 
         try writer.writeAll("---end raw---\n");
+    }
+
+    /// Start capturing PTY output to a file as hex
+    pub fn startCapture(self: *Pane, path: []const u8) !void {
+        if (self.capture_file != null) {
+            return error.AlreadyCapturing;
+        }
+        
+        const file = try std.fs.cwd().createFile(path, .{});
+        self.capture_file = file;
+        
+        // Write header
+        file.writeAll("# Dullahan PTY capture - hex dump\n") catch {};
+        file.writeAll("# Format: [timestamp_ms] offset: hex bytes | ascii\n\n") catch {};
+        
+        log.info("Started capture to {s}", .{path});
+    }
+    
+    /// Stop capturing PTY output
+    pub fn stopCapture(self: *Pane) void {
+        if (self.capture_file) |file| {
+            file.writeAll("\n# End of capture\n") catch {};
+            file.close();
+            self.capture_file = null;
+            log.info("Stopped capture", .{});
+        }
+    }
+    
+    /// Write data to capture file as hex dump
+    fn writeCaptureHex(self: *Pane, file: std.fs.File, data: []const u8) void {
+        _ = self;
+        const timestamp = std.time.milliTimestamp();
+        
+        // Write in 16-byte rows using a buffer
+        var buf: [256]u8 = undefined;
+        var offset: usize = 0;
+        while (offset < data.len) {
+            const end = @min(offset + 16, data.len);
+            const row = data[offset..end];
+            
+            // Format the line into buffer
+            var fbs = std.io.fixedBufferStream(&buf);
+            const w = fbs.writer();
+            
+            // Timestamp and offset
+            std.fmt.format(w, "[{d}] {x:0>4}: ", .{ timestamp, offset }) catch return;
+            
+            // Hex bytes
+            for (row) |byte| {
+                std.fmt.format(w, "{x:0>2} ", .{byte}) catch return;
+            }
+            
+            // Padding for short rows
+            var pad: usize = 16 - row.len;
+            while (pad > 0) : (pad -= 1) {
+                w.writeAll("   ") catch return;
+            }
+            
+            // ASCII representation
+            w.writeAll("| ") catch return;
+            for (row) |byte| {
+                const c: u8 = if (byte >= 32 and byte < 127) byte else '.';
+                std.fmt.format(w, "{c}", .{c}) catch return;
+            }
+            w.writeAll("\n") catch return;
+            
+            // Write to file
+            file.writeAll(fbs.getWritten()) catch return;
+            
+            offset = end;
+        }
     }
 };
 
