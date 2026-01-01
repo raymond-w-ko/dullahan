@@ -124,4 +124,28 @@ pub fn build(b: *std.Build) void {
     // `zig build test-integration` runs only integration tests
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
+
+    // ============================================================
+    // Delta sync test data generator
+    // ============================================================
+
+    const delta_test_gen = b.addExecutable(.{
+        .name = "delta-test-gen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/delta_test_gen.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dullahan", .module = dullahan_mod },
+            },
+        }),
+    });
+
+    b.installArtifact(delta_test_gen);
+
+    // `zig build gen-delta-test` generates test fixtures
+    const gen_delta_step = b.step("gen-delta-test", "Generate delta sync test fixtures");
+    const run_delta_gen = b.addRunArtifact(delta_test_gen);
+    run_delta_gen.setCwd(b.path(".."));  // Run from project root
+    gen_delta_step.dependOn(&run_delta_gen.step);
 }

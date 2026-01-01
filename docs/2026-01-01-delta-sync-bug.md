@@ -1,6 +1,37 @@
 # Delta Sync Bug - 2026-01-01
 
-**Status: BROKEN** - Delta sync causes terminal content to disappear after first keystroke.
+**Status: FIXED** - The bug was caused by treating rowId=0 as invalid.
+
+## Root Cause
+
+The client code treated `rowId === 0n` as an invalid/sentinel value, but `0` is actually
+a valid row ID (page serial 0, row index 0). The server only uses 0 for non-existent rows
+(when `pages.pin()` returns null), which is rare in practice.
+
+The fix was to remove the `!== 0n` checks in `connection.ts` and instead only check
+for `undefined` as the "no row" marker.
+
+## Fix Applied
+
+In `client/src/terminal/connection.ts`:
+1. Removed `&& rowId !== 0n` from row cache building in snapshot handler
+2. Removed `&& rowId !== 0n` from row lookup in applyDelta()
+3. Added comments explaining that rowId=0 IS valid
+
+## Test Added
+
+Created offline test harness in `protocol/schema/delta.test.ts` that:
+1. Uses Zig-generated fixtures (snapshot A, snapshot B, delta)
+2. Applies delta to snapshot A in TypeScript
+3. Compares result with snapshot B
+4. All 4 test cases now pass
+
+Run tests: `cd protocol && bun test`
+Generate fixtures: `cd server && zig build gen-delta-test`
+
+---
+
+## Original Symptom (for historical reference)
 
 ## Symptom
 

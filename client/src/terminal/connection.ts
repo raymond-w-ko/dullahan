@@ -233,17 +233,23 @@ export class TerminalConnection {
         this._resyncCount++;
 
         // Rebuild row cache from snapshot
+        // NOTE: rowId=0 IS valid (page serial 0, row index 0)
+        // Only undefined means the row wasn't sent
         this._rowCache.clear();
+        let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
-          const rowId = rowIds[y] ?? 0n;
-          if (rowId !== 0n) { // Skip invalid row IDs
+          const rowId = rowIds[y];
+          if (rowId !== undefined) {
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
             this._rowCache.set(rowId, rowCells);
             // Track minimum row ID
-            if (this._minRowId === 0n || rowId < this._minRowId) {
-              this._minRowId = rowId;
+            if (minSeen < 0n || rowId < minSeen) {
+              minSeen = rowId;
             }
           }
+        }
+        if (minSeen >= 0n) {
+          this._minRowId = minSeen;
         }
 
         // Save for delta merging
@@ -551,8 +557,9 @@ export class TerminalConnection {
     console.log(`Row cache size: ${this._rowCache.size}, keys:`, [...this._rowCache.keys()].map(String));
     
     // Check which rowIds are in cache
+    // NOTE: rowId=0 IS valid (page serial 0, row index 0)
     const inCache = rowIds.filter(id => this._rowCache.has(id));
-    const notInCache = rowIds.filter(id => id !== 0n && !this._rowCache.has(id));
+    const notInCache = rowIds.filter(id => !this._rowCache.has(id));
     console.log(`RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
     if (notInCache.length > 0) {
       console.log(`Missing rowIds:`, notInCache.map(String));
@@ -561,12 +568,13 @@ export class TerminalConnection {
 
     // Build cells array from cache for current viewport
     // This requires knowing which row IDs are in the viewport
+    // NOTE: rowId=0 IS valid, only undefined means "no row"
     const cells: Cell[] = [];
     let fromCache = 0;
     let filled = 0;
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
-      if (rowId !== undefined && rowId !== 0n) {
+      if (rowId !== undefined) {
         const rowCells = this._rowCache.get(rowId);
         if (rowCells) {
           if (rowCells.length !== delta.cols) {
