@@ -57,7 +57,9 @@ pub const Pane = struct {
     capture_file: ?std.fs.File = null,
     
     /// VT stream parser - persists between feed() calls to handle split escape sequences
-    vt_stream: @TypeOf(Terminal.vtStream(undefined)),
+    /// Lazily initialized on first feed() because vtStream() captures a Terminal pointer
+    /// that would be invalid if captured during init() (before Pane is at final location)
+    vt_stream: ?@TypeOf(Terminal.vtStream(undefined)) = null,
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -82,7 +84,7 @@ pub const Pane = struct {
             .id = opts.id,
             .allocator = allocator,
             .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
-            .vt_stream = terminal.vtStream(),
+            // vt_stream is lazily initialized in feed() - see comment on field
         };
     }
 
@@ -101,7 +103,9 @@ pub const Pane = struct {
             pty.deinit();
         }
 
-        self.vt_stream.deinit();
+        if (self.vt_stream) |*stream| {
+            stream.deinit();
+        }
         self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
     }
@@ -191,7 +195,11 @@ pub const Pane = struct {
         
         // Use persistent VT stream to handle escape sequences split across reads
         // The stream maintains parser state between calls
-        try self.vt_stream.nextSlice(data);
+        // Lazily initialize on first use (see comment on vt_stream field)
+        if (self.vt_stream == null) {
+            self.vt_stream = self.terminal.vtStream();
+        }
+        try self.vt_stream.?.nextSlice(data);
 
         // Collect dirty rows from ghostty's dirty tracking
         self.collectDirtyRows();
