@@ -287,11 +287,12 @@ pub const Pane = struct {
             };
         }
 
-        // Resize affects all rows - mark them all dirty
-        self.markAllRowsDirty();
-
-        // Increment generation to signal clients need update
+        // Increment generation first
         self.generation +%= 1;
+
+        // Resize reflows content, invalidating row IDs
+        // Force all clients to do full resync
+        self.forceFullResync();
     }
 
     /// Scroll the viewport by delta rows (negative = up, positive = down)
@@ -310,7 +311,8 @@ pub const Pane = struct {
         log.debug("Scrolled by {d} rows", .{delta});
     }
 
-    /// Mark all visible rows as dirty (used for resize/scroll)
+    /// Mark all visible rows as dirty (used for scroll).
+    /// For resize, use forceFullResync() instead.
     fn markAllRowsDirty(self: *Pane) void {
         const pages = &self.terminal.screens.active.pages;
 
@@ -322,6 +324,16 @@ pub const Pane = struct {
                 log.warn("Failed to track dirty row {d}", .{row_id});
             };
         }
+    }
+
+    /// Force all clients to do a full resync.
+    /// Used after resize because reflow invalidates row IDs.
+    fn forceFullResync(self: *Pane) void {
+        // Clear dirty tracking and set base to current generation
+        // This makes needsFullResync() return true for any client
+        // with an older generation
+        self.dirty_rows.clearRetainingCapacity();
+        self.dirty_base_gen = self.generation;
     }
 
     /// Get the set of dirty row IDs since last clear.
