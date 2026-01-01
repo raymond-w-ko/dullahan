@@ -85,12 +85,33 @@ export type ClientMessage =
   | { type: "ping" }
   | { type: "sync"; gen: number; minRowId: number };
 
+/** Delta update event with applied changes */
+export interface DeltaUpdate {
+  gen: number;
+  cols: number;
+  rows: number;
+  scrollback: ScrollbackInfo;
+  changedRowIds: bigint[]; // Row IDs that were updated
+}
+
 export class TerminalConnection {
   private ws: WebSocket | null = null;
   private url: string;
   private reconnectTimer: number | null = null;
 
+  // Delta sync state
+  private _generation: number = 0;
+  private _minRowId: bigint = 0n;
+  private _rowCache: Map<bigint, Cell[]> = new Map();
+  private _cols: number = 80;
+  private _rows: number = 24;
+
+  // Stats for debugging
+  private _deltaCount: number = 0;
+  private _resyncCount: number = 0;
+
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
+  public onDelta: ((delta: DeltaUpdate) => void) | null = null;
   public onOutput: ((data: string) => void) | null = null;
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
@@ -98,6 +119,23 @@ export class TerminalConnection {
 
   constructor(url: string = "ws://localhost:7681") {
     this.url = url;
+  }
+
+  /** Current generation (for sync requests) */
+  get generation(): number { return this._generation; }
+
+  /** Oldest row ID in cache (for sync requests) */
+  get minRowId(): bigint { return this._minRowId; }
+
+  /** Debug stats: number of delta updates received */
+  get deltaCount(): number { return this._deltaCount; }
+
+  /** Debug stats: number of full resyncs */
+  get resyncCount(): number { return this._resyncCount; }
+
+  /** Get cached row by ID, or undefined if not cached */
+  getCachedRow(rowId: bigint): Cell[] | undefined {
+    return this._rowCache.get(rowId);
   }
 
   connect(): void {
@@ -169,12 +207,30 @@ export class TerminalConnection {
           styles,
           rowIds,
         };
+        // Update internal state from snapshot
+        this._generation = msg.gen;
+        this._cols = msg.cols;
+        this._rows = msg.rows;
+        this._resyncCount++;
+
+        // Rebuild row cache from snapshot
+        this._rowCache.clear();
+        for (let y = 0; y < msg.rows; y++) {
+          const rowId = rowIds[y];
+          if (rowId !== 0n) { // Skip invalid row IDs
+            const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
+            this._rowCache.set(rowId, rowCells);
+            // Track minimum row ID
+            if (this._minRowId === 0n || rowId < this._minRowId) {
+              this._minRowId = rowId;
+            }
+          }
+        }
+
         this.onSnapshot?.(snapshot);
         break;
       case "delta":
-        console.log("Received delta:", msg.gen, "dirty rows:", msg.dirtyRows.length);
-        // TODO: Apply delta to local state (du-pxn)
-        // For now, just log it
+        this.applyDelta(msg);
         break;
       case "output":
         this.onOutput?.(msg.data);
@@ -385,6 +441,55 @@ export class TerminalConnection {
    */
   sendSync(gen: number, minRowId: number): void {
     this.send({ type: "sync", gen, minRowId });
+  }
+
+  /**
+   * Request sync using current state
+   */
+  requestSync(): void {
+    this.sendSync(this._generation, Number(this._minRowId));
+  }
+
+  /**
+   * Apply a delta update to the local cache
+   */
+  private applyDelta(delta: BinaryDelta): void {
+    console.log(`Applying delta: gen ${this._generation} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
+
+    this._deltaCount++;
+    this._cols = delta.cols;
+    this._rows = delta.rows;
+
+    const changedRowIds: bigint[] = [];
+
+    // Apply each dirty row
+    for (const row of delta.dirtyRows) {
+      const rowId = BigInt(row.id);
+      const cells = this.decodeCellsFromBytes(row.cells);
+      
+      this._rowCache.set(rowId, cells);
+      changedRowIds.push(rowId);
+
+      // Update min row ID tracking
+      if (this._minRowId === 0n || rowId < this._minRowId) {
+        this._minRowId = rowId;
+      }
+    }
+
+    // Update generation
+    this._generation = delta.gen;
+
+    // Notify listener
+    this.onDelta?.({
+      gen: delta.gen,
+      cols: delta.cols,
+      rows: delta.rows,
+      scrollback: {
+        totalRows: delta.vp.totalRows,
+        viewportTop: delta.vp.viewportTop,
+      },
+      changedRowIds,
+    });
   }
 
   private send(msg: ClientMessage): void {
