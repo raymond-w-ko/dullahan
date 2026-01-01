@@ -358,6 +358,7 @@ Each client tracks its own generation. Server dirty tracking is shared.
 ### Phase 4: Polish
 - [ ] Handle resize gracefully
 - [ ] "Viewport pruned" UX improvement
+- [ ] Debug mode: delta/resync counters in title bar
 - [ ] Metrics/monitoring for sync efficiency
 
 ## Related Files
@@ -367,9 +368,110 @@ Each client tracks its own generation. Server dirty tracking is shared.
 - `client/src/terminal/connection.ts` - Client WebSocket handling
 - `protocol/messages.md` - Wire format documentation
 
-## Open Questions
+## Design Decisions
 
-1. **PAGE_SIZE value**: ghostty uses ~1000, should we match or use different?
-2. **Dirty history depth**: How many generations to track before forcing resync?
-3. **Compression**: Delta-specific compression vs reusing snappy?
-4. **Binary format**: Extend msgpack schema or new delta-specific format?
+### 1. PAGE_SIZE = 1000
+
+Match ghostty's page size for consistency. This means:
+- `row_id = (page_serial * 1000) + row_index`
+- ~1000 rows per page
+- Easy mental model when debugging
+
+### 2. Dirty History Depth = 1000 generations
+
+Reasoning:
+- At 60fps polling: 1000 gens = ~16 seconds of history
+- At 10fps polling: 1000 gens = ~100 seconds of history
+- Covers most network hiccups and tab backgrounding
+- Memory cost: 1000 × sizeof(Set<row_id>) - manageable
+
+If client falls behind 1000 generations, force full resync.
+
+**Debug mode**: Client should track and display in title bar:
+```
+Dullahan - [Δ 1,234 | ⟳ 2]
+            │         │
+            │         └── full resyncs this session
+            └── delta updates received
+```
+
+This helps diagnose sync issues during development.
+
+### 3. Compression: Snappy with size threshold
+
+Reuse snappy for consistency, but skip for tiny payloads:
+
+```zig
+const COMPRESSION_THRESHOLD = 256; // bytes
+
+fn maybCompress(data: []const u8) []const u8 {
+    if (data.len < COMPRESSION_THRESHOLD) {
+        return data; // not worth the overhead
+    }
+    return snappy.compress(data);
+}
+```
+
+Message header indicates if compressed:
+```zig
+const MessageFlags = packed struct {
+    compressed: bool,
+    _reserved: u7 = 0,
+};
+```
+
+### 4. Wire Format: Extended msgpack schema
+
+Extend existing msgpack schema rather than new format. Benefits:
+- Reuse existing encode/decode infrastructure
+- Single dependency (msgpack)
+- Flexible schema evolution
+
+#### Message Types
+
+```typescript
+// Discriminated union via "type" field
+type ServerMessage = 
+  | { type: "snapshot", ...SnapshotPayload }
+  | { type: "delta", ...DeltaPayload }
+  | { type: "resync", ...ResyncPayload };
+
+type ClientMessage =
+  | { type: "input", data: Uint8Array }
+  | { type: "resize", cols: number, rows: number }
+  | { type: "sync", generation: number, minRowId: number };
+```
+
+#### Delta Payload Schema
+
+```typescript
+interface DeltaPayload {
+  type: "delta";
+  gen: number;           // new generation
+  minRow: number;        // prune rows below this
+  
+  // Viewport position
+  vp: {
+    row: number;         // row_id at viewport top
+    active: number;      // offset to active area
+  };
+  
+  // Changed rows - sparse array
+  rows: Array<{
+    id: number;          // row_id
+    cells: Uint8Array;   // packed cell data (existing format)
+  }>;
+  
+  // Optional: dimensions if changed
+  dim?: { cols: number; rows: number };
+}
+```
+
+#### Msgpack Encoding
+
+Use short field names to minimize overhead:
+- `gen` not `generation`
+- `vp` not `viewport`
+- `dim` not `dimensions`
+
+Packed cell data reuses existing binary cell format from `protocol/schema/cell.ts`.
