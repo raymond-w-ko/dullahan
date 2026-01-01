@@ -184,7 +184,8 @@ dullahan/
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
 │   ├── terminal-state-sync.md # state sync design doc
 │   ├── 2024-12-29-websocket-sprint.md      # WebSocket implementation notes
-│   └── 2024-12-29-websocket-connection-hang.md  # browser refresh bug postmortem
+│   ├── 2024-12-29-websocket-connection-hang.md  # browser refresh bug postmortem
+│   └── 2024-12-31-stray-m-bug.md  # VT parser state bug (split escape sequences)
 │
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout
