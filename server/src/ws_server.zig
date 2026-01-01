@@ -121,7 +121,7 @@ pub const WsServer = struct {
         };
 
         // Send initial snapshot
-        var last_version = pane.version;
+        var last_generation = pane.generation;
         try self.sendSnapshot(&ws, pane);
 
         log.info("Snapshot sent, entering message loop", .{});
@@ -143,9 +143,9 @@ pub const WsServer = struct {
                             log.err("Failed to handle text message: {any}", .{e});
                         };
                         // Send immediate feedback if pane was modified
-                        if (pane.version != last_version) {
+                        if (pane.generation != last_generation) {
                             self.sendSnapshot(&ws, pane) catch {};
-                            last_version = pane.version;
+                            last_generation = pane.generation;
                         }
                     },
                     .binary => {
@@ -154,9 +154,9 @@ pub const WsServer = struct {
                             log.err("Failed to handle binary message: {any}", .{e});
                         };
                         // Send immediate feedback if pane was modified
-                        if (pane.version != last_version) {
+                        if (pane.generation != last_generation) {
                             self.sendSnapshot(&ws, pane) catch {};
-                            last_version = pane.version;
+                            last_generation = pane.generation;
                         }
                     },
                     .ping => {
@@ -178,13 +178,13 @@ pub const WsServer = struct {
                 // Check various timeout-related errors
                 if (e == error.WouldBlock or e == error.ConnectionTimedOut) {
                     // Timeout - check if pane was updated
-                    if (pane.version != last_version) {
-                        log.debug("Pane updated (v{d} -> v{d}), sending snapshot", .{ last_version, pane.version });
+                    if (pane.generation != last_generation) {
+                        log.debug("Pane updated (v{d} -> v{d}), sending snapshot", .{ last_generation, pane.generation });
                         self.sendSnapshot(&ws, pane) catch |send_err| {
                             log.err("Failed to send snapshot: {any}", .{send_err});
                             return;
                         };
-                        last_version = pane.version;
+                        last_generation = pane.generation;
                     }
                     continue;
                 } else if (e == error.ConnectionClosed) {
@@ -269,7 +269,7 @@ pub const WsServer = struct {
 
             log.info("Resize request: {d}x{d}", .{ resize_msg.value.cols, resize_msg.value.rows });
 
-            // Resize pane (this increments pane.version)
+            // Resize pane (this increments pane.generation)
             const pane = session.activePane() orelse return;
             try pane.resize(resize_msg.value.cols, resize_msg.value.rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {

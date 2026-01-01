@@ -377,6 +377,7 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("snapshot", allocator));
+    try payload.mapPut("gen", msgpack.Payload{ .uint = pane.generation }); // Generation counter for delta sync
     try payload.mapPut("cols", msgpack.Payload{ .uint = pane.cols });
     try payload.mapPut("rows", msgpack.Payload{ .uint = pane.rows });
 

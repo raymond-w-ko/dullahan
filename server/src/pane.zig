@@ -28,9 +28,10 @@ pub const Pane = struct {
     /// Whether this pane is active/focused
     active: bool = true,
 
-    /// Version counter - increments on any content change
-    /// Used to detect when clients need snapshot updates
-    version: u64 = 0,
+    /// Generation counter - increments on any content change
+    /// Used for delta sync protocol to detect what changed
+    /// See docs/delta-sync-design.md
+    generation: u64 = 0,
 
     /// PTY for this pane (null if no shell spawned)
     pty: ?Pty = null,
@@ -170,7 +171,7 @@ pub const Pane = struct {
         try stream.nextSlice(data);
 
         // Increment version to signal clients need update
-        self.version +%= 1;
+        self.generation +%= 1;
     }
     
     /// Handle terminal queries that require responses (DA1, etc.)
@@ -251,7 +252,7 @@ pub const Pane = struct {
         }
 
         // Increment version to signal clients need update
-        self.version +%= 1;
+        self.generation +%= 1;
     }
 
     /// Scroll the viewport by delta rows (negative = up, positive = down)
@@ -262,7 +263,7 @@ pub const Pane = struct {
         self.terminal.screens.active.scroll(.{ .delta_row = delta });
 
         // Increment version to signal clients need update
-        self.version +%= 1;
+        self.generation +%= 1;
 
         log.debug("Scrolled by {d} rows", .{delta});
     }

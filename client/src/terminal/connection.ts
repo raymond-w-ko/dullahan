@@ -17,6 +17,7 @@ export interface ScrollbackInfo {
 }
 
 export interface TerminalSnapshot {
+  gen: number; // Generation counter for delta sync
   cols: number;
   rows: number;
   cursor: {
@@ -35,6 +36,7 @@ export interface TerminalSnapshot {
 /** Binary msgpack snapshot from server */
 interface BinarySnapshot {
   type: "snapshot";
+  gen: number;         // Generation counter for delta sync
   cols: number;
   rows: number;
   cursor: {
@@ -134,6 +136,7 @@ export class TerminalConnection {
         const styles = this.decodeStyleTableFromBytes(msg.styles);
         const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
         const snapshot: TerminalSnapshot = {
+          gen: msg.gen,
           cols: msg.cols,
           rows: msg.rows,
           cursor: {
