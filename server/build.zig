@@ -11,7 +11,8 @@ pub fn build(b: *std.Build) void {
     });
 
     // Add ghostty-vt dependency (lazy so it's only fetched when needed)
-    if (b.lazyDependency("ghostty", .{})) |ghostty_dep| {
+    // MUST pass optimize to disable slow_runtime_safety checks in release builds!
+    if (b.lazyDependency("ghostty", .{ .optimize = optimize })) |ghostty_dep| {
         const ghostty_vt = ghostty_dep.module("ghostty-vt");
         dullahan_mod.addImport("ghostty-vt", ghostty_vt);
     }
