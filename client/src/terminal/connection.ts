@@ -167,9 +167,13 @@ export class TerminalConnection {
     this.ws.onmessage = (event) => {
       try {
         if (event.data instanceof ArrayBuffer) {
-          // Decompress with Snappy, then decode msgpack
-          const compressed = new Uint8Array(event.data);
-          const decompressed = SnappyJS.uncompress(compressed);
+          // Check compression header byte
+          const data = new Uint8Array(event.data);
+          const isCompressed = data[0] === 1;
+          const payload = data.slice(1);
+          
+          // Decompress if needed, then decode msgpack
+          const decompressed = isCompressed ? SnappyJS.uncompress(payload) : payload;
           const msg = decode(decompressed) as BinaryServerMessage;
           this.handleBinaryMessage(msg);
         } else {

@@ -24,10 +24,43 @@ const log = std.log.scoped(.snapshot);
 /// See docs/delta-sync-design.md for details.
 pub const PAGE_SIZE: u64 = 1000;
 
+/// Minimum payload size before compression is applied.
+/// Smaller payloads don't benefit from compression overhead.
+/// See docs/delta-sync-design.md for rationale.
+pub const COMPRESSION_THRESHOLD: usize = 256;
+
 /// Compute stable row_id from a pin's page serial and row index.
 /// Returns a unique, monotonic ID that persists until the row is pruned.
 pub fn computeRowId(pin: anytype) u64 {
     return pin.node.serial * PAGE_SIZE + pin.y;
+}
+
+/// Conditionally compress data with Snappy.
+/// Skips compression for small payloads where overhead exceeds benefit.
+/// Returns owned slice that caller must free.
+fn maybeCompress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    if (data.len < COMPRESSION_THRESHOLD) {
+        // Small payload - return uncompressed copy with 1-byte header
+        const result = try allocator.alloc(u8, data.len + 1);
+        result[0] = 0; // Header: not compressed
+        @memcpy(result[1..], data);
+        return result;
+    }
+
+    // Compress with Snappy
+    const compressed_max = snappy.raw.maxCompressedLength(data.len);
+    const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
+    errdefer allocator.free(compressed_buf);
+
+    compressed_buf[0] = 1; // Header: compressed
+    const compressed_len = snappy.raw.compress(data, compressed_buf[1..]) catch |e| {
+        log.err("Failed to compress: {any}", .{e});
+        return error.CompressionFailed;
+    };
+
+    // Trim to actual size
+    const result = try allocator.realloc(compressed_buf, compressed_len + 1);
+    return result;
 }
 
 // ============================================================================
@@ -434,29 +467,19 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Free payload after encoding
     payload.free(allocator);
 
-    // Compress with Snappy
+    // Conditionally compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
-    const compressed_buf = try allocator.alloc(u8, compressed_max);
-    errdefer allocator.free(compressed_buf);
-
-    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
-        log.err("Failed to compress snapshot: {any}", .{e});
-        allocator.free(buffer);
-        return error.SnappyCompressFailed;
-    };
+    const result = try maybeCompress(msgpack_data, allocator);
 
     // Free the uncompressed buffer
     allocator.free(buffer);
 
-    // Return trimmed compressed buffer
-    const result = try allocator.realloc(compressed_buf, compressed_len);
     return result;
 }
 
-/// Generate a binary msgpack pong message (compressed with Snappy)
+/// Generate a binary msgpack pong message
 pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     defer payload.free(allocator);
@@ -485,23 +508,13 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
         return error.MsgpackEncodeFailed;
     };
 
-    // Compress with Snappy
+    // Conditionally compress (pong is small, likely won't compress)
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
-    const compressed_buf = try allocator.alloc(u8, compressed_max);
-    errdefer allocator.free(compressed_buf);
-
-    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
-        log.err("Failed to compress pong: {any}", .{e});
-        allocator.free(buffer);
-        return error.SnappyCompressFailed;
-    };
-
+    const result = try maybeCompress(msgpack_data, allocator);
     allocator.free(buffer);
 
-    const result = try allocator.realloc(compressed_buf, compressed_len);
     return result;
 }
 
@@ -601,23 +614,13 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
 
     payload.free(allocator);
 
-    // Compress
+    // Conditionally compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const compressed_max = snappy.raw.maxCompressedLength(msgpack_len);
-    const compressed_buf = try allocator.alloc(u8, compressed_max);
-    errdefer allocator.free(compressed_buf);
-
-    const compressed_len = snappy.raw.compress(msgpack_data, compressed_buf) catch |e| {
-        log.err("Failed to compress delta: {any}", .{e});
-        allocator.free(buffer);
-        return error.SnappyCompressFailed;
-    };
-
+    const result = try maybeCompress(msgpack_data, allocator);
     allocator.free(buffer);
 
-    const result = try allocator.realloc(compressed_buf, compressed_len);
     return result;
 }
 
