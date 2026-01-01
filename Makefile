@@ -29,9 +29,7 @@ dist: dist-client-assets dist-server-embedded
 
 # Build client assets for embedding
 dist-client-assets: themes
-	@mkdir -p dist/client
 	cd client && NODE_ENV=production bun run build
-	cp -r client/dist/* dist/client/
 	bun scripts/generate-embedded-assets.ts
 	@echo "Client assets prepared for embedding"
 

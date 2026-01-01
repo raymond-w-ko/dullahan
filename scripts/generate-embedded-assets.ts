@@ -85,9 +85,12 @@ function prepareAssets(): Asset[] {
     }
   }
   
-  // JS bundle
+  // JS bundle + sourcemap
   if (copyAsset("client/dist/main.js", `${ASSETS_DIR}/main.js`)) {
     assets.push({ urlPath: "/main.js", embedPath: "assets/main.js", mimeType: "application/javascript" });
+  }
+  if (copyAsset("client/dist/main.js.map", `${ASSETS_DIR}/main.js.map`)) {
+    assets.push({ urlPath: "/main.js.map", embedPath: "assets/main.js.map", mimeType: "application/json" });
   }
   
   // Favicon
