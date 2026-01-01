@@ -308,10 +308,14 @@ pub const Server = struct {
             asset.mime_type,
         });
 
-        sendResponse(stream, "200 OK", &.{
+        // Send headers first, then stream body (files can be large)
+        sendResponseHeaders(stream, "200 OK", &.{
             .{ "Content-Type", asset.mime_type },
             .{ "Cache-Control", "public, max-age=31536000, immutable" },
-        }, asset.content) catch {};
+        }, asset.content.len) catch return true;
+
+        // Stream body
+        _ = stream.write(asset.content) catch {};
 
         return true;
     }
