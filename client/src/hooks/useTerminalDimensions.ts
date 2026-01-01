@@ -56,12 +56,18 @@ export function useTerminalDimensions(
       const availableWidth = container.clientWidth - paddingX;
       const availableHeight = container.clientHeight - paddingY;
 
-      const cols = Math.floor(availableWidth / cellWidth);
-      const rows = Math.floor(availableHeight / cellHeight);
+      // Calculate dimensions, clamping to reasonable bounds
+      // Min cellHeight of 8px prevents division by tiny values before fonts load
+      const safeCellWidth = Math.max(cellWidth, 4);
+      const safeCellHeight = Math.max(cellHeight, 8);
+      
+      const cols = Math.floor(availableWidth / safeCellWidth);
+      const rows = Math.floor(availableHeight / safeCellHeight);
 
+      // Clamp to reasonable terminal sizes (1-500 cols/rows)
       setDimensions({
-        cols: Math.max(1, cols),
-        rows: Math.max(1, rows),
+        cols: Math.max(1, Math.min(500, cols)),
+        rows: Math.max(1, Math.min(500, rows)),
         cellWidth,
         cellHeight,
       });

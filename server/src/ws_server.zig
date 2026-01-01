@@ -343,11 +343,19 @@ pub const WsServer = struct {
             };
             defer resize_msg.deinit();
 
-            log.info("Resize request: {d}x{d}", .{ resize_msg.value.cols, resize_msg.value.rows });
+            const cols = resize_msg.value.cols;
+            const rows = resize_msg.value.rows;
+            log.info("Resize request: {d}x{d}", .{ cols, rows });
+
+            // Validate dimensions (1-500 range, prevents buffer overflow attacks)
+            if (cols < 1 or cols > 500 or rows < 1 or rows > 500) {
+                log.warn("Rejecting invalid resize: {d}x{d} (must be 1-500)", .{ cols, rows });
+                return;
+            }
 
             // Resize pane (this increments pane.generation)
             const pane = session.activePane() orelse return;
-            try pane.resize(resize_msg.value.cols, resize_msg.value.rows);
+            try pane.resize(cols, rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             // Scroll request
             const scroll_msg = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{

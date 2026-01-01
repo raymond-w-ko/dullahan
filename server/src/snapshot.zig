@@ -16,6 +16,47 @@ const point = ghostty.point;
 const log = std.log.scoped(.snapshot);
 
 // ============================================================================
+// Buffer Stream for msgpack encoding
+// ============================================================================
+// 
+// The zig-msgpack compat layer uses std.io.FixedBufferStream for Zig < 0.16,
+// which can return PARTIAL writes when buffer fills. msgpack expects all-or-nothing
+// writes and returns LengthWriting error on partial writes.
+//
+// This custom BufferStream returns error.NoSpaceLeft instead of partial writes.
+
+const BufferStream = struct {
+    buffer: []u8,
+    pos: usize,
+
+    const Self = @This();
+
+    pub const WriteError = error{NoSpaceLeft};
+    pub const ReadError = error{EndOfStream};
+
+    pub fn init(buffer: []u8) Self {
+        return .{ .buffer = buffer, .pos = 0 };
+    }
+
+    pub fn write(self: *Self, bytes: []const u8) WriteError!usize {
+        const available = self.buffer.len - self.pos;
+        if (bytes.len > available) return error.NoSpaceLeft;
+        @memcpy(self.buffer[self.pos..][0..bytes.len], bytes);
+        self.pos += bytes.len;
+        return bytes.len;
+    }
+
+    pub fn read(self: *Self, dest: []u8) ReadError!usize {
+        const available = self.buffer.len - self.pos;
+        if (available == 0) return 0;
+        const to_read = @min(dest.len, available);
+        @memcpy(dest[0..to_read], self.buffer[self.pos..][0..to_read]);
+        self.pos += to_read;
+        return to_read;
+    }
+};
+
+// ============================================================================
 // Row ID Computation (for delta sync protocol)
 // ============================================================================
 
@@ -446,10 +487,10 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
-    var write_stream = msgpack.compat.fixedBufferStream(buffer);
-    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
 
-    const BufferType = msgpack.compat.BufferStream;
+    const BufferType = BufferStream;
     var packer = msgpack.Pack(
         *BufferType,
         *BufferType,
@@ -490,10 +531,10 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
-    var write_stream = msgpack.compat.fixedBufferStream(buffer);
-    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
 
-    const BufferType = msgpack.compat.BufferStream;
+    const BufferType = BufferStream;
     var packer = msgpack.Pack(
         *BufferType,
         *BufferType,
@@ -723,10 +764,10 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
-    var write_stream = msgpack.compat.fixedBufferStream(buffer);
-    var read_stream = msgpack.compat.fixedBufferStream(buffer);
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
 
-    const BufferType = msgpack.compat.BufferStream;
+    const BufferType = BufferStream;
     var packer = msgpack.Pack(
         *BufferType,
         *BufferType,
