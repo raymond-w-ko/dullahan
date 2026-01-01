@@ -156,6 +156,8 @@ Shows terminal cells with escape sequences visible:
 
 4. **The `m` is special** - It terminates the most common escape sequence type (SGR). Any SGR-heavy application will trigger splits at `m`.
 
+5. **Lazy initialization for self-referential structs** - The vt_stream captures a `*Terminal` pointer. If created during `Pane.init()`, the pointer becomes dangling when the Pane is returned (moved). Solution: make it optional and initialize on first use when Pane is at its final location.
+
 ## Related Files
 
 - `server/src/pane.zig` - Pane struct with persistent vt_stream
