@@ -612,6 +612,10 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     if (!empty) {
         const dirty_rows = pane.getDirtyRows();
 
+        // Track which row IDs we've added to viewport list (for O(1) lookup)
+        var viewport_row_ids = std.AutoHashMap(u64, void).init(allocator);
+        defer viewport_row_ids.deinit();
+
         // First pass: find dirty rows visible in viewport
         var y: usize = 0;
         while (y < pane.rows) : (y += 1) {
@@ -619,23 +623,16 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
             const row_id = computeRowId(pin);
             if (dirty_rows.contains(row_id)) {
                 try viewport_dirty.append(allocator, .{ .id = row_id, .y = @intCast(y) });
+                try viewport_row_ids.put(row_id, {});
             }
         }
 
         // Second pass: find dirty rows in scrollback (off-screen)
-        // We iterate screen coordinates and check if they're outside viewport
+        // O(dirty_rows) with O(1) lookup instead of O(dirty_rows × viewport_dirty)
         var it = dirty_rows.keyIterator();
         while (it.next()) |row_id_ptr| {
             const row_id = row_id_ptr.*;
-            // Check if this row is already in viewport list
-            var in_viewport = false;
-            for (viewport_dirty.items) |entry| {
-                if (entry.id == row_id) {
-                    in_viewport = true;
-                    break;
-                }
-            }
-            if (!in_viewport) {
+            if (!viewport_row_ids.contains(row_id)) {
                 try offscreen_dirty.append(allocator, .{ .id = row_id, .y = -1 });
             }
         }
