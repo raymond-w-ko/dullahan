@@ -23,6 +23,7 @@ pub const Window = @import("window.zig").Window;
 pub const Pane = @import("pane.zig").Pane;
 pub const Pty = @import("pty.zig").Pty;
 pub const PtyReader = @import("pty_reader.zig").PtyReader;
+pub const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
 
 // Ensure all tests from submodules are run
 test {

@@ -8,6 +8,7 @@ const posix = std.posix;
 const builtin = @import("builtin");
 const Session = @import("session.zig").Session;
 const Pane = @import("pane.zig").Pane;
+const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
 
 const log = std.log.scoped(.pty_reader);
 
@@ -60,8 +61,8 @@ pub const PtyReader = struct {
                 continue;
             }
 
-            // Poll with 10ms timeout for responsive echo
-            const ready = posix.poll(fds[0..nfds], 10) catch |e| {
+            // Poll with 1s timeout (just for shutdown check, data wakes immediately)
+            const ready = posix.poll(fds[0..nfds], 1000) catch |e| {
                 log.err("poll error: {any}", .{e});
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 continue;
@@ -92,6 +93,8 @@ pub const PtyReader = struct {
                             pane.feed(buf[0..n]) catch |e| {
                                 log.err("Failed to feed pane: {any}", .{e});
                             };
+                            // Signal WS threads that new data is available
+                            self.session.notify_pipe.signal();
                         }
                     }
                 }

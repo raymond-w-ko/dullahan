@@ -130,6 +130,11 @@ pub const Connection = struct {
         };
     }
 
+    /// Get underlying file descriptor for polling
+    pub fn getFd(self: *const Connection) std.posix.fd_t {
+        return self.stream.handle;
+    }
+
     /// Set read timeout for polling (0 = no timeout)
     pub fn setReadTimeout(self: *Connection, timeout_ms: u32) void {
         const timeout = std.posix.timeval{

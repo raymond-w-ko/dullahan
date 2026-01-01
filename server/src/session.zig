@@ -10,6 +10,7 @@ const posix = std.posix;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
+const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
 
 pub const Session = struct {
     /// Windows in this session, indexed by window ID
@@ -28,6 +29,9 @@ pub const Session = struct {
     /// Allocator
     allocator: std.mem.Allocator,
 
+    /// Notification pipe for PTY reader -> WS threads signaling
+    notify_pipe: NotifyPipe,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -40,6 +44,7 @@ pub const Session = struct {
             .default_cols = opts.cols,
             .default_rows = opts.rows,
             .allocator = allocator,
+            .notify_pipe = try NotifyPipe.init(),
         };
 
         // Create the initial window
@@ -49,6 +54,7 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Session) void {
+        self.notify_pipe.deinit();
         var it = self.windows.valueIterator();
         while (it.next()) |window| {
             window.deinit();

@@ -4,6 +4,7 @@
 //! Uses binary msgpack for efficient data transmission.
 
 const std = @import("std");
+const posix = std.posix;
 const msgpack = @import("msgpack");
 const http = @import("http.zig");
 const websocket = @import("websocket.zig");
@@ -135,15 +136,55 @@ pub const WsServer = struct {
 
         log.info("Snapshot sent, entering message loop", .{});
 
-        // Set read timeout for polling (10ms for responsive echo)
-        // This is a tradeoff: lower = more responsive, higher = less CPU
-        ws.setReadTimeout(10);
+        // Set socket to non-blocking for poll-based I/O
+        ws.setReadTimeout(0);
 
-        // Message loop with polling for pane updates
+        // Poll on both: WebSocket fd AND notify pipe
+        var poll_fds = [_]posix.pollfd{
+            .{ .fd = ws.getFd(), .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = session.notify_pipe.getFd(), .events = posix.POLL.IN, .revents = 0 },
+        };
+
+        // Message loop with event-driven updates (no polling!)
         while (true) {
-            const frame_result = ws.readFrame();
+            // Block until either: WebSocket has data OR PTY reader signaled
+            const ready = posix.poll(&poll_fds, -1) catch |e| {
+                log.err("poll error: {any}", .{e});
+                return;
+            };
 
-            if (frame_result) |frame| {
+            if (ready == 0) continue; // Spurious wakeup
+
+            // Check for WebSocket errors/hangup
+            if (poll_fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP) != 0) {
+                log.info("Client disconnected (poll)", .{});
+                return;
+            }
+
+            // Check for notify pipe signal (PTY reader has new data)
+            if (poll_fds[1].revents & posix.POLL.IN != 0) {
+                session.notify_pipe.drain();
+                // Send update if pane changed
+                if (pane.generation != last_generation) {
+                    log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
+                    self.sendUpdate(&ws, pane, last_generation) catch |send_err| {
+                        log.err("Failed to send update: {any}", .{send_err});
+                        return;
+                    };
+                    last_generation = pane.generation;
+                }
+            }
+
+            // Check for WebSocket data
+            if (poll_fds[0].revents & posix.POLL.IN != 0) {
+                const frame = ws.readFrame() catch |e| {
+                    if (e == error.ConnectionClosed) {
+                        log.info("Client disconnected", .{});
+                        return;
+                    }
+                    log.err("Read error: {any}", .{e});
+                    return;
+                };
                 defer self.allocator.free(frame.payload);
 
                 switch (frame.opcode) {
@@ -184,27 +225,11 @@ pub const WsServer = struct {
                         log.warn("Unknown opcode: {any}", .{@intFromEnum(frame.opcode)});
                     },
                 }
-            } else |e| {
-                // Check various timeout-related errors
-                if (e == error.WouldBlock or e == error.ConnectionTimedOut) {
-                    // Timeout - check if pane was updated
-                    if (pane.generation != last_generation) {
-                        log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
-                        self.sendUpdate(&ws, pane, last_generation) catch |send_err| {
-                            log.err("Failed to send update: {any}", .{send_err});
-                            return;
-                        };
-                        last_generation = pane.generation;
-                    }
-                    continue;
-                } else if (e == error.ConnectionClosed) {
-                    log.info("Client disconnected", .{});
-                    return;
-                } else {
-                    log.err("Read error (unexpected): {any}", .{e});
-                    return;
-                }
             }
+
+            // Reset revents for next poll
+            poll_fds[0].revents = 0;
+            poll_fds[1].revents = 0;
         }
     }
 
