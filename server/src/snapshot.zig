@@ -478,7 +478,7 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Encode to msgpack bytes
     // Use a buffer large enough for typical terminal snapshots
     // 80x24 terminal = 1920 cells * 8 bytes = ~15KB cells + styles + overhead
-    const max_size = 256 * 1024; // 256KB should be plenty
+    const max_size = 4 * 1024 * 1024; // 4MB for up to 500x500 terminals
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
@@ -747,7 +747,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     try payload.mapPut("styles", try msgpack.Payload.binToPayload(style_bytes, allocator));
 
     // Encode and compress
-    const max_size = 256 * 1024;
+    const max_size = 4 * 1024 * 1024;
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
