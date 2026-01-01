@@ -2,183 +2,127 @@
 
 ## Overview
 
-Communication between server and client uses WebSocket with JSON text messages.
-Cell data is sent as raw binary (base64-encoded within JSON).
+Communication between server and client uses WebSocket with:
+- **Server → Client**: Binary msgpack, compressed with Snappy
+- **Client → Server**: JSON text messages
 
-**Port**: 7681 (default, same as ttyd/libwebsockets)
+**Port**: 7681 (default)
+
+## Binary Protocol Stack
+
+```
+┌─────────────────────────────────┐
+│  Application (snapshot/delta)  │
+├─────────────────────────────────┤
+│  MessagePack encoding           │
+├─────────────────────────────────┤
+│  Snappy compression             │
+├─────────────────────────────────┤
+│  WebSocket binary frame         │
+└─────────────────────────────────┘
+```
+
+Client decoding:
+```typescript
+const compressed = new Uint8Array(event.data);
+const decompressed = SnappyJS.uncompress(compressed);
+const msg = decode(decompressed); // @msgpack/msgpack
+```
 
 ## Message Types
 
 ### Server → Client
 
-#### Snapshot
+#### Snapshot (Full State)
 
-Full terminal state, sent on connection and after changes.
+Sent on initial connection and when client is too far behind for delta.
 
-```json
+```typescript
 {
-  "type": "snapshot",
-  "data": {
-    "cols": 80,
-    "rows": 24,
-    "cursor": {
-      "x": 0,
-      "y": 0,
-      "visible": true,
-      "style": "block"
-    },
-    "altScreen": false,
-    "cells": "AAAA...base64...",
-    "styles": "AQAB...base64..."
-  }
+  type: "snapshot",
+  gen: number,           // Generation counter
+  cols: number,
+  rows: number,
+  cursor: {
+    x: number,
+    y: number,
+    visible: boolean,
+    style: "block" | "underline" | "bar",
+  },
+  altScreen: boolean,
+  scrollback: {
+    totalRows: number,   // Total rows including history
+    viewportTop: number, // Current scroll offset
+  },
+  cells: Uint8Array,     // Raw cell bytes (cols × rows × 8)
+  styles: Uint8Array,    // Style table
+  rowIds: Uint8Array,    // Packed u64 row IDs (rows × 8 bytes)
 }
 ```
 
-**Fields:**
-- `cols`, `rows` — Terminal dimensions
-- `cursor.x`, `cursor.y` — Cursor position (0-indexed)
-- `cursor.visible` — Whether cursor is shown
-- `cursor.style` — One of: `"block"`, `"underline"`, `"bar"`
-- `altScreen` — Whether alternate screen buffer is active
-- `cells` — Base64-encoded raw cell data (cols × rows × 8 bytes)
-- `styles` — Base64-encoded style table (see below)
+#### Delta (Incremental Update)
 
-#### Cell Binary Format
+Sent in response to sync request when client has recent state.
 
-Each cell is 8 bytes (64 bits), matching ghostty-vt's packed struct:
-
-```
-bits 0-1:   content_tag (2 bits)
-              0 = codepoint
-              1 = codepoint_grapheme (multi-codepoint)
-              2 = bg_color_palette (no text, just BG)
-              3 = bg_color_rgb (no text, just BG)
-bits 2-25:  content (24 bits)
-              - codepoint: Unicode codepoint (21 bits used)
-              - palette: palette index (8 bits)
-              - rgb: r[7:0] g[15:8] b[23:16]
-bits 26-41: style_id (16 bits) — index into style table
-bits 42-43: wide (2 bits)
-              0 = narrow (normal width)
-              1 = wide (double-width char, first cell)
-              2 = spacer_tail (second cell of wide char)
-              3 = spacer_head (soft-wrap continuation)
-bit 44:     protected
-bit 45:     hyperlink
-bits 46-63: padding (18 bits)
-```
-
-Decoding in JavaScript (little-endian):
 ```typescript
-const lo = view[i * 2];      // bits 0-31
-const hi = view[i * 2 + 1];  // bits 32-63
-
-const contentTag = lo & 0x3;
-const content = (lo >>> 2) & 0xFFFFFF;
-const styleId = ((lo >>> 26) & 0x3F) | ((hi & 0x3FF) << 6);
-const wide = (hi >>> 10) & 0x3;
-const protected = (hi >>> 12) & 0x1;
-const hyperlink = (hi >>> 13) & 0x1;
+{
+  type: "delta",
+  gen: number,           // New generation
+  cols: number,
+  rows: number,
+  vp: {
+    totalRows: number,
+    viewportTop: number,
+  },
+  dirtyRows: Array<{
+    id: number,          // Stable row ID
+    cells: Uint8Array,   // Cell bytes for this row
+  }>,
+}
 ```
-
-#### Style Table Binary Format
-
-The `styles` field contains a binary style table:
-
-```
-[count: u16]  // Number of non-default styles
-[
-  id: u16,           // Style ID (matches cell.style_id)
-  fg_color: 4 bytes, // [tag, v0, v1, v2]
-  bg_color: 4 bytes,
-  underline_color: 4 bytes,
-  flags: u16         // Packed attribute flags
-] × count
-```
-
-Color encoding (4 bytes):
-- Tag 0 = none (default color)
-- Tag 1 = palette index (v0 = index 0-255)
-- Tag 2 = RGB (v0=r, v1=g, v2=b)
-
-Flags (16 bits):
-```
-bit 0:     bold
-bit 1:     italic
-bit 2:     faint
-bit 3:     blink
-bit 4:     inverse
-bit 5:     invisible
-bit 6:     strikethrough
-bit 7:     overline
-bits 8-10: underline (0=none, 1=single, 2=double, 3=curly, 4=dotted, 5=dashed)
-```
-
-Style ID 0 is always the default style (not included in table).
 
 #### Pong
 
 Response to client ping.
 
-```json
-{
-  "type": "pong"
-}
+```typescript
+{ type: "pong" }
 ```
 
-### Client → Server
+### Client → Server (JSON)
 
 #### Key
 
-Keyboard event with full fidelity (1:1 with browser KeyboardEvent).
-Server converts to byte sequences for the PTY.
-
-Design note: Full event data preserved for future Kitty keyboard protocol support.
+Keyboard event with full fidelity.
 
 ```json
 {
   "type": "key",
-  "key": "a",           // Logical key value ("a", "Enter", "ArrowUp")
-  "code": "KeyA",       // Physical key code (layout-independent)
-  "keyCode": 65,        // Legacy keyCode (deprecated but useful)
-  "state": "down",      // "down" or "up"
+  "key": "a",
+  "code": "KeyA",
+  "keyCode": 65,
+  "state": "down",
   "ctrl": false,
   "alt": false,
   "shift": false,
   "meta": false,
   "repeat": false,
-  "timestamp": 12345.67 // High-res timestamp (performance.now())
-}
-```
-
-**Special key handling:**
-- Ctrl+letter → control character (Ctrl+A = 0x01)
-- Alt+key → ESC prefix (Alt+A = ESC A)
-- Arrow keys → ANSI sequences (↑ = ESC[A)
-- Function keys → F1=ESC OP, F5=ESC[15~, etc.
-- Enter → CR (0x0d)
-- Backspace → DEL (0x7f)
-- Tab → HT (0x09), Shift+Tab → ESC[Z
-
-**Timestamp use case:** Future ML-based keystroke dynamics analysis for
-forensic fingerprinting and anomaly detection.
-
-#### Text
-
-Composed text from IME (Input Method Editor) for CJK, emoji, etc.
-Sent as UTF-8, bypasses keyboard event conversion.
-
-```json
-{
-  "type": "text",
-  "data": "日本語",
   "timestamp": 12345.67
 }
 ```
 
-#### Resize
+#### Text
 
-Request to resize the terminal.
+IME composed text (CJK, emoji, etc).
+
+```json
+{
+  "type": "text",
+  "data": "日本語"
+}
+```
+
+#### Resize
 
 ```json
 {
@@ -188,37 +132,106 @@ Request to resize the terminal.
 }
 ```
 
-#### Ping
-
-Keep-alive ping.
+#### Scroll
 
 ```json
 {
-  "type": "ping"
+  "type": "scroll",
+  "delta": -5
 }
 ```
+
+#### Sync
+
+Request delta update from server.
+
+```json
+{
+  "type": "sync",
+  "gen": 500,
+  "minRowId": 1000
+}
+```
+
+#### Ping
+
+```json
+{ "type": "ping" }
+```
+
+## Cell Binary Format
+
+Each cell is 8 bytes (64 bits), matching ghostty-vt's packed struct:
+
+```
+bits 0-1:   content_tag (2 bits)
+              0 = codepoint
+              1 = codepoint_grapheme
+              2 = bg_color_palette
+              3 = bg_color_rgb
+bits 2-25:  content (24 bits)
+bits 26-41: style_id (16 bits)
+bits 42-43: wide (2 bits)
+bit 44:     protected
+bit 45:     hyperlink
+bits 46-63: padding
+```
+
+## Style Table Binary Format
+
+```
+[count: u16]
+[
+  id: u16,
+  fg_color: 4 bytes,   // [tag, v0, v1, v2]
+  bg_color: 4 bytes,
+  underline_color: 4 bytes,
+  flags: u16
+] × count
+```
+
+Color tags: 0=none, 1=palette, 2=RGB
+
+## Row ID Format
+
+Stable row identifiers for delta sync:
+
+```
+row_id = (page_serial × 1000) + row_index_in_page
+```
+
+- `page_serial`: Monotonic counter from ghostty's PageList
+- `row_index_in_page`: 0-999 within each page
+- Row IDs persist until the row is pruned from history
+
+## Delta Sync Protocol
+
+See `docs/delta-sync-design.md` for full design.
+
+**Flow:**
+1. Client connects, receives full snapshot
+2. Client tracks `generation` and `minRowId`
+3. On sync request, server checks if delta is possible
+4. If `client_gen >= dirty_base_gen`: send delta with dirty rows
+5. If client too stale: send full snapshot
+
+**Server dirty tracking:**
+- Tracks which row IDs changed since last clear
+- `dirty_base_gen`: generation when tracking started
+- Clients behind this need full resync
 
 ## Connection Flow
 
 1. Client connects via WebSocket to `ws://host:7681`
-2. Server immediately sends a `snapshot` message
-3. Client can send `input`, `resize`, or `ping` messages
-4. Server responds to changes with updated `snapshot` messages
-5. Server polls for pane changes (100ms) and pushes snapshots automatically
+2. Server sends initial snapshot (binary msgpack + snappy)
+3. Server polls pane generation, pushes snapshots on change
+4. Client can request explicit sync for delta updates
+5. Client sends input/resize/scroll as JSON
 
-## Update Mechanism
+## Bandwidth Comparison
 
-The server tracks a `version` counter on each pane:
-- Increments on `feed()` (terminal output) or `resize()`
-- WebSocket handler polls every 100ms
-- If version changed, sends new snapshot to all connected clients
-- Client input triggers immediate snapshot response (no polling delay)
-
-## Future Enhancements
-
-- **Binary frames**: Use WebSocket binary frames instead of base64 in JSON
-- **Delta updates**: Send only changed rows/cells
-- **MessagePack**: Switch to msgpack for smaller payloads
-- **Grapheme data**: Send multi-codepoint grapheme clusters
-- **Kitty keyboard protocol**: Full support for key event encoding with modifiers,
-  key release events, and Unicode codepoints (requires terminal app negotiation)
+| Scenario | JSON+base64 | Msgpack+Snappy |
+|----------|-------------|----------------|
+| 80×24 snapshot | ~45KB | ~15KB |
+| Delta (1 row) | N/A | ~200 bytes |
+| Empty delta | N/A | ~50 bytes |

@@ -142,7 +142,8 @@ dullahan/
 │       ├── http.zig         # HTTP server with WebSocket upgrade
 │       ├── websocket.zig    # WebSocket frame encoding/decoding
 │       ├── ws_server.zig    # WebSocket client handler
-│       ├── snapshot.zig     # Terminal state → JSON serialization
+│       ├── snapshot.zig     # Terminal state → msgpack + delta generation
+│       ├── embedded_assets.zig # Embedded client for single-binary dist
 │       ├── session.zig      # Session (contains windows)
 │       ├── window.zig       # Window (contains panes)
 │       ├── pane.zig         # Pane (terminal + PTY)
@@ -179,6 +180,7 @@ dullahan/
 │       └── style.test.ts    # Style tests (bun test)
 │
 ├── docs/                    # documentation
+│   ├── delta-sync-design.md # Delta sync protocol design (row IDs, generations)
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
 │   ├── terminal-state-sync.md # state sync design doc
 │   ├── 2024-12-29-websocket-sprint.md      # WebSocket implementation notes
@@ -187,7 +189,8 @@ dullahan/
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout
 │   ├── setup-beads.sh       # initialize beads issue tracking
-│   └── generate-themes.ts   # convert Ghostty themes to CSS
+│   ├── generate-themes.ts   # convert Ghostty themes to CSS
+│   └── generate-embedded-assets.ts # embed client in server binary
 │
 └── deps/                    # gitignored, source checkouts for reference
     ├── ghostty/             # ghostty source (synced to dependency version)
@@ -209,6 +212,46 @@ ls deps/ghostty/src/
 ```
 
 This checkout is gitignored and created/updated by the update script.
+
+### Wire Protocol
+
+Server→Client uses binary msgpack compressed with Snappy:
+- **Snapshot**: Full terminal state (cells, styles, cursor, rowIds, generation)
+- **Delta**: Incremental update (dirty rows only, for sync requests)
+
+Client→Server uses JSON:
+- **key/text**: Keyboard and IME input
+- **resize**: Terminal dimension changes
+- **scroll**: Viewport scrolling
+- **sync**: Request delta update with client's generation
+
+See `protocol/messages.md` for full specification.
+
+### Delta Sync Protocol
+
+Efficient synchronization using stable row IDs and generation counters.
+See `docs/delta-sync-design.md` for design details.
+
+**Key concepts:**
+- `row_id = (page_serial × 1000) + row_index` — stable identifier
+- `generation` — increments on any terminal change
+- `dirty_rows` — set of changed row IDs since last sync
+
+**Server state (pane.zig):**
+```zig
+generation: u64,                    // Increments on feed/resize/scroll
+dirty_rows: HashSet(u64),           // Row IDs changed since clear
+dirty_base_gen: u64,                // Generation when tracking started
+```
+
+**Client state (connection.ts):**
+```typescript
+_generation: number;                // Last sync'd generation
+_minRowId: bigint;                  // Oldest cached row
+_rowCache: Map<bigint, Cell[]>;     // Cached row data
+```
+
+**Debug UI:** Titlebar shows `Δ{deltas} ⟳{resyncs}` for sync statistics.
 
 ---
 
