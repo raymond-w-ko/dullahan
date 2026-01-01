@@ -226,15 +226,16 @@ html, body {
   background: var(--term-bg);
   color: var(--term-fg);
   padding: var(--term-padding-y) var(--term-padding-x);
-  overflow: auto;
+  overflow: hidden; /* Changed from auto - content must not expand container */
   margin: 0;
   font-family: var(--term-font);
   font-size: var(--term-font-size);
   font-weight: var(--term-font-weight, normal);
   font-feature-settings: var(--term-font-feature, normal);
   line-height: var(--term-line-height);
-  flex: 1;
+  flex: 1 1 0; /* Don't grow based on content, shrink to fit */
   min-height: 0;
+  max-height: 100%; /* Constrain to parent */
 }
 
 /* Scrollback indicator */
