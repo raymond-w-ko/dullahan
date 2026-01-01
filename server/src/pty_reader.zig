@@ -60,8 +60,8 @@ pub const PtyReader = struct {
                 continue;
             }
 
-            // Poll with 100ms timeout
-            const ready = posix.poll(fds[0..nfds], 100) catch |e| {
+            // Poll with 10ms timeout for responsive echo
+            const ready = posix.poll(fds[0..nfds], 10) catch |e| {
                 log.err("poll error: {any}", .{e});
                 std.Thread.sleep(100 * std.time.ns_per_ms);
                 continue;

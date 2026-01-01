@@ -135,8 +135,9 @@ pub const WsServer = struct {
 
         log.info("Snapshot sent, entering message loop", .{});
 
-        // Set read timeout for polling (100ms)
-        ws.setReadTimeout(100);
+        // Set read timeout for polling (10ms for responsive echo)
+        // This is a tradeoff: lower = more responsive, higher = less CPU
+        ws.setReadTimeout(10);
 
         // Message loop with polling for pane updates
         while (true) {
