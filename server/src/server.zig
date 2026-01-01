@@ -235,6 +235,19 @@ fn handleCommand(command: ipc.Command, state: *ServerState, allocator: std.mem.A
             const data = try buf.toOwnedSlice(allocator);
             break :blk ipc.Response.okWithData("State dump", data);
         },
+
+        .@"dump-raw" => blk: {
+            const pane = state.session.activePane() orelse
+                break :blk ipc.Response.err("No active pane");
+
+            var buf: std.ArrayListUnmanaged(u8) = .{};
+            const writer = buf.writer(allocator);
+
+            try pane.dumpRaw(writer);
+
+            const data = try buf.toOwnedSlice(allocator);
+            break :blk ipc.Response.okWithData("Raw cell dump", data);
+        },
     };
 }
 

@@ -406,6 +406,65 @@ pub const Pane = struct {
         }
         try writer.writeAll("---end---\n");
     }
+
+    /// Dump raw terminal cells with escape sequences and control chars visible.
+    /// Useful for debugging ANSI parsing issues (e.g., stray 'm' from SGR codes).
+    pub fn dumpRaw(self: *Pane, writer: anytype) !void {
+        self.lock();
+        defer self.unlock();
+
+        const screen = self.terminal.screens.active;
+        const cursor = screen.cursor;
+        const pages = &screen.pages;
+
+        try writer.print("Pane[{d}] {d}x{d} cur=({d},{d}) gen={d}\n", .{
+            self.id,
+            self.cols,
+            self.rows,
+            cursor.x,
+            cursor.y,
+            self.generation,
+        });
+
+        try writer.writeAll("---raw cells---\n");
+
+        var y: usize = 0;
+        while (y < self.rows) : (y += 1) {
+            try writer.print("{d:>3}|", .{y});
+
+            const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } });
+            if (pin == null) {
+                try writer.writeAll("(no pin)\n");
+                continue;
+            }
+
+            const cells = pin.?.cells(.all);
+            var x: usize = 0;
+            while (x < self.cols and x < cells.len) : (x += 1) {
+                const cell = cells[x];
+                const cp = cell.codepoint();
+
+                if (cp == 0) {
+                    // Empty cell
+                    try writer.writeAll("·");
+                } else if (cp < 32) {
+                    // Control character - show as ^X
+                    try writer.print("^{c}", .{@as(u8, @intCast(cp + 64))});
+                } else if (cp == 127) {
+                    try writer.writeAll("^?");
+                } else if (cp < 127) {
+                    // Normal ASCII
+                    try writer.print("{c}", .{@as(u8, @intCast(cp))});
+                } else {
+                    // Unicode - show codepoint
+                    try writer.print("U+{X:0>4}", .{cp});
+                }
+            }
+            try writer.writeAll("|\n");
+        }
+
+        try writer.writeAll("---end raw---\n");
+    }
 };
 
 // Tests
