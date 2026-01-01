@@ -1,4 +1,6 @@
-# Self-Pipe Implementation Plan for Dullahan
+# Self-Pipe Implementation for Dullahan
+
+**Status: IMPLEMENTED** (commit 4a9b481)
 
 ## Goal
 Eliminate polling latency by using a pipe to signal WS threads immediately when PTY reader has new data.
