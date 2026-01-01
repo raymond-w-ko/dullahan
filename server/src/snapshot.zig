@@ -544,29 +544,56 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     try payload.mapPut("cols", msgpack.Payload{ .uint = pane.cols });
     try payload.mapPut("rows", msgpack.Payload{ .uint = pane.rows });
 
-    // Build list of dirty rows that are in the current viewport
-    const DirtyEntry = struct { id: u64, y: usize };
-    var visible_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
-    defer visible_dirty.deinit(allocator);
+    // Build list of dirty rows, prioritizing visible viewport rows
+    // Viewport rows come first for faster perceived rendering
+    const DirtyEntry = struct {
+        id: u64,
+        y: i32, // viewport y, or -1 for off-screen rows
+    };
+    var viewport_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
+    defer viewport_dirty.deinit(allocator);
+    var offscreen_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
+    defer offscreen_dirty.deinit(allocator);
 
     if (!empty) {
         const dirty_rows = pane.getDirtyRows();
 
-        // Find which dirty rows are visible
+        // First pass: find dirty rows visible in viewport
         var y: usize = 0;
         while (y < pane.rows) : (y += 1) {
             const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
             const row_id = computeRowId(pin);
             if (dirty_rows.contains(row_id)) {
-                try visible_dirty.append(allocator, .{ .id = row_id, .y = y });
+                try viewport_dirty.append(allocator, .{ .id = row_id, .y = @intCast(y) });
+            }
+        }
+
+        // Second pass: find dirty rows in scrollback (off-screen)
+        // We iterate screen coordinates and check if they're outside viewport
+        var it = dirty_rows.keyIterator();
+        while (it.next()) |row_id_ptr| {
+            const row_id = row_id_ptr.*;
+            // Check if this row is already in viewport list
+            var in_viewport = false;
+            for (viewport_dirty.items) |entry| {
+                if (entry.id == row_id) {
+                    in_viewport = true;
+                    break;
+                }
+            }
+            if (!in_viewport) {
+                try offscreen_dirty.append(allocator, .{ .id = row_id, .y = -1 });
             }
         }
     }
 
-    // Create array with correct size
-    var rows_array = try msgpack.Payload.arrPayload(visible_dirty.items.len, allocator);
+    // Combine: viewport first, then off-screen
+    const total_dirty = viewport_dirty.items.len + offscreen_dirty.items.len;
+    var rows_array = try msgpack.Payload.arrPayload(total_dirty, allocator);
+    var array_idx: usize = 0;
 
-    for (visible_dirty.items, 0..) |item, idx| {
+    // Add viewport rows first (visible, high priority)
+    for (viewport_dirty.items) |item| {
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
 
         // Encode the row
@@ -584,7 +611,16 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         }
 
         try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
-        try rows_array.setArrElement(idx, row_map);
+        try rows_array.setArrElement(array_idx, row_map);
+        array_idx += 1;
+    }
+
+    // Add off-screen rows (lower priority, for scrollback consistency)
+    for (offscreen_dirty.items) |item| {
+        // Find this row by iterating pages - off-screen rows need screen coordinates
+        // For now, skip off-screen rows since we don't have an efficient lookup
+        // TODO(du-ipx): Implement proper off-screen row lookup when upgrading dirty tracking
+        _ = item;
     }
 
     try payload.mapPut("dirtyRows", rows_array);
