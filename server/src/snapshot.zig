@@ -641,14 +641,13 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         }
     }
 
-    // Combine: viewport first, then off-screen
-    const total_dirty = viewport_dirty.items.len + offscreen_dirty.items.len;
-    var rows_array = try msgpack.Payload.arrPayload(total_dirty, allocator);
-    var array_idx: usize = 0;
-
     // Track styles used by dirty rows (store encoded bytes to avoid cross-page issues)
     var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
     defer styles_map.deinit();
+
+    // Collect row payloads into a list first (since some may be skipped)
+    var row_payloads: std.ArrayListUnmanaged(msgpack.Payload) = .{};
+    defer row_payloads.deinit(allocator);
 
     // Add viewport rows first (visible, high priority)
     for (viewport_dirty.items) |item| {
@@ -679,8 +678,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         }
 
         try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
-        try rows_array.setArrElement(array_idx, row_map);
-        array_idx += 1;
+        try row_payloads.append(allocator, row_map);
     }
 
     // Add off-screen rows (lower priority, for scrollback consistency)
@@ -689,6 +687,12 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         // For now, skip off-screen rows since we don't have an efficient lookup
         // TODO(du-ipx): Implement proper off-screen row lookup when upgrading dirty tracking
         _ = item;
+    }
+
+    // Build the final array with exact size
+    var rows_array = try msgpack.Payload.arrPayload(row_payloads.items.len, allocator);
+    for (row_payloads.items, 0..) |row_map, i| {
+        try rows_array.setArrElement(i, row_map);
     }
 
     try payload.mapPut("dirtyRows", rows_array);
@@ -711,7 +715,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
     log.debug("Delta: {d} dirty rows, {d} row IDs ({d} bytes), first rowId={d}", .{
-        total_dirty,
+        row_payloads.items.len,
         pane.rows,
         row_ids_bytes.len,
         if (pane.rows > 0) row_ids[0] else 0,
