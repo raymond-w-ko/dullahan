@@ -38,3 +38,4 @@ Thumbs.db
 deps/
 dist/
 server/src/assets/
+perf*
