@@ -191,6 +191,14 @@ html, body {
   font-weight: 500;
 }
 
+.terminal-sync-stats {
+  color: var(--c6);
+  font-size: 0.7rem;
+  font-family: monospace;
+  margin-left: auto;
+  margin-right: 1rem;
+}
+
 .terminal-size {
   color: var(--c8);
   font-size: 0.7rem;

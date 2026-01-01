@@ -16,6 +16,7 @@ export function App() {
   const [connected, setConnected] = useState(false);
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [syncStats, setSyncStats] = useState({ deltas: 0, resyncs: 0, gen: 0 });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => config.get('theme'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
@@ -84,6 +85,22 @@ export function App() {
 
     conn.onSnapshot = (snap) => {
       setSnapshot(snap);
+      // Update sync stats from connection
+      setSyncStats({
+        deltas: conn.deltaCount,
+        resyncs: conn.resyncCount,
+        gen: snap.gen,
+      });
+    };
+
+    conn.onDelta = (delta) => {
+      // Update sync stats
+      setSyncStats({
+        deltas: conn.deltaCount,
+        resyncs: conn.resyncCount,
+        gen: delta.gen,
+      });
+      console.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
     };
 
     conn.connect();
@@ -125,6 +142,12 @@ export function App() {
           <div class="terminal-pane">
             <div class="terminal-titlebar">
               <span class="terminal-title">Terminal 1</span>
+              <span 
+                class="terminal-sync-stats" 
+                title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}
+              >
+                Δ{syncStats.deltas} ⟳{syncStats.resyncs}
+              </span>
               <span class="terminal-size" title={`Server: ${snapshot?.cols}×${snapshot?.rows}, Visible: ${calculatedDimensions.cols}×${calculatedDimensions.rows}`}>
                 {snapshot ? `${calculatedDimensions.cols}×${calculatedDimensions.rows}` : '—'}
               </span>
