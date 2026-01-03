@@ -5,6 +5,7 @@
 //! - Serves static files from a directory or embedded assets
 
 const std = @import("std");
+const posix = std.posix;
 const websocket = @import("websocket.zig");
 const embedded_assets = @import("embedded_assets.zig");
 
@@ -356,6 +357,42 @@ pub const Server = struct {
         sendResponse(stream, "500 Internal Server Error", &.{
             .{ "Content-Type", "text/html" },
         }, body) catch {};
+    }
+
+    /// Get the underlying socket fd for polling
+    pub fn getFd(self: *Server) posix.fd_t {
+        return self.listener.stream.handle;
+    }
+
+    /// Accept a connection with timeout (non-blocking with poll)
+    /// Returns null if timeout expires, error on failure, or WebSocket connection on success
+    /// timeout_ms: timeout in milliseconds (-1 for infinite)
+    pub fn acceptWebSocketTimeout(self: *Server, timeout_ms: i32) !?websocket.Connection {
+        // Poll the listener socket with timeout
+        var poll_fds = [_]posix.pollfd{
+            .{ .fd = self.listener.stream.handle, .events = posix.POLL.IN, .revents = 0 },
+        };
+
+        const ready = posix.poll(&poll_fds, timeout_ms) catch |e| {
+            return e;
+        };
+
+        // Timeout - no connection available
+        if (ready == 0) {
+            return null;
+        }
+
+        // Check for errors
+        if (poll_fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
+            return error.SocketError;
+        }
+
+        // Connection available - delegate to regular accept
+        if (poll_fds[0].revents & posix.POLL.IN != 0) {
+            return self.acceptWebSocket();
+        }
+
+        return null;
     }
 
     /// Accept a connection and handle HTTP/WebSocket upgrade

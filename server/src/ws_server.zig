@@ -86,14 +86,24 @@ pub const WsServer = struct {
         log.info("WebSocket server starting...", .{});
 
         while (self.running) {
-            // Accept new WebSocket connection
-            const ws_conn = self.http_server.acceptWebSocket() catch |e| {
+            // Accept new WebSocket connection with 100ms timeout
+            // This allows us to check self.running periodically
+            const ws_conn = self.http_server.acceptWebSocketTimeout(100) catch |e| {
                 if (e == error.ConnectionResetByPeer or e == error.BrokenPipe) {
+                    continue;
+                }
+                if (e == error.SocketError) {
+                    // Socket may have been closed during shutdown
+                    if (!self.running) break;
+                    log.err("Socket error", .{});
                     continue;
                 }
                 log.err("Accept error: {any}", .{e});
                 continue;
             };
+
+            // Timeout - no connection, loop continues to check self.running
+            if (ws_conn == null) continue;
 
             if (ws_conn) |conn| {
                 // Spawn thread for each WebSocket client so accept loop keeps running
@@ -106,6 +116,8 @@ pub const WsServer = struct {
                 thread.detach();
             }
         }
+
+        log.info("WebSocket server stopped", .{});
     }
 
     /// Thread entry point for client handling
@@ -145,15 +157,16 @@ pub const WsServer = struct {
             .{ .fd = session.notify_pipe.getFd(), .events = posix.POLL.IN, .revents = 0 },
         };
 
-        // Message loop with event-driven updates (no polling!)
-        while (true) {
-            // Block until either: WebSocket has data OR PTY reader signaled
-            const ready = posix.poll(&poll_fds, -1) catch |e| {
+        // Message loop with event-driven updates
+        // Uses 1000ms poll timeout to check for shutdown
+        while (self.running) {
+            // Poll with timeout to allow checking self.running for shutdown
+            const ready = posix.poll(&poll_fds, 1000) catch |e| {
                 log.err("poll error: {any}", .{e});
                 return;
             };
 
-            if (ready == 0) continue; // Spurious wakeup
+            if (ready == 0) continue; // Timeout - loop to check running flag
 
             // Check for WebSocket errors/hangup
             if (poll_fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP) != 0) {
