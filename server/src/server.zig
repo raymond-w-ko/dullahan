@@ -8,6 +8,7 @@ const Session = @import("session.zig").Session;
 const WsServer = @import("ws_server.zig").WsServer;
 const PtyReader = @import("pty_reader.zig").PtyReader;
 const http = @import("http.zig");
+const signal = @import("signal.zig");
 
 const log = std.log.scoped(.server);
 
@@ -69,6 +70,10 @@ pub const RunConfig = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
+    // Install signal handlers first
+    signal.install();
+    defer signal.reset();
+
     var state = try ServerState.init(allocator);
     defer state.deinit();
 
@@ -125,27 +130,45 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     if (static_dir) |dir| {
         std.debug.print("Serving static files from: {s}\n", .{dir});
     }
+    std.debug.print("Press Ctrl+C to shutdown\n", .{});
 
-    // Main IPC loop
-    while (state.running) {
-        const result = ipc_server.acceptCommand(allocator) catch |e| switch (e) {
+    // Main IPC loop - uses poll with 100ms timeout to check for signals
+    while (state.running and !signal.isShutdownRequested()) {
+        // Use timeout-based accept so we can check shutdown flag periodically
+        const result = ipc_server.acceptCommandTimeout(allocator, 100) catch |e| switch (e) {
             error.UnknownCommand => continue,
+            error.SocketError => {
+                // Socket was likely closed by signal handler
+                if (signal.isShutdownRequested()) break;
+                log.err("Socket error", .{});
+                continue;
+            },
             else => {
                 log.err("Accept error: {any}", .{e});
                 continue;
             },
         };
 
-        state.commands_processed += 1;
+        // Check if we got a command or just a timeout
+        if (result) |cmd_result| {
+            state.commands_processed += 1;
 
-        const response = handleCommand(result.command, &state, allocator) catch |e| blk: {
-            log.err("Command error: {any}", .{e});
-            break :blk ipc.Response.err("Internal error");
-        };
+            const response = handleCommand(cmd_result.command, &state, allocator) catch |e| blk: {
+                log.err("Command error: {any}", .{e});
+                break :blk ipc.Response.err("Internal error");
+            };
 
-        ipc_server.sendResponse(result.conn, response, allocator) catch |e| {
-            log.err("Send error: {any}", .{e});
-        };
+            ipc_server.sendResponse(cmd_result.conn, response, allocator) catch |e| {
+                log.err("Send error: {any}", .{e});
+            };
+        }
+        // If result is null, it was just a timeout - loop continues
+    }
+
+    // Log why we're shutting down
+    if (signal.isShutdownRequested()) {
+        log.info("Received shutdown signal", .{});
+        std.debug.print("\nReceived shutdown signal, cleaning up...\n", .{});
     }
 
     // Signal servers to stop

@@ -183,6 +183,57 @@ pub const Server = struct {
         return .{ .conn = conn, .command = command };
     }
 
+    /// Accept a connection with timeout (non-blocking with poll)
+    /// Returns null if timeout expires, otherwise returns the command
+    /// timeout_ms: timeout in milliseconds (-1 for infinite)
+    pub fn acceptCommandTimeout(self: *Server, allocator: std.mem.Allocator, timeout_ms: i32) !?struct { conn: posix.socket_t, command: Command } {
+        // Poll the socket with timeout
+        var poll_fds = [_]posix.pollfd{
+            .{ .fd = self.socket, .events = posix.POLL.IN, .revents = 0 },
+        };
+
+        const ready = posix.poll(&poll_fds, timeout_ms) catch |e| {
+            return e;
+        };
+
+        // Timeout - no connection
+        if (ready == 0) {
+            return null;
+        }
+
+        // Check for errors
+        if (poll_fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
+            return error.SocketError;
+        }
+
+        // Connection available - accept it
+        if (poll_fds[0].revents & posix.POLL.IN != 0) {
+            const conn = try posix.accept(self.socket, null, null, 0);
+            errdefer posix.close(conn);
+
+            var buf: [256]u8 = undefined;
+            const n = try posix.read(conn, &buf);
+            if (n == 0) return error.ConnectionClosed;
+
+            // Trim whitespace
+            const cmd_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
+
+            const command = Command.fromString(cmd_str) orelse {
+                // Send error response for unknown command
+                const resp = Response.err("Unknown command. Use 'help' for available commands.");
+                const formatted = try resp.format(allocator);
+                defer allocator.free(formatted);
+                _ = posix.write(conn, formatted) catch {};
+                posix.close(conn);
+                return error.UnknownCommand;
+            };
+
+            return .{ .conn = conn, .command = command };
+        }
+
+        return null;
+    }
+
     /// Send response to client
     pub fn sendResponse(self: *Server, conn: posix.socket_t, response: Response, allocator: std.mem.Allocator) !void {
         _ = self;
