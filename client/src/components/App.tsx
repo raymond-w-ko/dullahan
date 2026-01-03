@@ -18,6 +18,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState({ deltas: 0, resyncs: 0, gen: 0 });
+  const [terminalTitle, setTerminalTitle] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [theme, setTheme] = useState(() => config.get('theme'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
@@ -113,6 +114,12 @@ export function App() {
       debug.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
     };
 
+    conn.onTitle = (title) => {
+      setTerminalTitle(title);
+      // Also update the browser tab title
+      document.title = `${title} - Dullahan`;
+    };
+
     conn.connect();
 
     return () => {
@@ -151,7 +158,7 @@ export function App() {
           {/* Terminal 1 - Active */}
           <div class="terminal-pane">
             <div class="terminal-titlebar">
-              <span class="terminal-title">Terminal 1</span>
+              <span class="terminal-title">{terminalTitle || "Terminal 1"}</span>
               <span 
                 class="terminal-sync-stats" 
                 title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}

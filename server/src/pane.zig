@@ -61,6 +61,14 @@ pub const Pane = struct {
     /// that would be invalid if captured during init() (before Pane is at final location)
     vt_stream: ?@TypeOf(Terminal.vtStream(undefined)) = null,
 
+    /// Terminal title set by OSC 0/2 escape sequences
+    /// Shells use this to show working directory, command, etc.
+    title: ?[]const u8 = null,
+
+    /// Flag indicating title has changed since last read
+    /// Reset by clearTitleChanged(), used for push notifications
+    title_changed: bool = false,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -106,6 +114,12 @@ pub const Pane = struct {
         if (self.vt_stream) |*stream| {
             stream.deinit();
         }
+
+        // Free title if allocated
+        if (self.title) |t| {
+            self.allocator.free(t);
+        }
+
         self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
     }
@@ -189,7 +203,11 @@ pub const Pane = struct {
         // Check for DA1 request (CSI c or CSI 0 c) and respond
         // ghostty-vt's readonly handler ignores device_attributes, so we handle it here
         self.handleTerminalQueries(data);
-        
+
+        // Parse OSC sequences for title changes (OSC 0/2)
+        // ghostty-vt parses these but we handle them ourselves for simplicity
+        self.handleOscSequences(data);
+
         self.mutex.lock();
         defer self.mutex.unlock();
         
@@ -272,7 +290,7 @@ pub const Pane = struct {
         log.debug("Sent DA1 response", .{});
     }
     
-    /// Send Secondary Device Attributes response  
+    /// Send Secondary Device Attributes response
     /// Response format: CSI > <params> c
     fn sendDA2Response(self: *Pane) void {
         // Response: ESC [ > 1 ; 10 ; 0 c
@@ -284,6 +302,98 @@ pub const Pane = struct {
             log.warn("Failed to send DA2 response: {any}", .{e});
         };
         log.debug("Sent DA2 response", .{});
+    }
+
+    /// Parse OSC (Operating System Command) sequences for title changes.
+    /// OSC 0 = set icon name and window title
+    /// OSC 2 = set window title only
+    /// Format: ESC ] <cmd> ; <text> (BEL | ST)
+    /// BEL = 0x07, ST = ESC \ (0x1b 0x5c)
+    fn handleOscSequences(self: *Pane, data: []const u8) void {
+        var i: usize = 0;
+        while (i < data.len) : (i += 1) {
+            // Look for ESC ]
+            if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == ']') {
+                const osc_start = i + 2;
+                if (osc_start >= data.len) break;
+
+                // Parse OSC number (0 or 2 for title)
+                var cmd: u8 = 0;
+                var param_end = osc_start;
+                while (param_end < data.len and data[param_end] >= '0' and data[param_end] <= '9') {
+                    cmd = cmd * 10 + (data[param_end] - '0');
+                    param_end += 1;
+                }
+
+                // Skip if not OSC 0 or 2
+                if (cmd != 0 and cmd != 2) continue;
+
+                // Expect semicolon after command number
+                if (param_end >= data.len or data[param_end] != ';') continue;
+                const text_start = param_end + 1;
+
+                // Find terminator: BEL (0x07) or ST (ESC \)
+                var text_end = text_start;
+                var found_term = false;
+                while (text_end < data.len) : (text_end += 1) {
+                    if (data[text_end] == 0x07) {
+                        // BEL terminator
+                        found_term = true;
+                        break;
+                    }
+                    if (data[text_end] == 0x1b and text_end + 1 < data.len and data[text_end + 1] == '\\') {
+                        // ST terminator (ESC \)
+                        found_term = true;
+                        break;
+                    }
+                }
+
+                if (!found_term) continue;
+
+                // Extract title text
+                const title_text = data[text_start..text_end];
+                if (title_text.len > 0) {
+                    self.setTitle(title_text);
+                }
+
+                // Skip past this OSC sequence
+                i = text_end;
+            }
+        }
+    }
+
+    /// Set the terminal title, allocating a copy of the string
+    pub fn setTitle(self: *Pane, new_title: []const u8) void {
+        // Free old title if present
+        if (self.title) |old| {
+            self.allocator.free(old);
+        }
+
+        // Allocate and copy new title
+        const copy = self.allocator.dupe(u8, new_title) catch |e| {
+            log.warn("Failed to allocate title: {any}", .{e});
+            self.title = null;
+            return;
+        };
+
+        self.title = copy;
+        self.title_changed = true;
+        log.debug("Title set to: {s}", .{new_title});
+    }
+
+    /// Get the current title (or null if none set)
+    pub fn getTitle(self: *Pane) ?[]const u8 {
+        return self.title;
+    }
+
+    /// Check if title has changed since last cleared
+    pub fn hasTitleChanged(self: *Pane) bool {
+        return self.title_changed;
+    }
+
+    /// Clear the title changed flag
+    pub fn clearTitleChanged(self: *Pane) void {
+        self.title_changed = false;
     }
 
     /// Get a plain string representation of the terminal contents
@@ -602,4 +712,32 @@ test "dirty row tracking" {
     // Client with old generation needs resync
     try std.testing.expect(pane.needsFullResync(0));
     try std.testing.expect(!pane.needsFullResync(gen_before_clear));
+}
+
+test "OSC title parsing" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Initially no title
+    try std.testing.expect(pane.getTitle() == null);
+    try std.testing.expect(!pane.hasTitleChanged());
+
+    // Feed OSC 2 with BEL terminator
+    try pane.feed("\x1b]2;Hello World\x07");
+    try std.testing.expect(pane.hasTitleChanged());
+    try std.testing.expectEqualStrings("Hello World", pane.getTitle().?);
+
+    // Clear the changed flag
+    pane.clearTitleChanged();
+    try std.testing.expect(!pane.hasTitleChanged());
+
+    // Feed OSC 0 with ST terminator
+    try pane.feed("\x1b]0;New Title\x1b\\");
+    try std.testing.expect(pane.hasTitleChanged());
+    try std.testing.expectEqualStrings("New Title", pane.getTitle().?);
+
+    // Title with path (common shell prompt)
+    pane.clearTitleChanged();
+    try pane.feed("\x1b]2;user@host:~/projects\x07");
+    try std.testing.expectEqualStrings("user@host:~/projects", pane.getTitle().?);
 }

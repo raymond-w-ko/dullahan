@@ -475,6 +475,11 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
+    // Terminal title (if set)
+    if (pane.getTitle()) |title| {
+        try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
+    }
+
     // Encode to msgpack bytes
     // Use a buffer large enough for typical terminal snapshots
     // 80x24 terminal = 1920 cells * 8 bytes = ~15KB cells + styles + overhead
@@ -510,6 +515,47 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const result = try maybeCompress(msgpack_data, allocator);
 
     // Free the uncompressed buffer
+    allocator.free(buffer);
+
+    return result;
+}
+
+/// Generate a binary msgpack title message
+/// Sent when only the title changes (more efficient than full delta)
+pub fn generateTitleMessage(allocator: std.mem.Allocator, title: []const u8) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("title", allocator));
+    try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
+
+    const max_size = 1024;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack title: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    // Conditionally compress (title is small, likely won't compress)
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const result = try maybeCompress(msgpack_data, allocator);
     allocator.free(buffer);
 
     return result;
@@ -746,6 +792,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
     }
 
     try payload.mapPut("styles", try msgpack.Payload.binToPayload(style_bytes, allocator));
+
+    // Terminal title (if set)
+    if (pane.getTitle()) |title| {
+        try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
+    }
 
     // Encode and compress
     const max_size = 4 * 1024 * 1024;

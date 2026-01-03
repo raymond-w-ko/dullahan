@@ -81,9 +81,16 @@ interface BinaryDelta {
   styles: Uint8Array;  // Raw style bytes for dirty rows
 }
 
+/** Title update message from server */
+interface TitleMessage {
+  type: "title";
+  title: string;
+}
+
 export type BinaryServerMessage =
   | BinarySnapshot
   | BinaryDelta
+  | TitleMessage
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -125,6 +132,7 @@ export class TerminalConnection {
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
   public onOutput: ((data: string) => void) | null = null;
+  public onTitle: ((title: string) => void) | null = null;
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
@@ -260,6 +268,13 @@ export class TerminalConnection {
         debug.log(`Snapshot stored ${this._rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
 
         this.onSnapshot?.(snapshot);
+
+        // Extract title from snapshot if present
+        const snapshotTitle = (msg as any).title;
+        if (snapshotTitle && typeof snapshotTitle === 'string') {
+          debug.log("Snapshot includes title:", snapshotTitle);
+          this.onTitle?.(snapshotTitle);
+        }
         break;
       case "delta":
         debug.log("Raw delta message:", {
@@ -273,6 +288,10 @@ export class TerminalConnection {
         break;
       case "output":
         this.onOutput?.(msg.data);
+        break;
+      case "title":
+        debug.log("Received title:", msg.title);
+        this.onTitle?.(msg.title);
         break;
       case "pong":
         // Ignore pong
@@ -623,6 +642,13 @@ export class TerminalConnection {
 
     // Notify via onSnapshot (unified handler)
     this.onSnapshot?.(snapshot);
+
+    // Extract title from delta if present
+    const deltaTitle = (delta as any).title;
+    if (deltaTitle && typeof deltaTitle === 'string') {
+      debug.log("Delta includes title:", deltaTitle);
+      this.onTitle?.(deltaTitle);
+    }
   }
 
   private send(msg: ClientMessage): void {

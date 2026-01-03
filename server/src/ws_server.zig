@@ -164,6 +164,17 @@ pub const WsServer = struct {
             // Check for notify pipe signal (PTY reader has new data)
             if (poll_fds[1].revents & posix.POLL.IN != 0) {
                 session.notify_pipe.drain();
+
+                // Check for title change (send separate title message for efficiency)
+                if (pane.hasTitleChanged()) {
+                    if (pane.getTitle()) |title| {
+                        self.sendTitle(&ws, title) catch |send_err| {
+                            log.err("Failed to send title: {any}", .{send_err});
+                        };
+                    }
+                    pane.clearTitleChanged();
+                }
+
                 // Send update if pane changed
                 if (pane.generation != last_generation) {
                     log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
@@ -238,6 +249,13 @@ pub const WsServer = struct {
         const snap = try snapshot.generateBinarySnapshot(self.allocator, pane);
         defer self.allocator.free(snap);
         try ws.sendBinary(snap);
+    }
+
+    /// Send a title update to a single client
+    fn sendTitle(self: *WsServer, ws: *websocket.Connection, title: []const u8) !void {
+        const msg = try snapshot.generateTitleMessage(self.allocator, title);
+        defer self.allocator.free(msg);
+        try ws.sendBinary(msg);
     }
 
     /// Send update to client - delta if possible, full snapshot if needed
