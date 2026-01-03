@@ -172,7 +172,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     }
 
     // Signal servers to stop
-    ws_server.running = false;
+    ws_server.running.store(false, .release);
     pty_reader.stop();
     
     ws_thread.join();

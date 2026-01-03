@@ -14,7 +14,8 @@ const log = std.log.scoped(.pty_reader);
 
 pub const PtyReader = struct {
     allocator: std.mem.Allocator,
-    running: bool = true,
+    /// Atomic flag for cross-thread shutdown signaling
+    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     session: *Session,
 
     pub fn init(allocator: std.mem.Allocator, session: *Session) PtyReader {
@@ -30,7 +31,7 @@ pub const PtyReader = struct {
 
         var buf: [4096]u8 = undefined;
 
-        while (self.running) {
+        while (self.running.load(.acquire)) {
             // Collect all PTY fds from all panes
             var fds: [64]posix.pollfd = undefined;
             var pane_ptrs: [64]*Pane = undefined;
@@ -112,6 +113,6 @@ pub const PtyReader = struct {
     }
 
     pub fn stop(self: *PtyReader) void {
-        self.running = false;
+        self.running.store(false, .release);
     }
 };

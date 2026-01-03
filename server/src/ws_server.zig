@@ -68,7 +68,8 @@ const MessageType = struct {
 pub const WsServer = struct {
     http_server: http.Server,
     allocator: std.mem.Allocator,
-    running: bool = true,
+    /// Atomic flag for cross-thread shutdown signaling
+    running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
     pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8) !WsServer {
         return .{
@@ -85,7 +86,7 @@ pub const WsServer = struct {
     pub fn run(self: *WsServer, session: *Session) !void {
         log.info("WebSocket server starting...", .{});
 
-        while (self.running) {
+        while (self.running.load(.acquire)) {
             // Accept new WebSocket connection with 100ms timeout
             // This allows us to check self.running periodically
             const ws_conn = self.http_server.acceptWebSocketTimeout(100) catch |e| {
@@ -94,7 +95,7 @@ pub const WsServer = struct {
                 }
                 if (e == error.SocketError) {
                     // Socket may have been closed during shutdown
-                    if (!self.running) break;
+                    if (!self.running.load(.acquire)) break;
                     log.err("Socket error", .{});
                     continue;
                 }
@@ -159,7 +160,7 @@ pub const WsServer = struct {
 
         // Message loop with event-driven updates
         // Uses 1000ms poll timeout to check for shutdown
-        while (self.running) {
+        while (self.running.load(.acquire)) {
             // Poll with timeout to allow checking self.running for shutdown
             const ready = posix.poll(&poll_fds, 1000) catch |e| {
                 log.err("poll error: {any}", .{e});
