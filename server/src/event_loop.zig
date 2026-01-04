@@ -57,6 +57,11 @@ const SyncMessage = struct {
     minRowId: u64,
 };
 
+const FocusMessage = struct {
+    type: []const u8,
+    paneId: u16,
+};
+
 const MessageType = struct {
     type: []const u8,
 };
@@ -67,12 +72,30 @@ const MessageType = struct {
 
 pub const ClientState = struct {
     ws: websocket.Connection,
-    pane_generations: [3]u64 = .{ 0, 0, 0 },
+    pane_generations: std.AutoHashMap(u16, u64),
     connected: bool = true,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
+        return .{
+            .ws = ws,
+            .pane_generations = std.AutoHashMap(u16, u64).init(allocator),
+            .allocator = allocator,
+        };
+    }
 
     pub fn deinit(self: *ClientState) void {
+        self.pane_generations.deinit();
         self.ws.close();
         self.connected = false;
+    }
+
+    pub fn getGeneration(self: *ClientState, pane_id: u16) u64 {
+        return self.pane_generations.get(pane_id) orelse 0;
+    }
+
+    pub fn setGeneration(self: *ClientState, pane_id: u16, gen: u64) void {
+        self.pane_generations.put(pane_id, gen) catch {};
     }
 };
 
@@ -369,9 +392,7 @@ pub const EventLoop = struct {
         const ws_conn = try self.http_server.acceptWebSocket();
         if (ws_conn == null) return;
 
-        var client = ClientState{
-            .ws = ws_conn.?,
-        };
+        var client = ClientState.init(self.allocator, ws_conn.?);
 
         const window = self.session.activeWindow() orelse return;
         var pane_it = window.panes.valueIterator();
@@ -382,9 +403,7 @@ pub const EventLoop = struct {
                 return;
             };
             pane.clearDirtyRows();
-            if (pane.id < client.pane_generations.len) {
-                client.pane_generations[pane.id] = pane.generation;
-            }
+            client.setGeneration(pane.id, pane.generation);
         }
 
         // Set short read/write timeouts so the event loop doesn't block
@@ -482,9 +501,7 @@ pub const EventLoop = struct {
 
     fn sendPaneUpdate(self: *EventLoop, client: *ClientState, pane: *Pane) !void {
         const pane_id = pane.id;
-        if (pane_id >= client.pane_generations.len) return;
-
-        const last_gen = client.pane_generations[pane_id];
+        const last_gen = client.getGeneration(pane_id);
         if (pane.generation == last_gen) return;
 
         // Check if this is the active pane by looking at the session's active window
@@ -521,7 +538,7 @@ pub const EventLoop = struct {
             try client.ws.sendBinary(result.delta);
         }
 
-        client.pane_generations[pane_id] = pane.generation;
+        client.setGeneration(pane_id, pane.generation);
     }
 
     fn sendSnapshot(self: *EventLoop, ws: *websocket.Connection, pane: *Pane) !void {
@@ -607,6 +624,16 @@ pub const EventLoop = struct {
 
             const pane = self.session.activePane() orelse return;
             try self.handleSyncRequest(client, pane, sync_msg.value.gen);
+        } else if (std.mem.eql(u8, type_str, "focus")) {
+            const focus_msg = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return;
+            defer focus_msg.deinit();
+
+            const window = self.session.activeWindow() orelse return;
+            if (window.setActivePane(focus_msg.value.paneId)) {
+                log.info("Switched to pane {d}", .{focus_msg.value.paneId});
+            }
         }
     }
 
@@ -699,6 +726,13 @@ pub const EventLoop = struct {
             const pong = try snapshot.generateBinaryPong(self.allocator);
             defer self.allocator.free(pong);
             try client.ws.sendBinary(pong);
+        } else if (std.mem.eql(u8, type_str, "focus")) {
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+            const window = self.session.activeWindow() orelse return;
+            if (window.setActivePane(pane_id)) {
+                log.info("Switched to pane {d}", .{pane_id});
+            }
         }
     }
 
@@ -723,9 +757,7 @@ pub const EventLoop = struct {
             try client.ws.sendBinary(snap);
         }
 
-        if (pane.id < client.pane_generations.len) {
-            client.pane_generations[pane.id] = pane.generation;
-        }
+        client.setGeneration(pane.id, pane.generation);
     }
 };
 

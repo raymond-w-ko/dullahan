@@ -592,6 +592,13 @@ export class TerminalConnection {
     this.send({ type: "scroll", delta });
   }
 
+  /**
+   * Switch focus to a specific pane
+   */
+  sendFocus(paneId: number): void {
+    this.send({ type: "focus", paneId });
+  }
+
   sendPing(): void {
     this.send({ type: "ping" });
   }

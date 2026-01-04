@@ -233,7 +233,7 @@ export function App() {
             isReadOnly={true}
           />
 
-          {/* Pane 1 - Shell Terminal (active) */}
+          {/* Pane 1 - Shell Terminal */}
           <TerminalPane
             paneId={SHELL_PANE_1_ID}
             title={terminalTitle || "Shell 1"}
@@ -261,6 +261,8 @@ export function App() {
             cursorColor={cursorColor}
             cursorText={cursorText}
             cursorBlink={cursorBlink}
+            onDimensionsChange={handleDimensionsChange}
+            connection={connectionRef.current}
           />
         </div>
       </main>
@@ -422,8 +424,18 @@ function TerminalPane({
   // Use calculated dimensions if provided, otherwise use local measurement
   const displayDims = calculatedDimensions ?? dimensions;
 
+  // Handle click on pane to focus it
+  const handlePaneClick = useCallback(() => {
+    if (!isReadOnly && connection?.isConnected) {
+      connection.sendFocus(paneId);
+    }
+  }, [isReadOnly, connection, paneId]);
+
   return (
-    <div class={`terminal-pane${bellActive ? ' bell-active' : ''}${isReadOnly ? ' terminal-pane--readonly' : ''}`}>
+    <div
+      class={`terminal-pane${bellActive ? ' bell-active' : ''}${isReadOnly ? ' terminal-pane--readonly' : ''}`}
+      onClick={handlePaneClick}
+    >
       <div class="terminal-titlebar">
         <span
           class="terminal-title"

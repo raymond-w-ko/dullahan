@@ -95,6 +95,16 @@ pub const Window = struct {
         return self.getPane(self.active_pane_id);
     }
 
+    /// Set the active pane by ID
+    /// Returns true if the pane exists and was activated, false otherwise
+    pub fn setActivePane(self: *Window, pane_id: u16) bool {
+        if (self.panes.contains(pane_id)) {
+            self.active_pane_id = pane_id;
+            return true;
+        }
+        return false;
+    }
+
     /// Get pane count
     pub fn paneCount(self: *const Window) usize {
         return self.panes.count();
