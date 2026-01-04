@@ -397,28 +397,19 @@ Dullahan - [Δ 1,234 | ⟳ 2]
 
 This helps diagnose sync issues during development.
 
-### 3. Compression: Snappy with size threshold
+### 3. Compression: Always Snappy
 
-Reuse snappy for consistency, but skip for tiny payloads:
+All messages use Snappy compression for simplicity. The overhead for small
+messages is negligible (a few bytes), so conditional compression adds
+complexity without meaningful benefit.
 
 ```zig
-const COMPRESSION_THRESHOLD = 256; // bytes
-
-fn maybCompress(data: []const u8) []const u8 {
-    if (data.len < COMPRESSION_THRESHOLD) {
-        return data; // not worth the overhead
-    }
+fn compress(data: []const u8) []const u8 {
     return snappy.compress(data);
 }
 ```
 
-Message header indicates if compressed:
-```zig
-const MessageFlags = packed struct {
-    compressed: bool,
-    _reserved: u7 = 0,
-};
-```
+Message header byte is always `1` (compressed) for forward compatibility.
 
 ### 4. Wire Format: Extended msgpack schema
 

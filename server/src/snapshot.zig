@@ -65,30 +65,15 @@ const BufferStream = struct {
 /// See docs/delta-sync-design.md for details.
 pub const PAGE_SIZE: u64 = 1000;
 
-/// Minimum payload size before compression is applied.
-/// Smaller payloads don't benefit from compression overhead.
-/// See docs/delta-sync-design.md for rationale.
-pub const COMPRESSION_THRESHOLD: usize = 256;
-
 /// Compute stable row_id from a pin's page serial and row index.
 /// Returns a unique, monotonic ID that persists until the row is pruned.
 pub fn computeRowId(pin: anytype) u64 {
     return pin.node.serial * PAGE_SIZE + pin.y;
 }
 
-/// Conditionally compress data with Snappy.
-/// Skips compression for small payloads where overhead exceeds benefit.
-/// Returns owned slice that caller must free.
-fn maybeCompress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    if (data.len < COMPRESSION_THRESHOLD) {
-        // Small payload - return uncompressed copy with 1-byte header
-        const result = try allocator.alloc(u8, data.len + 1);
-        result[0] = 0; // Header: not compressed
-        @memcpy(result[1..], data);
-        return result;
-    }
-
-    // Compress with Snappy
+/// Compress data with Snappy.
+/// Returns owned slice with 1-byte header (always 1 = compressed) that caller must free.
+fn compress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const compressed_max = snappy.raw.maxCompressedLength(data.len);
     const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
     errdefer allocator.free(compressed_buf);
@@ -508,11 +493,11 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Free payload after encoding
     payload.free(allocator);
 
-    // Conditionally compress
+    // Compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const result = try maybeCompress(msgpack_data, allocator);
+    const result = try compress(msgpack_data, allocator);
 
     // Free the uncompressed buffer
     allocator.free(buffer);
@@ -551,11 +536,11 @@ pub fn generateTitleMessage(allocator: std.mem.Allocator, title: []const u8) ![]
         return error.MsgpackEncodeFailed;
     };
 
-    // Conditionally compress (title is small, likely won't compress)
+    // Compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const result = try maybeCompress(msgpack_data, allocator);
+    const result = try compress(msgpack_data, allocator);
     allocator.free(buffer);
 
     return result;
@@ -594,7 +579,7 @@ pub fn generateBellMessage(allocator: std.mem.Allocator) ![]u8 {
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const result = try maybeCompress(msgpack_data, allocator);
+    const result = try compress(msgpack_data, allocator);
     allocator.free(buffer);
 
     return result;
@@ -629,11 +614,11 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
         return error.MsgpackEncodeFailed;
     };
 
-    // Conditionally compress (pong is small, likely won't compress)
+    // Compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const result = try maybeCompress(msgpack_data, allocator);
+    const result = try compress(msgpack_data, allocator);
     allocator.free(buffer);
 
     return result;
@@ -870,11 +855,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
 
     payload.free(allocator);
 
-    // Conditionally compress
+    // Compress
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
-    const result = try maybeCompress(msgpack_data, allocator);
+    const result = try compress(msgpack_data, allocator);
     allocator.free(buffer);
 
     return result;
