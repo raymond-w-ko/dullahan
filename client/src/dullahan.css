@@ -148,8 +148,21 @@ html, body {
 
 .error {
   color: var(--c1);  /* red */
-  padding: var(--space-2);
-  margin-bottom: var(--space-2);
+  background-color: var(--term-bg);
+  padding: 0;
+  margin-bottom: 0;
+  animation: error-pulse 2s ease-in-out infinite;
+}
+
+@keyframes error-pulse {
+  0%, 100% {
+    color: var(--c1);
+    background-color: var(--term-bg);
+  }
+  50% {
+    color: var(--term-bg);
+    background-color: var(--c1);
+  }
 }
 
 /* ==========================================================================
