@@ -581,8 +581,12 @@ pub const EventLoop = struct {
 
             if (cols < 1 or cols > 500 or rows < 1 or rows > 500) return;
 
-            const pane = self.session.activePane() orelse return;
-            try pane.resize(cols, rows);
+            // Resize all panes, not just active (debug pane needs resize too)
+            const window = self.session.activeWindow() orelse return;
+            var pane_it = window.panes.valueIterator();
+            while (pane_it.next()) |pane| {
+                try pane.resize(cols, rows);
+            }
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             const scroll_msg = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -676,12 +680,16 @@ pub const EventLoop = struct {
                 log.err("Failed to write text to PTY: {any}", .{e});
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
-            const pane = self.session.activePane() orelse return;
             const cols_payload = (payload.mapGet("cols") catch return) orelse return;
             const rows_payload = (payload.mapGet("rows") catch return) orelse return;
             const cols: u16 = @intCast(cols_payload.getUint() catch return);
             const rows: u16 = @intCast(rows_payload.getUint() catch return);
-            try pane.resize(cols, rows);
+            // Resize all panes, not just active (debug pane needs resize too)
+            const window = self.session.activeWindow() orelse return;
+            var pane_it = window.panes.valueIterator();
+            while (pane_it.next()) |pane| {
+                try pane.resize(cols, rows);
+            }
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             const pane = self.session.activePane() orelse return;
             const delta_payload = (payload.mapGet("delta") catch return) orelse return;
