@@ -99,7 +99,7 @@ pub fn main() !void {
         const full_snapshot = try snapshot.generateBinarySnapshot(allocator, &pane);
         defer allocator.free(full_snapshot);
 
-        const delta_data = try snapshot.generateDelta(allocator, &pane, false);
+        const delta_data = try snapshot.generateDelta(allocator, &pane, 0, false);
         defer allocator.free(delta_data);
 
         log.info("Full snapshot: {d} bytes", .{full_snapshot.len});

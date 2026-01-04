@@ -112,7 +112,7 @@ fn generateTestCase(allocator: std.mem.Allocator, out_dir: []const u8, tc: TestC
     });
 
     // Generate delta (captures changes from A to B)
-    const delta = try snapshot.generateDelta(allocator, &pane, false);
+    const delta = try snapshot.generateDelta(allocator, &pane, 0, false);
     defer allocator.free(delta);
 
     log.debug("Delta: {d} bytes", .{delta.len});
@@ -196,7 +196,7 @@ pub fn generateTestData(allocator: std.mem.Allocator, tc: TestCase) !struct {
 
     const gen_b = pane.generation;
 
-    const delta_data = try snapshot.generateDelta(allocator, &pane, false);
+    const delta_data = try snapshot.generateDelta(allocator, &pane, gen_a, false);
     errdefer allocator.free(delta_data);
 
     return .{
