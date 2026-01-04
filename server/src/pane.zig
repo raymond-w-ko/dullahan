@@ -404,9 +404,29 @@ pub const Pane = struct {
     }
 
     /// Check for bell character (BEL = 0x07) in input data
+    /// Skips BEL characters that are OSC sequence terminators (ESC ] ... BEL)
     fn handleBell(self: *Pane, data: []const u8) void {
-        for (data) |byte| {
-            if (byte == 0x07) {
+        var i: usize = 0;
+        while (i < data.len) : (i += 1) {
+            // Check for OSC sequence start (ESC ])
+            if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == ']') {
+                // Skip to end of OSC sequence (BEL or ST terminator)
+                i += 2;
+                while (i < data.len) : (i += 1) {
+                    if (data[i] == 0x07) {
+                        // BEL terminator - this is NOT a bell, skip it
+                        break;
+                    }
+                    if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == '\\') {
+                        // ST terminator (ESC \)
+                        i += 1;
+                        break;
+                    }
+                }
+                continue;
+            }
+            // Standalone BEL - this is a real bell
+            if (data[i] == 0x07) {
                 self.bell_pending = true;
                 log.debug("Bell triggered", .{});
                 return; // One bell per feed is enough
@@ -787,5 +807,32 @@ test "bell detection" {
 
     // Bell in middle of text
     try pane.feed("Hello\x07World");
+    try std.testing.expect(pane.hasBell());
+}
+
+test "bell detection skips OSC terminators" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // OSC 0 (set title) with BEL terminator - should NOT trigger bell
+    try pane.feed("\x1b]0;My Title\x07");
+    try std.testing.expect(!pane.hasBell());
+
+    // OSC 2 (set title) with BEL terminator - should NOT trigger bell
+    try pane.feed("\x1b]2;Another Title\x07");
+    try std.testing.expect(!pane.hasBell());
+
+    // OSC with ST terminator (ESC \) - should NOT trigger bell
+    try pane.feed("\x1b]0;Title\x1b\\");
+    try std.testing.expect(!pane.hasBell());
+
+    // Mix: OSC followed by real bell - only real bell should trigger
+    try pane.feed("\x1b]0;Title\x07\x07");
+    try std.testing.expect(pane.hasBell());
+
+    pane.clearBell();
+
+    // Text with OSC in middle and real bell after
+    try pane.feed("Hello\x1b]0;Title\x07World\x07");
     try std.testing.expect(pane.hasBell());
 }
