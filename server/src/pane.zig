@@ -48,11 +48,7 @@ pub const Pane = struct {
 
     /// Child process ID (null if no shell spawned)
     child_pid: ?posix.pid_t = null,
-    
-    /// Mutex protecting terminal state access
-    /// Required because PTY reader and WebSocket snapshot run on different threads
-    mutex: std.Thread.Mutex = .{},
-    
+
     /// Debug capture file for recording PTY output as hex
     /// Set via startCapture(), cleared via stopCapture()
     capture_file: ?std.fs.File = null,
@@ -73,10 +69,6 @@ pub const Pane = struct {
     /// Flag indicating bell was triggered (BEL 0x07 received)
     /// Reset by clearBell(), used for push notifications to clients
     bell_pending: bool = false,
-
-    /// Broadcast coordination for delta sync
-    /// Ensures only one thread generates delta per generation update
-    broadcast_mutex: std.Thread.Mutex = .{},
 
     /// Generation of the last broadcast delta
     last_broadcast_gen: u64 = 0,
@@ -188,9 +180,6 @@ pub const Pane = struct {
     /// Write directly to terminal buffer (no PTY required).
     /// Used for virtual panes like debug output that have no shell.
     pub fn feedDirect(self: *Pane, data: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         // Lazily initialize VT stream
         if (self.vt_stream == null) {
             self.vt_stream = self.terminal.vtStream();
@@ -224,16 +213,6 @@ pub const Pane = struct {
         }
         return false;
     }
-    
-    /// Lock terminal state for reading (used by snapshot generation)
-    pub fn lock(self: *Pane) void {
-        self.mutex.lock();
-    }
-    
-    /// Unlock terminal state
-    pub fn unlock(self: *Pane) void {
-        self.mutex.unlock();
-    }
 
     /// Feed raw bytes into the terminal (e.g., from process stdout)
     /// This processes VT escape sequences including colors, cursor movement, etc.
@@ -254,9 +233,6 @@ pub const Pane = struct {
         // Check for bell character (BEL 0x07)
         self.handleBell(data);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        
         // Use persistent VT stream to handle escape sequences split across reads
         // The stream maintains parser state between calls
         // Lazily initialize on first use (see comment on vt_stream field)
@@ -490,9 +466,6 @@ pub const Pane = struct {
 
     /// Resize the pane
     pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
@@ -514,9 +487,6 @@ pub const Pane = struct {
 
     /// Scroll the viewport by delta rows (negative = up, positive = down)
     pub fn scroll(self: *Pane, delta: i32) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
         self.terminal.screens.active.scroll(.{ .delta_row = delta });
 
         // Scrolling changes which rows are visible - mark all dirty
@@ -561,16 +531,12 @@ pub const Pane = struct {
 
     /// Get count of dirty rows
     pub fn getDirtyRowCount(self: *Pane) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         return self.dirty_rows.count();
     }
 
     /// Clear dirty row tracking and update base generation.
     /// Called after successfully sending delta to client.
     pub fn clearDirtyRows(self: *Pane) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         self.dirty_rows.clearRetainingCapacity();
         self.dirty_base_gen = self.generation;
     }
@@ -578,19 +544,13 @@ pub const Pane = struct {
     /// Check if a client with given generation needs full resync.
     /// Returns true if client is too far behind (dirty tracking doesn't go back that far).
     pub fn needsFullResync(self: *Pane, client_gen: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
         return client_gen < self.dirty_base_gen;
     }
 
     /// Get the broadcast delta for the current generation.
-    /// Thread-safe: ensures only one thread generates the delta, all others get cached copy.
-    /// Returns owned slice that caller must free, or null if no update needed.
+    /// Returns owned slice that caller must free.
     /// Also returns the fromGen that clients must be at to apply this delta.
     pub fn getBroadcastDelta(self: *Pane) !struct { delta: []u8, from_gen: u64 } {
-        self.broadcast_mutex.lock();
-        defer self.broadcast_mutex.unlock();
-
         // Check if we already have a cached delta for current generation
         if (self.cached_delta != null and self.last_broadcast_gen == self.generation) {
             // Return a copy of cached delta
@@ -601,7 +561,7 @@ pub const Pane = struct {
         // Need to generate new delta
         const from_gen = self.last_broadcast_gen;
 
-        // Generate delta (this locks self.mutex internally)
+        // Generate delta
         const delta = try snapshot.generateDelta(self.allocator, self, from_gen, false);
 
         // Free old cached delta
@@ -615,13 +575,8 @@ pub const Pane = struct {
         self.last_broadcast_gen = self.generation;
 
         // Clear dirty rows now that delta is generated
-        // Need to lock mutex since dirty_rows is protected by it
-        {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            self.dirty_rows.clearRetainingCapacity();
-            self.dirty_base_gen = self.generation;
-        }
+        self.dirty_rows.clearRetainingCapacity();
+        self.dirty_base_gen = self.generation;
 
         // Return a copy (caller owns it)
         const copy = try self.allocator.dupe(u8, delta);
@@ -684,9 +639,6 @@ pub const Pane = struct {
     /// Dump raw terminal cells with escape sequences and control chars visible.
     /// Useful for debugging ANSI parsing issues (e.g., stray 'm' from SGR codes).
     pub fn dumpRaw(self: *Pane, writer: anytype) !void {
-        self.lock();
-        defer self.unlock();
-
         const screen = self.terminal.screens.active;
         const cursor = screen.cursor;
         const pages = &screen.pages;

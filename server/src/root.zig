@@ -22,8 +22,9 @@ pub const Session = @import("session.zig").Session;
 pub const Window = @import("window.zig").Window;
 pub const Pane = @import("pane.zig").Pane;
 pub const Pty = @import("pty.zig").Pty;
-pub const PtyReader = @import("pty_reader.zig").PtyReader;
-pub const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
+
+// Event loop (single-threaded I/O)
+pub const EventLoop = @import("event_loop.zig").EventLoop;
 
 // Utilities
 pub const process = @import("process.zig");

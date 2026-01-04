@@ -335,10 +335,6 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
 /// Generate a JSON snapshot of the terminal state with raw cell data
 pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
-    // Lock pane to prevent concurrent modification during snapshot
-    pane.lock();
-    defer pane.unlock();
-
     const screen = pane.terminal.screens.active;
     const cursor = screen.cursor;
 
@@ -404,10 +400,6 @@ pub fn generateOutputMessage(allocator: std.mem.Allocator, data: []const u8) ![]
 
 /// Generate a binary msgpack snapshot of the terminal state
 pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
-    // Lock pane to prevent concurrent modification during snapshot
-    pane.lock();
-    defer pane.unlock();
-
     const screen = pane.terminal.screens.active;
     const cursor = screen.cursor;
 
@@ -629,9 +621,6 @@ pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
 /// If empty is true, generates a minimal delta with no row changes
 /// from_gen: the generation this delta applies FROM (client must be at this gen to apply)
 pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, empty: bool) ![]u8 {
-    pane.lock();
-    defer pane.unlock();
-
     const screen = pane.terminal.screens.active;
     const pages = &screen.pages;
     const scrollbar = pages.scrollbar();

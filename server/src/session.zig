@@ -15,7 +15,6 @@ const posix = std.posix;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
-const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
 
 /// Debug pane ID (virtual pane for debug output, no shell)
 pub const DEBUG_PANE_ID: u16 = 0;
@@ -43,9 +42,6 @@ pub const Session = struct {
     /// Allocator
     allocator: std.mem.Allocator,
 
-    /// Notification pipe for PTY reader -> WS threads signaling
-    notify_pipe: NotifyPipe,
-
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -58,7 +54,6 @@ pub const Session = struct {
             .default_cols = opts.cols,
             .default_rows = opts.rows,
             .allocator = allocator,
-            .notify_pipe = try NotifyPipe.init(),
         };
 
         // Create window without auto-creating pane (we'll create 3 manually)
@@ -96,7 +91,6 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: *Session) void {
-        self.notify_pipe.deinit();
         var it = self.windows.valueIterator();
         while (it.next()) |window| {
             window.deinit();
@@ -214,9 +208,6 @@ pub const Session = struct {
 
         // Feed to debug pane
         debug_pane.feedDirect(fbs.getWritten()) catch {};
-
-        // Signal that debug pane has new content
-        self.notify_pipe.signal();
     }
 
     /// Get window count
