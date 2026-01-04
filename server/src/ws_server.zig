@@ -14,6 +14,7 @@ const http = @import("http.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
 const Session = @import("session.zig").Session;
+const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
 
 const log = std.log.scoped(.ws_server);
@@ -138,21 +139,28 @@ pub const WsServer = struct {
         var ws = conn;
         defer ws.close();
 
-        log.info("Client connected, sending initial snapshot", .{});
+        log.info("Client connected, sending initial snapshots for all panes", .{});
 
-        // Get the active pane
-        const pane = session.activePane() orelse {
-            log.err("No active pane", .{});
+        // Get active window to iterate all panes
+        const window = session.activeWindow() orelse {
+            log.err("No active window", .{});
             return;
         };
 
-        // Send initial snapshot
-        var last_generation = pane.generation;
-        try self.sendSnapshot(&ws, pane);
-        // Clear dirty tracking - client now has full state
-        pane.clearDirtyRows();
+        // Track generation for each pane (indexed by pane ID)
+        var pane_generations: [3]u64 = .{ 0, 0, 0 };
 
-        log.info("Snapshot sent, entering message loop", .{});
+        // Send initial snapshot for ALL panes
+        var pane_it = window.panes.valueIterator();
+        while (pane_it.next()) |pane| {
+            try self.sendSnapshot(&ws, pane);
+            pane.clearDirtyRows();
+            if (pane.id < pane_generations.len) {
+                pane_generations[pane.id] = pane.generation;
+            }
+        }
+
+        log.info("Snapshots sent for {d} panes, entering message loop", .{window.paneCount()});
 
         // Set socket to non-blocking for poll-based I/O
         ws.setReadTimeout(0);
@@ -184,32 +192,43 @@ pub const WsServer = struct {
             if (poll_fds[1].revents & posix.POLL.IN != 0) {
                 session.notify_pipe.drain();
 
-                // Check for title change (send separate title message for efficiency)
-                if (pane.hasTitleChanged()) {
-                    if (pane.getTitle()) |title| {
-                        self.sendTitle(&ws, title) catch |send_err| {
-                            log.err("Failed to send title: {any}", .{send_err});
-                        };
+                // Check ALL panes for updates
+                var update_it = window.panes.valueIterator();
+                while (update_it.next()) |pane| {
+                    const pane_id = pane.id;
+                    if (pane_id >= pane_generations.len) continue;
+
+                    const last_gen = pane_generations[pane_id];
+
+                    // Check for title change on active pane only
+                    if (pane_id == window.active_pane_id) {
+                        if (pane.hasTitleChanged()) {
+                            if (pane.getTitle()) |title| {
+                                self.sendTitle(&ws, title) catch |send_err| {
+                                    log.err("Failed to send title: {any}", .{send_err});
+                                };
+                            }
+                            pane.clearTitleChanged();
+                        }
+
+                        // Check for bell on active pane only
+                        if (pane.hasBell()) {
+                            self.sendBell(&ws) catch |send_err| {
+                                log.err("Failed to send bell: {any}", .{send_err});
+                            };
+                            pane.clearBell();
+                        }
                     }
-                    pane.clearTitleChanged();
-                }
 
-                // Check for bell (send separate bell message)
-                if (pane.hasBell()) {
-                    self.sendBell(&ws) catch |send_err| {
-                        log.err("Failed to send bell: {any}", .{send_err});
-                    };
-                    pane.clearBell();
-                }
-
-                // Send update if pane changed
-                if (pane.generation != last_generation) {
-                    log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
-                    self.sendUpdate(&ws, pane, last_generation) catch |send_err| {
-                        log.err("Failed to send update: {any}", .{send_err});
-                        return;
-                    };
-                    last_generation = pane.generation;
+                    // Send update if this pane changed
+                    if (pane.generation != last_gen) {
+                        log.debug("Pane {d} updated (v{d} -> v{d}), sending delta", .{ pane_id, last_gen, pane.generation });
+                        self.sendUpdate(&ws, pane, last_gen) catch |send_err| {
+                            log.err("Failed to send update for pane {d}: {any}", .{ pane_id, send_err });
+                            return;
+                        };
+                        pane_generations[pane_id] = pane.generation;
+                    }
                 }
             }
 
@@ -231,22 +250,16 @@ pub const WsServer = struct {
                         self.handleClientMessage(frame.payload, session, &ws) catch |e| {
                             log.err("Failed to handle text message: {any}", .{e});
                         };
-                        // Send immediate feedback if pane was modified
-                        if (pane.generation != last_generation) {
-                            self.sendUpdate(&ws, pane, last_generation) catch {};
-                            last_generation = pane.generation;
-                        }
+                        // Send immediate feedback for any modified panes
+                        self.sendAllPaneUpdates(window, &ws, &pane_generations) catch {};
                     },
                     .binary => {
                         // Parse msgpack client message
                         self.handleBinaryMessage(frame.payload, session, &ws) catch |e| {
                             log.err("Failed to handle binary message: {any}", .{e});
                         };
-                        // Send immediate feedback if pane was modified
-                        if (pane.generation != last_generation) {
-                            self.sendUpdate(&ws, pane, last_generation) catch {};
-                            last_generation = pane.generation;
-                        }
+                        // Send immediate feedback for any modified panes
+                        self.sendAllPaneUpdates(window, &ws, &pane_generations) catch {};
                     },
                     .ping => {
                         ws.sendPong(frame.payload) catch {};
@@ -290,6 +303,21 @@ pub const WsServer = struct {
         const msg = try snapshot.generateBellMessage(self.allocator);
         defer self.allocator.free(msg);
         try ws.sendBinary(msg);
+    }
+
+    /// Send updates for any panes that have changed
+    fn sendAllPaneUpdates(self: *WsServer, window: *Window, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
+        var it = window.panes.valueIterator();
+        while (it.next()) |pane| {
+            const pane_id = pane.id;
+            if (pane_id >= pane_generations.len) continue;
+
+            const last_gen = pane_generations[pane_id];
+            if (pane.generation != last_gen) {
+                try self.sendUpdate(ws, pane, last_gen);
+                pane_generations[pane_id] = pane.generation;
+            }
+        }
     }
 
     /// Send update to client - delta if possible, full snapshot if needed
