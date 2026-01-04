@@ -87,10 +87,16 @@ interface TitleMessage {
   title: string;
 }
 
+/** Bell notification from server (BEL 0x07 triggered) */
+interface BellMessage {
+  type: "bell";
+}
+
 export type BinaryServerMessage =
   | BinarySnapshot
   | BinaryDelta
   | TitleMessage
+  | BellMessage
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -133,6 +139,7 @@ export class TerminalConnection {
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
   public onOutput: ((data: string) => void) | null = null;
   public onTitle: ((title: string) => void) | null = null;
+  public onBell: (() => void) | null = null;
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
@@ -292,6 +299,10 @@ export class TerminalConnection {
       case "title":
         debug.log("Received title:", msg.title);
         this.onTitle?.(msg.title);
+        break;
+      case "bell":
+        debug.log("Received bell");
+        this.onBell?.();
         break;
       case "pong":
         // Ignore pong

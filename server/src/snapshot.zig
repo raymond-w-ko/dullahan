@@ -561,6 +561,45 @@ pub fn generateTitleMessage(allocator: std.mem.Allocator, title: []const u8) ![]
     return result;
 }
 
+/// Generate a binary msgpack bell message
+/// Notifies clients that the terminal bell was triggered (BEL 0x07)
+pub fn generateBellMessage(allocator: std.mem.Allocator) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("bell", allocator));
+
+    const max_size = 64;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack bell: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const result = try maybeCompress(msgpack_data, allocator);
+    allocator.free(buffer);
+
+    return result;
+}
+
 /// Generate a binary msgpack pong message
 pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);

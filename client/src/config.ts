@@ -37,11 +37,10 @@ export interface ConfigSchema {
   
   // Selection
   selectionClearOnCopy: boolean;
-  
-  // Bell
-  bellAudio: boolean;
-  bellVisual: boolean;
-  bellVolume: number;
+
+  // Bell (matches ghostty's bell-features)
+  // Comma-separated list: "audio", "attention", "title"
+  bellFeatures: string;
 }
 
 // Default values - used when localStorage doesn't have a value
@@ -76,15 +75,35 @@ export const DEFAULTS: ConfigSchema = {
   
   // Selection
   selectionClearOnCopy: true,
-  
-  // Bell
-  bellAudio: false,
-  bellVisual: true,
-  bellVolume: 1.0,
+
+  // Bell (all enabled by default, matches ghostty)
+  bellFeatures: 'audio,attention,title',
 };
 
 export type ConfigKey = keyof ConfigSchema;
 export type ConfigValue<K extends ConfigKey> = ConfigSchema[K];
+
+/** Bell feature flags parsed from bellFeatures string */
+export interface BellFeatureFlags {
+  audio: boolean;
+  attention: boolean;
+  title: boolean;
+}
+
+/** Parse bellFeatures string into individual flags */
+export function parseBellFeatures(features: string): BellFeatureFlags {
+  const set = new Set(features.split(',').map(f => f.trim().toLowerCase()));
+  return {
+    audio: set.has('audio'),
+    attention: set.has('attention'),
+    title: set.has('title'),
+  };
+}
+
+/** Get current bell feature flags */
+export function getBellFeatures(): BellFeatureFlags {
+  return parseBellFeatures(get('bellFeatures'));
+}
 
 const STORAGE_PREFIX = 'dullahan.';
 

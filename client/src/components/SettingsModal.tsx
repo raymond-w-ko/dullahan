@@ -21,6 +21,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [cursorText, setCursorText] = useState(() => config.get('cursorText'));
   const [cursorOpacity, setCursorOpacity] = useState(() => config.get('cursorOpacity'));
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
+  const [bellFeatures, setBellFeatures] = useState(() => config.get('bellFeatures'));
 
   // Drag state
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -173,6 +174,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const value = (e.target as HTMLSelectElement).value as '' | 'true' | 'false';
     setCursorBlink(value);
     config.set('cursorBlink', value);
+  };
+
+  const handleBellFeaturesChange = (e: Event) => {
+    const value = (e.target as HTMLInputElement).value;
+    setBellFeatures(value);
+    config.set('bellFeatures', value);
   };
 
   const modalStyle = {
@@ -331,13 +338,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {/* Layout */}
           <div class="settings-section">
             <h3>Layout</h3>
-            
+
             <label class="settings-field">
               <span class="settings-label">Spacing</span>
               <select value={spacing} onChange={handleSpacingChange}>
                 <option value="compact">Compact (2px/4px)</option>
                 <option value="comfortable">Comfortable (8px/16px)</option>
               </select>
+            </label>
+          </div>
+
+          {/* Bell */}
+          <div class="settings-section">
+            <h3>Bell</h3>
+
+            <label class="settings-field">
+              <span class="settings-label">Features</span>
+              <input
+                type="text"
+                value={bellFeatures}
+                onChange={handleBellFeaturesChange}
+                placeholder="audio,attention,title"
+              />
             </label>
           </div>
         </div>

@@ -69,6 +69,10 @@ pub const Pane = struct {
     /// Reset by clearTitleChanged(), used for push notifications
     title_changed: bool = false,
 
+    /// Flag indicating bell was triggered (BEL 0x07 received)
+    /// Reset by clearBell(), used for push notifications to clients
+    bell_pending: bool = false,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -207,6 +211,9 @@ pub const Pane = struct {
         // Parse OSC sequences for title changes (OSC 0/2)
         // ghostty-vt parses these but we handle them ourselves for simplicity
         self.handleOscSequences(data);
+
+        // Check for bell character (BEL 0x07)
+        self.handleBell(data);
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -394,6 +401,27 @@ pub const Pane = struct {
     /// Clear the title changed flag
     pub fn clearTitleChanged(self: *Pane) void {
         self.title_changed = false;
+    }
+
+    /// Check for bell character (BEL = 0x07) in input data
+    fn handleBell(self: *Pane, data: []const u8) void {
+        for (data) |byte| {
+            if (byte == 0x07) {
+                self.bell_pending = true;
+                log.debug("Bell triggered", .{});
+                return; // One bell per feed is enough
+            }
+        }
+    }
+
+    /// Check if bell was triggered since last cleared
+    pub fn hasBell(self: *Pane) bool {
+        return self.bell_pending;
+    }
+
+    /// Clear the bell pending flag
+    pub fn clearBell(self: *Pane) void {
+        self.bell_pending = false;
     }
 
     /// Get a plain string representation of the terminal contents
@@ -740,4 +768,24 @@ test "OSC title parsing" {
     pane.clearTitleChanged();
     try pane.feed("\x1b]2;user@host:~/projects\x07");
     try std.testing.expectEqualStrings("user@host:~/projects", pane.getTitle().?);
+}
+
+test "bell detection" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Initially no bell
+    try std.testing.expect(!pane.hasBell());
+
+    // Feed BEL character
+    try pane.feed("\x07");
+    try std.testing.expect(pane.hasBell());
+
+    // Clear and verify
+    pane.clearBell();
+    try std.testing.expect(!pane.hasBell());
+
+    // Bell in middle of text
+    try pane.feed("Hello\x07World");
+    try std.testing.expect(pane.hasBell());
 }

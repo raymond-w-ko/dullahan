@@ -189,6 +189,14 @@ pub const WsServer = struct {
                     pane.clearTitleChanged();
                 }
 
+                // Check for bell (send separate bell message)
+                if (pane.hasBell()) {
+                    self.sendBell(&ws) catch |send_err| {
+                        log.err("Failed to send bell: {any}", .{send_err});
+                    };
+                    pane.clearBell();
+                }
+
                 // Send update if pane changed
                 if (pane.generation != last_generation) {
                     log.debug("Pane updated (v{d} -> v{d}), sending delta", .{ last_generation, pane.generation });
@@ -268,6 +276,13 @@ pub const WsServer = struct {
     /// Send a title update to a single client
     fn sendTitle(self: *WsServer, ws: *websocket.Connection, title: []const u8) !void {
         const msg = try snapshot.generateTitleMessage(self.allocator, title);
+        defer self.allocator.free(msg);
+        try ws.sendBinary(msg);
+    }
+
+    /// Send a bell notification to a single client
+    fn sendBell(self: *WsServer, ws: *websocket.Connection) !void {
+        const msg = try snapshot.generateBellMessage(self.allocator);
         defer self.allocator.free(msg);
         try ws.sendBinary(msg);
     }

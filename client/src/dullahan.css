@@ -177,6 +177,22 @@ html, body {
   opacity: 0.5;
 }
 
+/* Bell attention animation - infinite color reverse pulse */
+.terminal-pane.bell-active .terminal {
+  animation: bell-attention 1s ease-in-out infinite;
+}
+
+@keyframes bell-attention {
+  0%, 100% {
+    background: var(--term-bg);
+    color: var(--term-fg);
+  }
+  50% {
+    background: var(--term-fg);
+    color: var(--term-bg);
+  }
+}
+
 .terminal-titlebar {
   display: flex;
   justify-content: space-between;

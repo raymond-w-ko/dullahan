@@ -9,6 +9,7 @@ import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
 import { SettingsModal } from "./SettingsModal";
 import * as config from "../config";
+import { getBellFeatures, parseBellFeatures } from "../config";
 import type { TerminalSnapshot } from "../terminal/connection";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { Style, StyleTable } from "../../../protocol/schema/style";
@@ -20,6 +21,8 @@ export function App() {
   const [syncStats, setSyncStats] = useState({ deltas: 0, resyncs: 0, gen: 0 });
   const [terminalTitle, setTerminalTitle] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bellActive, setBellActive] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const [theme, setTheme] = useState(() => config.get('theme'));
   const [cursorStyle, setCursorStyle] = useState(() => config.get('cursorStyle'));
   const [cursorColor, setCursorColor] = useState(() => config.get('cursorColor'));
@@ -53,6 +56,55 @@ export function App() {
       }
       resizeTimeoutRef.current = null;
     }, 100); // 100ms debounce
+  }, []);
+
+  // Play bell audio using Web Audio API
+  const playBellAudio = useCallback(() => {
+    try {
+      // Create AudioContext lazily (browsers require user gesture first)
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext();
+      }
+      const ctx = audioContextRef.current;
+
+      // Create a short sine wave beep
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, ctx.currentTime); // A5 note
+
+      // Quick attack and decay for a pleasant "ding"
+      gainNode.gain.setValueAtTime(0, ctx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.15);
+    } catch (e) {
+      console.warn('Failed to play bell audio:', e);
+    }
+  }, []);
+
+  // Handle bell event
+  const handleBell = useCallback(() => {
+    const features = getBellFeatures();
+
+    if (features.attention || features.title) {
+      setBellActive(true);
+    }
+
+    if (features.audio) {
+      playBellAudio();
+    }
+  }, [playBellAudio]);
+
+  // Dismiss bell on any keyboard input
+  const dismissBell = useCallback(() => {
+    setBellActive(false);
   }, []);
 
   // Apply config on mount
@@ -120,6 +172,8 @@ export function App() {
       document.title = `${title} - Dullahan`;
     };
 
+    conn.onBell = handleBell;
+
     conn.connect();
 
     return () => {
@@ -156,11 +210,17 @@ export function App() {
         
         <div class="terminal-grid">
           {/* Terminal 1 - Active */}
-          <div class="terminal-pane">
+          <div class={`terminal-pane${bellActive ? ' bell-active' : ''}`}>
             <div class="terminal-titlebar">
-              <span class="terminal-title">{terminalTitle || "Terminal 1"}</span>
-              <span 
-                class="terminal-sync-stats" 
+              <span
+                class="terminal-title"
+                onClick={dismissBell}
+                style={{ cursor: bellActive ? 'pointer' : undefined }}
+              >
+                {bellActive && getBellFeatures().title ? '🔔 ' : ''}{terminalTitle || "Terminal 1"}
+              </span>
+              <span
+                class="terminal-sync-stats"
                 title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}
               >
                 Δ{syncStats.deltas} ⟳{syncStats.resyncs}
@@ -170,13 +230,14 @@ export function App() {
               </span>
             </div>
             {snapshot ? (
-              <TerminalView 
-                snapshot={snapshot} 
+              <TerminalView
+                snapshot={snapshot}
                 cursorStyle={cursorStyle}
                 cursorColor={cursorColor}
                 cursorText={cursorText}
                 cursorBlink={cursorBlink}
                 onDimensionsChange={handleDimensionsChange}
+                onKeyInput={dismissBell}
                 connection={connectionRef.current}
               />
             ) : (
@@ -209,10 +270,11 @@ interface TerminalViewProps {
   cursorText: string;
   cursorBlink: '' | 'true' | 'false';
   onDimensionsChange?: (cols: number, rows: number) => void;
+  onKeyInput?: () => void;
   connection: TerminalConnection | null;
 }
 
-function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange, connection }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange, onKeyInput, connection }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
   const terminalRef = useRef<HTMLPreElement>(null);
   const keyboardRef = useRef<KeyboardHandler | null>(null);
@@ -245,12 +307,16 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
       if (connection?.isConnected) {
         connection.sendKey(msg);
       }
+      // Dismiss bell on any keyboard input
+      onKeyInput?.();
     });
 
     ime.setCallback((msg) => {
       if (connection?.isConnected) {
         connection.sendText(msg);
       }
+      // Dismiss bell on IME input too
+      onKeyInput?.();
     });
 
     // Auto-focus terminal on mount
@@ -260,7 +326,7 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
       keyboard.detach();
       ime.clearCallback();
     };
-  }, [connection]);
+  }, [connection, onKeyInput]);
 
   // Handle wheel events for scrollback
   const handleWheel = useCallback((e: WheelEvent) => {
