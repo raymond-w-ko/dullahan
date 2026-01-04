@@ -149,4 +149,27 @@ pub fn build(b: *std.Build) void {
     const run_delta_gen = b.addRunArtifact(delta_test_gen);
     run_delta_gen.setCwd(b.path(".."));  // Run from project root
     gen_delta_step.dependOn(&run_delta_gen.step);
+
+    // ============================================================
+    // Shell delta test (spawns real shell, presses up, compares delta vs snapshot)
+    // ============================================================
+
+    const shell_delta_test = b.addExecutable(.{
+        .name = "shell-delta-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell_delta_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dullahan", .module = dullahan_mod },
+            },
+        }),
+    });
+
+    b.installArtifact(shell_delta_test);
+
+    // `zig build run-shell-delta-test` runs the shell delta test
+    const shell_test_step = b.step("run-shell-delta-test", "Run shell delta sync test");
+    const run_shell_test = b.addRunArtifact(shell_delta_test);
+    shell_test_step.dependOn(&run_shell_test.step);
 }
