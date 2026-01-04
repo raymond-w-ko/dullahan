@@ -55,10 +55,20 @@ pub const Pty = struct {
         }
 
         // Set CLOEXEC on master so it's not inherited by child
-        const flags = posix.fcntl(master, posix.F.GETFD, 0) catch {
+        const fd_flags = posix.fcntl(master, posix.F.GETFD, 0) catch {
             return error.OpenPtyFailed;
         };
-        _ = posix.fcntl(master, posix.F.SETFD, flags | posix.FD_CLOEXEC) catch {
+        _ = posix.fcntl(master, posix.F.SETFD, fd_flags | posix.FD_CLOEXEC) catch {
+            return error.OpenPtyFailed;
+        };
+
+        // Set non-blocking on master for poll-based event loop
+        const fl_flags = posix.fcntl(master, posix.F.GETFL, 0) catch {
+            return error.OpenPtyFailed;
+        };
+        // O_NONBLOCK = 0x4 on macOS, 0x800 on Linux
+        const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+        _ = posix.fcntl(master, posix.F.SETFL, fl_flags | O_NONBLOCK) catch {
             return error.OpenPtyFailed;
         };
 

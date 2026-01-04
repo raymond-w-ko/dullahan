@@ -186,6 +186,11 @@ pub const EventLoop = struct {
     }
 
     fn dispatchEvents(self: *EventLoop, fds: []posix.pollfd) !void {
+        // IMPORTANT: Save the client count that was used when building the poll set.
+        // This count must be used for PTY index calculation even if clients are
+        // removed during dispatch, because fds indices are fixed at poll time.
+        const poll_client_count = self.clients.items.len;
+
         // Check IPC
         if (fds[IPC_FD_INDEX].revents & posix.POLL.IN != 0) {
             self.handleIpc() catch |e| {
@@ -201,7 +206,7 @@ pub const EventLoop = struct {
         }
 
         // Check clients (iterate backwards to allow removal)
-        var client_idx: usize = self.clients.items.len;
+        var client_idx: usize = poll_client_count;
         while (client_idx > 0) {
             client_idx -= 1;
             const fd_idx = FIXED_FD_COUNT + client_idx;
@@ -226,8 +231,9 @@ pub const EventLoop = struct {
             }
         }
 
-        // Check PTYs
-        const pty_start_idx = FIXED_FD_COUNT + self.clients.items.len;
+        // Check PTYs - use poll_client_count (not current clients.items.len)
+        // because fds array was built with that count
+        const pty_start_idx = FIXED_FD_COUNT + poll_client_count;
         var pty_idx: usize = 0;
         var window_it = self.session.windows.valueIterator();
         while (window_it.next()) |window| {
@@ -426,6 +432,10 @@ pub const EventLoop = struct {
 
         if (pane.pty) |*pty| {
             const n = pty.read(&buf) catch |e| {
+                if (e == error.WouldBlock) {
+                    // Non-blocking read with no data - this is normal
+                    return;
+                }
                 if (e == error.InputOutput or e == error.BrokenPipe) {
                     log.info("PTY closed for pane {d}", .{pane.id});
                     _ = pane.isAlive();
