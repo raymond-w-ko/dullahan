@@ -33,7 +33,16 @@ pub const Window = struct {
         id: u16 = 0,
     };
 
+    pub const InitOptions = struct {
+        /// If true, create an initial pane automatically (default: true for backward compat)
+        create_initial_pane: bool = true,
+    };
+
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Window {
+        return initWithOptions(allocator, opts, .{});
+    }
+
+    pub fn initWithOptions(allocator: std.mem.Allocator, opts: Options, init_opts: InitOptions) !Window {
         var window = Window{
             .panes = std.AutoHashMap(u16, Pane).init(allocator),
             .active_pane_id = 0,
@@ -43,8 +52,10 @@ pub const Window = struct {
             .allocator = allocator,
         };
 
-        // Create the initial pane
-        _ = try window.createPane();
+        // Create the initial pane (unless disabled)
+        if (init_opts.create_initial_pane) {
+            _ = try window.createPane();
+        }
 
         return window;
     }

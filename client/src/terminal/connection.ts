@@ -18,6 +18,7 @@ export interface ScrollbackInfo {
 }
 
 export interface TerminalSnapshot {
+  paneId: number; // Pane ID for multi-pane support
   gen: number; // Generation counter for delta sync
   cols: number;
   rows: number;
@@ -32,6 +33,19 @@ export interface TerminalSnapshot {
   cells: Cell[]; // Decoded cell data
   styles: StyleTable; // Decoded style table
   rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
+}
+
+/** Per-pane state for delta sync tracking */
+interface PaneState {
+  generation: number;
+  minRowId: bigint;
+  rowCache: Map<bigint, Cell[]>;
+  cols: number;
+  rows: number;
+  lastStyles: StyleTable | null;
+  lastRowIds: bigint[] | null;
+  deltaCount: number;
+  resyncCount: number;
 }
 
 /** Binary msgpack snapshot from server */
@@ -125,18 +139,8 @@ export class TerminalConnection {
   private url: string;
   private reconnectTimer: number | null = null;
 
-  // Delta sync state
-  private _generation: number = 0;
-  private _minRowId: bigint = 0n;
-  private _rowCache: Map<bigint, Cell[]> = new Map();
-  private _cols: number = 80;
-  private _rows: number = 24;
-  private _lastStyles: StyleTable | null = null;  // Cached styles for delta merging
-  private _lastRowIds: bigint[] | null = null;    // Cached row IDs for delta merging
-
-  // Stats for debugging
-  private _deltaCount: number = 0;
-  private _resyncCount: number = 0;
+  // Per-pane delta sync state
+  private _panes: Map<number, PaneState> = new Map();
 
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
@@ -151,21 +155,67 @@ export class TerminalConnection {
     this.url = url;
   }
 
-  /** Current generation (for sync requests) */
-  get generation(): number { return this._generation; }
+  /** Get or create pane state */
+  private getPaneState(paneId: number): PaneState {
+    let state = this._panes.get(paneId);
+    if (!state) {
+      state = {
+        generation: 0,
+        minRowId: 0n,
+        rowCache: new Map(),
+        cols: 80,
+        rows: 24,
+        lastStyles: null,
+        lastRowIds: null,
+        deltaCount: 0,
+        resyncCount: 0,
+      };
+      this._panes.set(paneId, state);
+    }
+    return state;
+  }
 
-  /** Oldest row ID in cache (for sync requests) */
-  get minRowId(): bigint { return this._minRowId; }
+  /** Current generation for a pane (for sync requests) */
+  getGeneration(paneId: number): number {
+    return this._panes.get(paneId)?.generation ?? 0;
+  }
 
-  /** Debug stats: number of delta updates received */
-  get deltaCount(): number { return this._deltaCount; }
+  /** Oldest row ID in cache for a pane (for sync requests) */
+  getMinRowId(paneId: number): bigint {
+    return this._panes.get(paneId)?.minRowId ?? 0n;
+  }
 
-  /** Debug stats: number of full resyncs */
-  get resyncCount(): number { return this._resyncCount; }
+  /** Debug stats: number of delta updates received for a pane */
+  getDeltaCount(paneId: number): number {
+    return this._panes.get(paneId)?.deltaCount ?? 0;
+  }
 
-  /** Get cached row by ID, or undefined if not cached */
-  getCachedRow(rowId: bigint): Cell[] | undefined {
-    return this._rowCache.get(rowId);
+  /** Debug stats: number of full resyncs for a pane */
+  getResyncCount(paneId: number): number {
+    return this._panes.get(paneId)?.resyncCount ?? 0;
+  }
+
+  /** Total delta count across all panes */
+  get totalDeltaCount(): number {
+    let total = 0;
+    for (const pane of this._panes.values()) {
+      total += pane.deltaCount;
+    }
+    return total;
+  }
+
+  /** Total resync count across all panes */
+  get totalResyncCount(): number {
+    let total = 0;
+    for (const pane of this._panes.values()) {
+      total += pane.resyncCount;
+    }
+    return total;
+  }
+
+  /** Get cached row by ID for a pane, or undefined if not cached */
+  getCachedRow(paneId: number, rowId: bigint): Cell[] | undefined {
+    return this._panes.get(paneId)?.rowCache.get(rowId);
   }
 
   connect(): void {
@@ -222,14 +272,19 @@ export class TerminalConnection {
 
   private handleBinaryMessage(msg: BinaryServerMessage): void {
     switch (msg.type) {
-      case "snapshot":
-        debug.log("Received binary snapshot:", msg.cols, "x", msg.rows, 
+      case "snapshot": {
+        const paneId = msg.paneId;
+        const paneState = this.getPaneState(paneId);
+
+        debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
+
         // Decode cells, styles, and row IDs from raw bytes
         const cells = this.decodeCellsFromBytes(msg.cells);
         const styles = this.decodeStyleTableFromBytes(msg.styles);
         const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
         const snapshot: TerminalSnapshot = {
+          paneId,
           gen: msg.gen,
           cols: msg.cols,
           rows: msg.rows,
@@ -245,22 +300,23 @@ export class TerminalConnection {
           styles,
           rowIds,
         };
-        // Update internal state from snapshot
-        this._generation = msg.gen;
-        this._cols = msg.cols;
-        this._rows = msg.rows;
-        this._resyncCount++;
+
+        // Update pane state from snapshot
+        paneState.generation = msg.gen;
+        paneState.cols = msg.cols;
+        paneState.rows = msg.rows;
+        paneState.resyncCount++;
 
         // Rebuild row cache from snapshot
         // NOTE: rowId=0 IS valid (page serial 0, row index 0)
         // Only undefined means the row wasn't sent
-        this._rowCache.clear();
+        paneState.rowCache.clear();
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
           if (rowId !== undefined) {
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
-            this._rowCache.set(rowId, rowCells);
+            paneState.rowCache.set(rowId, rowCells);
             // Track minimum row ID
             if (minSeen < 0n || rowId < minSeen) {
               minSeen = rowId;
@@ -268,14 +324,14 @@ export class TerminalConnection {
           }
         }
         if (minSeen >= 0n) {
-          this._minRowId = minSeen;
+          paneState.minRowId = minSeen;
         }
 
         // Save for delta merging
-        this._lastStyles = styles;
-        this._lastRowIds = rowIds;
-        
-        debug.log(`Snapshot stored ${this._rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
+        paneState.lastStyles = styles;
+        paneState.lastRowIds = rowIds;
+
+        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
 
         this.onSnapshot?.(snapshot);
 
@@ -286,8 +342,12 @@ export class TerminalConnection {
           this.onTitle?.(snapshotTitle);
         }
         break;
-      case "delta":
-        debug.log("Raw delta message:", {
+      }
+      case "delta": {
+        const paneId = msg.paneId;
+        const paneState = this.getPaneState(paneId);
+
+        debug.log(`Raw delta for pane ${paneId}:`, {
           type: msg.type,
           fromGen: msg.fromGen,
           gen: msg.gen,
@@ -295,27 +355,29 @@ export class TerminalConnection {
           rowIdsType: typeof (msg as any).rowIds,
           rowIdsConstructor: (msg as any).rowIds?.constructor?.name,
         });
+
         // Check if we can apply this delta
         // Client must be at fromGen to apply delta that brings us to gen
-        if (this._generation === msg.fromGen) {
-          this.applyDelta(msg);
-        } else if (this._generation < msg.fromGen) {
+        if (paneState.generation === msg.fromGen) {
+          this.applyDelta(msg, paneState);
+        } else if (paneState.generation < msg.fromGen) {
           // We're behind - request full snapshot
-          debug.log(`Delta fromGen ${msg.fromGen} > our gen ${this._generation}, requesting snapshot`);
-          this._resyncCount++;
-          this.sendSync(this._generation, Number(this._minRowId));
+          debug.log(`Pane ${paneId}: Delta fromGen ${msg.fromGen} > our gen ${paneState.generation}, requesting snapshot`);
+          paneState.resyncCount++;
+          this.sendSyncForPane(paneId, paneState.generation, Number(paneState.minRowId));
         } else {
           // We're ahead of fromGen - this delta is stale, ignore it
           // But if we're behind the target gen, request sync
-          if (this._generation < msg.gen) {
-            debug.log(`Stale delta (fromGen ${msg.fromGen} < our gen ${this._generation}), but behind target ${msg.gen}, requesting sync`);
-            this._resyncCount++;
-            this.sendSync(this._generation, Number(this._minRowId));
+          if (paneState.generation < msg.gen) {
+            debug.log(`Pane ${paneId}: Stale delta (fromGen ${msg.fromGen} < our gen ${paneState.generation}), but behind target ${msg.gen}, requesting sync`);
+            paneState.resyncCount++;
+            this.sendSyncForPane(paneId, paneState.generation, Number(paneState.minRowId));
           } else {
-            debug.log(`Stale delta ignored (fromGen ${msg.fromGen}, our gen ${this._generation})`);
+            debug.log(`Pane ${paneId}: Stale delta ignored (fromGen ${msg.fromGen}, our gen ${paneState.generation})`);
           }
         }
         break;
+      }
       case "output":
         this.onOutput?.(msg.data);
         break;
@@ -544,17 +606,29 @@ export class TerminalConnection {
   }
 
   /**
-   * Request sync using current state
+   * Request sync for a specific pane
    */
-  requestSync(): void {
-    this.sendSync(this._generation, Number(this._minRowId));
+  sendSyncForPane(paneId: number, gen: number, minRowId: number): void {
+    // TODO(du-xxx): Server needs to support pane-specific sync messages
+    // For now, just send a regular sync
+    this.send({ type: "sync", gen, minRowId });
+  }
+
+  /**
+   * Request sync for all panes
+   */
+  requestSyncAll(): void {
+    for (const [paneId, state] of this._panes) {
+      this.sendSyncForPane(paneId, state.generation, Number(state.minRowId));
+    }
   }
 
   /**
    * Apply a delta update to the local cache and notify as snapshot
    */
-  private applyDelta(delta: BinaryDelta): void {
-    debug.log(`Applying delta: gen ${delta.fromGen} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
+  private applyDelta(delta: BinaryDelta, paneState: PaneState): void {
+    const paneId = delta.paneId;
+    debug.log(`Pane ${paneId}: Applying delta: gen ${delta.fromGen} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
     debug.log(`Delta details:`, {
       cols: delta.cols,
       rows: delta.rows,
@@ -566,58 +640,58 @@ export class TerminalConnection {
       dirtyRowIds: delta.dirtyRows.map(r => r.id),
     });
 
-    this._deltaCount++;
-    this._cols = delta.cols;
-    this._rows = delta.rows;
+    paneState.deltaCount++;
+    paneState.cols = delta.cols;
+    paneState.rows = delta.rows;
 
     // Apply each dirty row to cache
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
       const cells = this.decodeCellsFromBytes(row.cells);
-      
-      this._rowCache.set(rowId, cells);
+
+      paneState.rowCache.set(rowId, cells);
 
       // Update min row ID tracking
-      if (this._minRowId === 0n || rowId < this._minRowId) {
-        this._minRowId = rowId;
+      if (paneState.minRowId === 0n || rowId < paneState.minRowId) {
+        paneState.minRowId = rowId;
       }
     }
 
     // Update generation
-    this._generation = delta.gen;
+    paneState.generation = delta.gen;
 
     // Decode styles from delta
     const styles = this.decodeStyleTableFromBytes(delta.styles);
 
     // Merge with existing styles from last snapshot
     // Delta styles take precedence (they're the current ones)
-    if (this._lastStyles) {
-      for (const [id, style] of this._lastStyles) {
+    if (paneState.lastStyles) {
+      for (const [id, style] of paneState.lastStyles) {
         if (!styles.has(id)) {
           styles.set(id, style);
         }
       }
     }
-    this._lastStyles = styles;
+    paneState.lastStyles = styles;
 
     // Decode row IDs from delta (tells us which rows are in viewport)
     if (!delta.rowIds || delta.rowIds.length === 0) {
       console.error("Delta missing rowIds!", delta);
       // Fall back to last known rowIds
     }
-    const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (this._lastRowIds ?? []);
-    this._lastRowIds = rowIds;
-    debug.log(`Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
-    debug.log(`Row cache size: ${this._rowCache.size}, keys:`, [...this._rowCache.keys()].map(String));
-    
+    const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (paneState.lastRowIds ?? []);
+    paneState.lastRowIds = rowIds;
+    debug.log(`Pane ${paneId}: Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
+    debug.log(`Pane ${paneId}: Row cache size: ${paneState.rowCache.size}, keys:`, [...paneState.rowCache.keys()].map(String));
+
     // Check which rowIds are in cache
     // NOTE: rowId=0 IS valid (page serial 0, row index 0)
-    const inCache = rowIds.filter(id => this._rowCache.has(id));
-    const notInCache = rowIds.filter(id => !this._rowCache.has(id));
-    debug.log(`RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
+    const inCache = rowIds.filter(id => paneState.rowCache.has(id));
+    const notInCache = rowIds.filter(id => !paneState.rowCache.has(id));
+    debug.log(`Pane ${paneId}: RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
     if (notInCache.length > 0) {
-      debug.log(`Missing rowIds:`, notInCache.map(String));
-      debug.log(`Cache has:`, [...this._rowCache.keys()].map(String));
+      debug.log(`Pane ${paneId}: Missing rowIds:`, notInCache.map(String));
+      debug.log(`Pane ${paneId}: Cache has:`, [...paneState.rowCache.keys()].map(String));
     }
 
     // Build cells array from cache for current viewport
@@ -629,7 +703,7 @@ export class TerminalConnection {
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
       if (rowId !== undefined) {
-        const rowCells = this._rowCache.get(rowId);
+        const rowCells = paneState.rowCache.get(rowId);
         if (rowCells) {
           if (rowCells.length !== delta.cols) {
             console.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
@@ -651,10 +725,11 @@ export class TerminalConnection {
         });
       }
     }
-    debug.log(`Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
+    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
 
     // Build merged snapshot
     const snapshot: TerminalSnapshot = {
+      paneId,
       gen: delta.gen,
       cols: delta.cols,
       rows: delta.rows,

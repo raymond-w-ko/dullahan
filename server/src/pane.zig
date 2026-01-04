@@ -185,6 +185,25 @@ pub const Pane = struct {
         }
     }
 
+    /// Write directly to terminal buffer (no PTY required).
+    /// Used for virtual panes like debug output that have no shell.
+    pub fn feedDirect(self: *Pane, data: []const u8) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Lazily initialize VT stream
+        if (self.vt_stream == null) {
+            self.vt_stream = self.terminal.vtStream();
+        }
+        try self.vt_stream.?.nextSlice(data);
+
+        // Collect dirty rows
+        self.collectDirtyRows();
+
+        // Increment generation
+        self.generation +%= 1;
+    }
+
     /// Get the PTY master fd for polling (returns null if no PTY)
     pub fn getPtyFd(self: *Pane) ?posix.fd_t {
         if (self.pty) |pty| {

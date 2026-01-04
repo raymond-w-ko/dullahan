@@ -118,10 +118,15 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         return e;
     };
 
-    // Spawn shell in the initial pane
-    if (state.session.activePane()) |pane| {
+    // Spawn shells in panes 1 and 2 (not debug pane 0)
+    if (state.session.getShellPane1()) |pane| {
         pane.spawnShell() catch |e| {
-            log.err("Failed to spawn shell: {any}", .{e});
+            log.err("Failed to spawn shell in pane 1: {any}", .{e});
+        };
+    }
+    if (state.session.getShellPane2()) |pane| {
+        pane.spawnShell() catch |e| {
+            log.err("Failed to spawn shell in pane 2: {any}", .{e});
         };
     }
 

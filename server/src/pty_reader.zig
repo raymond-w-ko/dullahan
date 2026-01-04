@@ -91,6 +91,9 @@ pub const PtyReader = struct {
                         };
 
                         if (n > 0) {
+                            // Log to debug pane BEFORE feeding (so we see raw bytes)
+                            self.session.logPtyRecv(pane.id, buf[0..n]);
+
                             pane.feed(buf[0..n]) catch |e| {
                                 log.err("Failed to feed pane: {any}", .{e});
                             };

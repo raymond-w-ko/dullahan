@@ -383,6 +383,9 @@ pub const WsServer = struct {
             const output = keyEventToBytes(key_event.value, &output_buf, cursor_key_app);
 
             if (output.len > 0) {
+                // Log to debug pane
+                session.logPtySend(pane.id, output);
+
                 pane.writeInput(output) catch |e| {
                     log.err("Failed to write key to PTY: {any}", .{e});
                 };
@@ -400,6 +403,9 @@ pub const WsServer = struct {
             log.debug("Received text: {d} bytes", .{text_msg.value.data.len});
 
             const pane = session.activePane() orelse return;
+
+            // Log to debug pane
+            session.logPtySend(pane.id, text_msg.value.data);
 
             // Data is already unescaped by JSON parser
             pane.writeInput(text_msg.value.data) catch |e| {
@@ -532,6 +538,9 @@ pub const WsServer = struct {
             const output = keyEventToBytes(event, &output_buf, cursor_key_app);
 
             if (output.len > 0) {
+                // Log to debug pane
+                session.logPtySend(pane.id, output);
+
                 pane.writeInput(output) catch |e| {
                     log.err("Failed to write key to PTY: {any}", .{e});
                 };
@@ -541,6 +550,10 @@ pub const WsServer = struct {
             const pane = session.activePane() orelse return;
             const data_payload = (payload.mapGet("data") catch return) orelse return;
             const text = data_payload.asStr() catch return;
+
+            // Log to debug pane
+            session.logPtySend(pane.id, text);
+
             pane.writeInput(text) catch |e| {
                 log.err("Failed to write text to PTY: {any}", .{e});
             };

@@ -14,9 +14,15 @@ import type { TerminalSnapshot } from "../terminal/connection";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { Style, StyleTable } from "../../../protocol/schema/style";
 
+// Pane IDs (must match server session.zig)
+const DEBUG_PANE_ID = 0;
+const SHELL_PANE_1_ID = 1;
+const SHELL_PANE_2_ID = 2;
+
 export function App() {
   const [connected, setConnected] = useState(false);
-  const [snapshot, setSnapshot] = useState<TerminalSnapshot | null>(null);
+  // Per-pane snapshots
+  const [paneSnapshots, setPaneSnapshots] = useState<Map<number, TerminalSnapshot>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [syncStats, setSyncStats] = useState({ deltas: 0, resyncs: 0, gen: 0 });
   const [terminalTitle, setTerminalTitle] = useState<string | null>(null);
@@ -147,11 +153,16 @@ export function App() {
     };
 
     conn.onSnapshot = (snap) => {
-      setSnapshot(snap);
-      // Update sync stats from connection
+      // Update per-pane snapshot
+      setPaneSnapshots(prev => {
+        const next = new Map(prev);
+        next.set(snap.paneId, snap);
+        return next;
+      });
+      // Update sync stats from connection (totals across all panes)
       setSyncStats({
-        deltas: conn.deltaCount,
-        resyncs: conn.resyncCount,
+        deltas: conn.totalDeltaCount,
+        resyncs: conn.totalResyncCount,
         gen: snap.gen,
       });
     };
@@ -159,8 +170,8 @@ export function App() {
     conn.onDelta = (delta) => {
       // Update sync stats
       setSyncStats({
-        deltas: conn.deltaCount,
-        resyncs: conn.resyncCount,
+        deltas: conn.totalDeltaCount,
+        resyncs: conn.totalResyncCount,
         gen: delta.gen,
       });
       debug.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
@@ -207,51 +218,50 @@ export function App() {
 
       <main class="main">
         {error && <div class="error">Error: {error}</div>}
-        
+
         <div class="terminal-grid">
-          {/* Terminal 1 - Active */}
-          <div class={`terminal-pane${bellActive ? ' bell-active' : ''}`}>
-            <div class="terminal-titlebar">
-              <span
-                class="terminal-title"
-                onClick={dismissBell}
-                style={{ cursor: bellActive ? 'pointer' : undefined }}
-              >
-                {bellActive && getBellFeatures().title ? '🔔 ' : ''}{terminalTitle || "Terminal 1"}
-              </span>
-              <span
-                class="terminal-sync-stats"
-                title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}
-              >
-                Δ{syncStats.deltas} ⟳{syncStats.resyncs}
-              </span>
-              <span class="terminal-size" title={`Server: ${snapshot?.cols}×${snapshot?.rows}, Visible: ${calculatedDimensions.cols}×${calculatedDimensions.rows}`}>
-                {snapshot ? `${calculatedDimensions.cols}×${calculatedDimensions.rows}` : '—'}
-              </span>
-            </div>
-            {snapshot ? (
-              <TerminalView
-                snapshot={snapshot}
-                cursorStyle={cursorStyle}
-                cursorColor={cursorColor}
-                cursorText={cursorText}
-                cursorBlink={cursorBlink}
-                onDimensionsChange={handleDimensionsChange}
-                onKeyInput={dismissBell}
-                connection={connectionRef.current}
-              />
-            ) : (
-              <div class="terminal terminal--empty">
-                {connected ? "Waiting..." : "Connecting..."}
-              </div>
-            )}
-          </div>
+          {/* Pane 0 - Debug Console (read-only) */}
+          <TerminalPane
+            paneId={DEBUG_PANE_ID}
+            title="Debug Console"
+            snapshot={paneSnapshots.get(DEBUG_PANE_ID) ?? null}
+            connected={connected}
+            cursorStyle={cursorStyle}
+            cursorColor={cursorColor}
+            cursorText={cursorText}
+            cursorBlink={cursorBlink}
+            isReadOnly={true}
+          />
 
-          {/* Terminal 2 - Placeholder */}
-          <TerminalPlaceholder title="Terminal 2" />
+          {/* Pane 1 - Shell Terminal (active) */}
+          <TerminalPane
+            paneId={SHELL_PANE_1_ID}
+            title={terminalTitle || "Shell 1"}
+            snapshot={paneSnapshots.get(SHELL_PANE_1_ID) ?? null}
+            connected={connected}
+            cursorStyle={cursorStyle}
+            cursorColor={cursorColor}
+            cursorText={cursorText}
+            cursorBlink={cursorBlink}
+            bellActive={bellActive}
+            onDimensionsChange={handleDimensionsChange}
+            onKeyInput={dismissBell}
+            connection={connectionRef.current}
+            syncStats={syncStats}
+            calculatedDimensions={calculatedDimensions}
+          />
 
-          {/* Terminal 3 - Placeholder */}
-          <TerminalPlaceholder title="Terminal 3" />
+          {/* Pane 2 - Shell Terminal */}
+          <TerminalPane
+            paneId={SHELL_PANE_2_ID}
+            title="Shell 2"
+            snapshot={paneSnapshots.get(SHELL_PANE_2_ID) ?? null}
+            connected={connected}
+            cursorStyle={cursorStyle}
+            cursorColor={cursorColor}
+            cursorText={cursorText}
+            cursorBlink={cursorBlink}
+          />
         </div>
       </main>
 
@@ -367,6 +377,90 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
         </div>
       ))}
     </pre>
+  );
+}
+
+/** TerminalPane - wraps TerminalView with titlebar */
+interface TerminalPaneProps {
+  paneId: number;
+  title: string;
+  snapshot: TerminalSnapshot | null;
+  connected: boolean;
+  cursorStyle: 'block' | 'bar' | 'underline' | 'block_hollow';
+  cursorColor: string;
+  cursorText: string;
+  cursorBlink: '' | 'true' | 'false';
+  isReadOnly?: boolean;
+  bellActive?: boolean;
+  onDimensionsChange?: (cols: number, rows: number) => void;
+  onKeyInput?: () => void;
+  connection?: TerminalConnection | null;
+  syncStats?: { deltas: number; resyncs: number; gen: number };
+  calculatedDimensions?: { cols: number; rows: number };
+}
+
+function TerminalPane({
+  paneId,
+  title,
+  snapshot,
+  connected,
+  cursorStyle,
+  cursorColor,
+  cursorText,
+  cursorBlink,
+  isReadOnly = false,
+  bellActive = false,
+  onDimensionsChange,
+  onKeyInput,
+  connection,
+  syncStats,
+  calculatedDimensions,
+}: TerminalPaneProps) {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const dimensions = useTerminalDimensions(terminalRef);
+
+  // Use calculated dimensions if provided, otherwise use local measurement
+  const displayDims = calculatedDimensions ?? dimensions;
+
+  return (
+    <div class={`terminal-pane${bellActive ? ' bell-active' : ''}${isReadOnly ? ' terminal-pane--readonly' : ''}`}>
+      <div class="terminal-titlebar">
+        <span
+          class="terminal-title"
+          onClick={onKeyInput}
+          style={{ cursor: bellActive ? 'pointer' : undefined }}
+        >
+          {bellActive && getBellFeatures().title ? '🔔 ' : ''}{title}
+        </span>
+        {syncStats && (
+          <span
+            class="terminal-sync-stats"
+            title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}
+          >
+            Δ{syncStats.deltas} ⟳{syncStats.resyncs}
+          </span>
+        )}
+        <span class="terminal-size" title={`Server: ${snapshot?.cols}×${snapshot?.rows}, Visible: ${displayDims.cols}×${displayDims.rows}`}>
+          {snapshot ? `${displayDims.cols}×${displayDims.rows}` : '—'}
+        </span>
+      </div>
+      {snapshot ? (
+        <TerminalView
+          snapshot={snapshot}
+          cursorStyle={cursorStyle}
+          cursorColor={cursorColor}
+          cursorText={cursorText}
+          cursorBlink={cursorBlink}
+          onDimensionsChange={isReadOnly ? undefined : onDimensionsChange}
+          onKeyInput={isReadOnly ? undefined : onKeyInput}
+          connection={isReadOnly ? null : connection ?? null}
+        />
+      ) : (
+        <div class="terminal terminal--empty" ref={terminalRef}>
+          {connected ? "Waiting..." : "Connecting..."}
+        </div>
+      )}
+    </div>
   );
 }
 
