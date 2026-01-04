@@ -381,10 +381,11 @@ pub const EventLoop = struct {
             }
         }
 
-        // Set a short read timeout so readFrame() doesn't block the event loop
-        // This allows the loop to check for shutdown signals even if a client
-        // sends an incomplete WebSocket frame
-        client.ws.setReadTimeout(100);
+        // Set short read/write timeouts so the event loop doesn't block
+        // This allows the loop to check for shutdown signals even if:
+        // - A client sends an incomplete WebSocket frame (read blocks)
+        // - A client disconnects while we're trying to send (write blocks)
+        client.ws.setTimeouts(100);
 
         try self.clients.append(self.allocator, client);
         log.info("Client connected, total clients: {d}", .{self.clients.items.len});

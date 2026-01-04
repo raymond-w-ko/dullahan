@@ -172,6 +172,26 @@ pub const Connection = struct {
         ) catch {};
     }
 
+    /// Set write timeout (0 = no timeout)
+    pub fn setWriteTimeout(self: *Connection, timeout_ms: u32) void {
+        const timeout = std.posix.timeval{
+            .sec = @intCast(timeout_ms / 1000),
+            .usec = @intCast((timeout_ms % 1000) * 1000),
+        };
+        std.posix.setsockopt(
+            self.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.SNDTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+    }
+
+    /// Set both read and write timeouts
+    pub fn setTimeouts(self: *Connection, timeout_ms: u32) void {
+        self.setReadTimeout(timeout_ms);
+        self.setWriteTimeout(timeout_ms);
+    }
+
     /// Send a text message
     pub fn sendText(self: *Connection, message: []const u8) !void {
         const frame = try createFrame(self.allocator, .text, message);

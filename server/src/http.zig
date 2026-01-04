@@ -403,7 +403,7 @@ pub const Server = struct {
         log.debug("Accepted connection, reading request...", .{});
         errdefer conn.stream.close();
 
-        // Set a read timeout so we don't block forever waiting for HTTP request
+        // Set read/write timeouts so we don't block forever
         const timeout = std.posix.timeval{
             .sec = 0,
             .usec = 500_000, // 500ms timeout
@@ -412,6 +412,12 @@ pub const Server = struct {
             conn.stream.handle,
             std.posix.SOL.SOCKET,
             std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.SNDTIMEO,
             std.mem.asBytes(&timeout),
         ) catch {};
 
