@@ -429,10 +429,20 @@ pub const EventLoop = struct {
                 self.session.logPtyRecv(pane.id, buf[0..n]);
                 try pane.feed(buf[0..n]);
 
+                // Send updates for both the PTY pane and the debug pane
+                // (debug pane was updated by logPtyRecv)
+                const debug_pane = self.session.getDebugPane();
                 for (self.clients.items) |*client| {
                     self.sendPaneUpdate(client, pane) catch |e| {
                         log.err("Failed to send update to client: {any}", .{e});
                     };
+                    if (debug_pane) |dp| {
+                        if (dp.id != pane.id) { // Don't send twice if this IS the debug pane
+                            self.sendPaneUpdate(client, dp) catch |e| {
+                                log.err("Failed to send debug pane update: {any}", .{e});
+                            };
+                        }
+                    }
                 }
             }
         }
