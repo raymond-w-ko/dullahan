@@ -593,6 +593,12 @@ pub const Pane = struct {
         return client_gen < self.dirty_base_gen;
     }
 
+    /// Check if cursor keys should use application mode (DECCKM)
+    /// When true, arrow keys use SS3 sequences (\x1bO), otherwise CSI (\x1b[)
+    pub fn isCursorKeyApplication(self: *Pane) bool {
+        return self.terminal.modes.get(.cursor_keys);
+    }
+
     /// Dump pane state in compact human-readable format
     pub fn dump(self: *Pane, writer: anytype) !void {
         const screen = self.terminal.screens.active;

@@ -382,7 +382,8 @@ pub const WsServer = struct {
             const pane = session.activePane() orelse return;
 
             var output_buf: [32]u8 = undefined;
-            const output = keyEventToBytes(key_event.value, &output_buf);
+            const cursor_key_app = pane.isCursorKeyApplication();
+            const output = keyEventToBytes(key_event.value, &output_buf, cursor_key_app);
 
             if (output.len > 0) {
                 pane.writeInput(output) catch |e| {
@@ -530,7 +531,8 @@ pub const WsServer = struct {
                 .alt = alt,
                 .shift = shift,
             };
-            const output = keyEventToBytes(event, &output_buf);
+            const cursor_key_app = pane.isCursorKeyApplication();
+            const output = keyEventToBytes(event, &output_buf, cursor_key_app);
 
             if (output.len > 0) {
                 pane.writeInput(output) catch |e| {
@@ -573,7 +575,9 @@ pub const WsServer = struct {
 ///
 /// Note: This preserves full event data for future Kitty keyboard protocol support.
 /// Currently converts to legacy/VT sequences for shell compatibility.
-fn keyEventToBytes(event: KeyEvent, output: []u8) []u8 {
+///
+/// cursor_key_application: DECCKM mode - when true, arrow keys use SS3 prefix
+fn keyEventToBytes(event: KeyEvent, output: []u8, cursor_key_application: bool) []u8 {
     // Only process keydown events
     if (!std.mem.eql(u8, event.state, "down")) {
         return output[0..0];
@@ -684,16 +688,16 @@ fn keyEventToBytes(event: KeyEvent, output: []u8) []u8 {
     
     // Arrow keys
     if (std.mem.eql(u8, key, "ArrowUp")) {
-        return writeArrowKey(output, 'A', ctrl, alt);
+        return writeArrowKey(output, 'A', ctrl, alt, cursor_key_application);
     }
     if (std.mem.eql(u8, key, "ArrowDown")) {
-        return writeArrowKey(output, 'B', ctrl, alt);
+        return writeArrowKey(output, 'B', ctrl, alt, cursor_key_application);
     }
     if (std.mem.eql(u8, key, "ArrowRight")) {
-        return writeArrowKey(output, 'C', ctrl, alt);
+        return writeArrowKey(output, 'C', ctrl, alt, cursor_key_application);
     }
     if (std.mem.eql(u8, key, "ArrowLeft")) {
-        return writeArrowKey(output, 'D', ctrl, alt);
+        return writeArrowKey(output, 'D', ctrl, alt, cursor_key_application);
     }
     
     // Home/End
@@ -762,7 +766,8 @@ fn keyEventToBytes(event: KeyEvent, output: []u8) []u8 {
 }
 
 /// Write arrow key escape sequence with modifiers
-fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool) []u8 {
+/// When cursor_key_application is true (DECCKM mode), use SS3 prefix for unmodified arrows
+fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool, cursor_key_application: bool) []u8 {
     if (ctrl or alt) {
         // CSI 1 ; <mod> <arrow>
         // mod: 2=Shift, 3=Alt, 4=Shift+Alt, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Shift+Alt
@@ -777,9 +782,15 @@ fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool) []u8 {
         output[5] = arrow;
         return output[0..6];
     }
-    // Simple: CSI <arrow>
+    // Unmodified arrow key
     output[0] = 0x1b;
-    output[1] = '[';
+    if (cursor_key_application) {
+        // SS3 <arrow> - Application cursor key mode (DECCKM set)
+        output[1] = 'O';
+    } else {
+        // CSI <arrow> - Normal mode (DECCKM reset)
+        output[1] = '[';
+    }
     output[2] = arrow;
     return output[0..3];
 }
@@ -868,7 +879,7 @@ test "keyEventToBytes basic" {
         .key = "a",
         .code = "KeyA",
         .state = "down",
-    }, &output);
+    }, &output, false);
     try std.testing.expectEqualStrings("a", result);
 
     // Ctrl+C
@@ -878,7 +889,7 @@ test "keyEventToBytes basic" {
         .code = "KeyC",
         .state = "down",
         .ctrl = true,
-    }, &output);
+    }, &output, false);
     try std.testing.expectEqual(@as(u8, 0x03), ctrl_c[0]);
 
     // Keyup should be ignored
@@ -887,6 +898,38 @@ test "keyEventToBytes basic" {
         .key = "a",
         .code = "KeyA",
         .state = "up",
-    }, &output);
+    }, &output, false);
     try std.testing.expectEqual(@as(usize, 0), keyup.len);
+}
+
+test "keyEventToBytes arrow keys with DECCKM" {
+    var output: [32]u8 = undefined;
+
+    // Arrow up without DECCKM (normal mode) -> CSI A
+    const up_normal = keyEventToBytes(.{
+        .type = "key",
+        .key = "ArrowUp",
+        .code = "ArrowUp",
+        .state = "down",
+    }, &output, false);
+    try std.testing.expectEqualStrings("\x1b[A", up_normal);
+
+    // Arrow up with DECCKM (application mode) -> SS3 A
+    const up_app = keyEventToBytes(.{
+        .type = "key",
+        .key = "ArrowUp",
+        .code = "ArrowUp",
+        .state = "down",
+    }, &output, true);
+    try std.testing.expectEqualStrings("\x1bOA", up_app);
+
+    // Arrow with modifier should still use CSI even in application mode
+    const up_ctrl = keyEventToBytes(.{
+        .type = "key",
+        .key = "ArrowUp",
+        .code = "ArrowUp",
+        .state = "down",
+        .ctrl = true,
+    }, &output, true);
+    try std.testing.expectEqualStrings("\x1b[1;5A", up_ctrl);
 }
