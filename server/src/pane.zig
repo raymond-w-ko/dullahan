@@ -564,19 +564,23 @@ pub const Pane = struct {
     }
 
     /// Get the set of dirty row IDs since last clear.
-    /// Caller should NOT modify the returned map.
+    /// Caller must hold the pane lock (this is only called from generateDelta which locks).
     pub fn getDirtyRows(self: *Pane) *const std.AutoHashMap(u64, void) {
         return &self.dirty_rows;
     }
 
     /// Get count of dirty rows
     pub fn getDirtyRowCount(self: *Pane) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         return self.dirty_rows.count();
     }
 
     /// Clear dirty row tracking and update base generation.
     /// Called after successfully sending delta to client.
     pub fn clearDirtyRows(self: *Pane) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         self.dirty_rows.clearRetainingCapacity();
         self.dirty_base_gen = self.generation;
     }
@@ -584,6 +588,8 @@ pub const Pane = struct {
     /// Check if a client with given generation needs full resync.
     /// Returns true if client is too far behind (dirty tracking doesn't go back that far).
     pub fn needsFullResync(self: *Pane, client_gen: u64) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         return client_gen < self.dirty_base_gen;
     }
 
