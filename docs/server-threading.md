@@ -228,7 +228,7 @@ pub fn feed(self: *Pane, data: []const u8) !void {
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  5. Cleanup (defer blocks)                                       │
-│     ├─► state.deinit()     // kills child processes, frees mem   │
+│     ├─► state.deinit()     // see Pane Cleanup below             │
 │     ├─► ws_server.deinit() // closes HTTP socket                 │
 │     ├─► ipc_server.deinit()// closes IPC socket, deletes files   │
 │     └─► signal.reset()     // restore default signal handlers    │
@@ -295,3 +295,61 @@ fn signalHandler(sig: c_int) callconv(.c) void {
 | `ipc.zig` | IPC socket with timeout-based accept |
 | `http.zig` | HTTP socket with timeout-based accept |
 | `pane.zig` | Mutex-protected terminal state |
+
+## Pane Cleanup Sequence
+
+When `pane.deinit()` is called, child process cleanup follows a specific order to avoid hangs:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. Close PTY First                                             │
+│     └─► pty.deinit() sends SIGHUP to shell, causing natural exit│
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  2. Non-blocking waitpid Check                                  │
+│     └─► If child already exited (from SIGHUP), we're done       │
+└─────────────────────────────────────────────────────────────────┘
+                              │ (child still running?)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  3. SIGTERM + 500ms Wait                                        │
+│     └─► Graceful termination request                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │ (still running?)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  4. SIGKILL + 1000ms Wait                                       │
+│     └─► Force kill (should be instant)                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │ (still not dead?)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  5. Abandon                                                     │
+│     └─► Log warning, continue (process in D state)              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** The PTY must be closed BEFORE killing the child. Otherwise, the shell may be blocked reading from the PTY and won't receive signals properly.
+
+**ECHILD handling:** Uses C library `waitpid` directly because Zig's `std.posix.waitpid` panics on `ECHILD`. See `docs/zig-0.15-notes.md` for details.
+
+## WebSocket Connection Robustness
+
+WebSocket connections are configured for robustness after machine suspend/resume:
+
+```zig
+// In websocket.zig Connection.init()
+// TCP keepalive: detect dead connections after machine sleep
+setsockopt(stream.handle, SOL.SOCKET, SO.KEEPALIVE, 1);
+
+// Write timeout: prevent blocking forever on stale sockets
+setsockopt(stream.handle, SOL.SOCKET, SO.SNDTIMEO, 10 seconds);
+```
+
+**Problem:** After suspend/resume, TCP connections become stale but the OS doesn't immediately detect this. Without write timeouts, `sendBinary()` blocks indefinitely waiting for ACKs.
+
+**Solution:**
+- `SO_KEEPALIVE` - OS periodically probes connection liveness
+- `SO_SNDTIMEO` - Writes fail with timeout instead of blocking forever

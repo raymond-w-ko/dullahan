@@ -752,3 +752,35 @@ fn encodeSnapshot(allocator: Allocator, cols: u16, rows: u16, cells: []const u8)
     return result;
 }
 ```
+
+---
+
+## POSIX API Gotchas
+
+### std.posix.waitpid Panics on ECHILD
+
+**Problem:** Zig's `std.posix.waitpid` uses `unreachable` for unexpected errors like `ECHILD` (no child process). This causes a panic if the child was already reaped or doesn't exist.
+
+```zig
+// ❌ Panics if child already reaped
+const result = posix.waitpid(pid, posix.W.NOHANG);
+```
+
+**Solution:** Use C library's `waitpid` directly via `@cImport`:
+
+```zig
+fn tryWaitpid(pid: std.posix.pid_t) bool {
+    const c = @cImport({
+        @cInclude("sys/wait.h");
+    });
+    var status: c_int = 0;
+    const ret = c.waitpid(pid, &status, c.WNOHANG);
+    if (ret == -1) {
+        // ECHILD or other error - child doesn't exist
+        return true;  // Consider it "reaped"
+    }
+    return ret != 0;  // true if child exited
+}
+```
+
+This pattern is useful for graceful shutdown where you need to handle the case where a child process may have already been reaped by another thread or the system.
