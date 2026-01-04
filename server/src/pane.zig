@@ -112,44 +112,7 @@ pub const Pane = struct {
         // Now reap the child process
         if (self.child_pid) |pid| {
             log.debug("Waiting for child process {d}", .{pid});
-
-            // Try non-blocking waitpid first (child may have already exited from SIGHUP)
-            const result = posix.waitpid(pid, posix.W.NOHANG);
-            if (result.pid == 0) {
-                // Child still running, send SIGTERM
-                log.debug("Child still running, sending SIGTERM", .{});
-                _ = posix.kill(pid, posix.SIG.TERM) catch {};
-
-                // Wait up to 500ms for graceful exit
-                var waited: usize = 0;
-                while (waited < 500) : (waited += 50) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
-                    const r = posix.waitpid(pid, posix.W.NOHANG);
-                    if (r.pid != 0) break;
-                }
-
-                // If still running, force kill
-                const r2 = posix.waitpid(pid, posix.W.NOHANG);
-                if (r2.pid == 0) {
-                    log.debug("Child did not exit, sending SIGKILL", .{});
-                    _ = posix.kill(pid, posix.SIG.KILL) catch {};
-
-                    // Wait up to 1 second for SIGKILL (should be instant)
-                    var kill_waited: usize = 0;
-                    while (kill_waited < 1000) : (kill_waited += 100) {
-                        std.Thread.sleep(100 * std.time.ns_per_ms);
-                        const r3 = posix.waitpid(pid, posix.W.NOHANG);
-                        if (r3.pid != 0) break;
-                    }
-
-                    // Final non-blocking check - if still not dead, give up
-                    // (process may be in uninterruptible sleep, nothing we can do)
-                    const r4 = posix.waitpid(pid, posix.W.NOHANG);
-                    if (r4.pid == 0) {
-                        log.warn("Child {d} did not exit after SIGKILL, abandoning", .{pid});
-                    }
-                }
-            }
+            self.reapChild(pid);
             log.debug("Child process cleanup complete", .{});
         }
 
@@ -164,6 +127,55 @@ pub const Pane = struct {
 
         self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
+    }
+
+    /// Try non-blocking waitpid, returns true if child exited/reaped or doesn't exist
+    fn tryWaitpid(pid: posix.pid_t) bool {
+        // Use C library waitpid directly to handle ECHILD (std.posix.waitpid panics on it)
+        const c = @cImport({
+            @cInclude("sys/wait.h");
+        });
+        var status: c_int = 0;
+        const ret = c.waitpid(pid, &status, c.WNOHANG);
+        if (ret == -1) {
+            // ECHILD or other error means child doesn't exist
+            log.debug("waitpid returned -1, assuming child gone", .{});
+            return true;
+        }
+        return ret != 0;
+    }
+
+    /// Try to reap a child process with timeout, handling all error cases
+    fn reapChild(self: *Pane, pid: posix.pid_t) void {
+        _ = self;
+
+        // Check if already exited
+        if (tryWaitpid(pid)) return;
+
+        // Child still running, send SIGTERM
+        log.debug("Child still running, sending SIGTERM", .{});
+        _ = posix.kill(pid, posix.SIG.TERM) catch {};
+
+        // Wait up to 500ms for graceful exit
+        var waited: usize = 0;
+        while (waited < 500) : (waited += 50) {
+            std.Thread.sleep(50 * std.time.ns_per_ms);
+            if (tryWaitpid(pid)) return;
+        }
+
+        // Still running, send SIGKILL
+        log.debug("Child did not exit, sending SIGKILL", .{});
+        _ = posix.kill(pid, posix.SIG.KILL) catch {};
+
+        // Wait up to 1 second for SIGKILL
+        var kill_waited: usize = 0;
+        while (kill_waited < 1000) : (kill_waited += 100) {
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+            if (tryWaitpid(pid)) return;
+        }
+
+        // Give up - process may be in uninterruptible sleep
+        log.warn("Child {d} did not exit after SIGKILL, abandoning", .{pid});
     }
 
     /// Spawn a shell in this pane
@@ -213,9 +225,8 @@ pub const Pane = struct {
     /// Check if child process is still alive
     pub fn isAlive(self: *Pane) bool {
         if (self.child_pid) |pid| {
-            const result = posix.waitpid(pid, posix.W.NOHANG);
-            if (result.pid != 0) {
-                // Child exited
+            if (tryWaitpid(pid)) {
+                // Child exited or doesn't exist
                 self.child_pid = null;
                 return false;
             }
