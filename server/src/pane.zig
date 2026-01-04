@@ -74,6 +74,20 @@ pub const Pane = struct {
     /// Reset by clearBell(), used for push notifications to clients
     bell_pending: bool = false,
 
+    /// Broadcast coordination for delta sync
+    /// Ensures only one thread generates delta per generation update
+    broadcast_mutex: std.Thread.Mutex = .{},
+
+    /// Generation of the last broadcast delta
+    last_broadcast_gen: u64 = 0,
+
+    /// Cached delta bytes for current generation (all clients get same delta)
+    /// Owned by pane, freed on next delta generation or deinit
+    cached_delta: ?[]u8 = null,
+
+    /// The fromGen of the cached delta (what generation clients need to be at to apply it)
+    cached_delta_from_gen: u64 = 0,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -124,6 +138,11 @@ pub const Pane = struct {
         // Free title if allocated
         if (self.title) |t| {
             self.allocator.free(t);
+        }
+
+        // Free cached broadcast delta
+        if (self.cached_delta) |delta| {
+            self.allocator.free(delta);
         }
 
         self.dirty_rows.deinit();
@@ -543,6 +562,51 @@ pub const Pane = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         return client_gen < self.dirty_base_gen;
+    }
+
+    /// Get the broadcast delta for the current generation.
+    /// Thread-safe: ensures only one thread generates the delta, all others get cached copy.
+    /// Returns owned slice that caller must free, or null if no update needed.
+    /// Also returns the fromGen that clients must be at to apply this delta.
+    pub fn getBroadcastDelta(self: *Pane) !struct { delta: []u8, from_gen: u64 } {
+        self.broadcast_mutex.lock();
+        defer self.broadcast_mutex.unlock();
+
+        // Check if we already have a cached delta for current generation
+        if (self.cached_delta != null and self.last_broadcast_gen == self.generation) {
+            // Return a copy of cached delta
+            const copy = try self.allocator.dupe(u8, self.cached_delta.?);
+            return .{ .delta = copy, .from_gen = self.cached_delta_from_gen };
+        }
+
+        // Need to generate new delta
+        const from_gen = self.last_broadcast_gen;
+
+        // Generate delta (this locks self.mutex internally)
+        const delta = try snapshot.generateDelta(self.allocator, self, from_gen, false);
+
+        // Free old cached delta
+        if (self.cached_delta) |old| {
+            self.allocator.free(old);
+        }
+
+        // Cache the new delta
+        self.cached_delta = delta;
+        self.cached_delta_from_gen = from_gen;
+        self.last_broadcast_gen = self.generation;
+
+        // Clear dirty rows now that delta is generated
+        // Need to lock mutex since dirty_rows is protected by it
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            self.dirty_rows.clearRetainingCapacity();
+            self.dirty_base_gen = self.generation;
+        }
+
+        // Return a copy (caller owns it)
+        const copy = try self.allocator.dupe(u8, delta);
+        return .{ .delta = copy, .from_gen = from_gen };
     }
 
     /// Check if cursor keys should use application mode (DECCKM)

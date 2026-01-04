@@ -7,7 +7,7 @@ const std = @import("std");
 
 // DEBUG: Set to true to always send full snapshots instead of deltas
 // This helps isolate whether rendering bugs are in delta generation/application
-const DEBUG_FORCE_FULL_SNAPSHOTS = true;
+const DEBUG_FORCE_FULL_SNAPSHOTS = false;
 const posix = std.posix;
 const msgpack = @import("msgpack");
 const http = @import("http.zig");
@@ -295,84 +295,61 @@ pub const WsServer = struct {
     /// Send update to client - delta if possible, full snapshot if needed
     /// client_gen is the generation the client last received
     fn sendUpdate(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64) !void {
+        _ = self;
+
         // DEBUG: Force full snapshots to isolate delta bugs
         if (DEBUG_FORCE_FULL_SNAPSHOTS) {
             log.debug("DEBUG: Forcing full snapshot (gen {d})", .{pane.generation});
-            try self.sendSnapshot(ws, pane);
-            pane.clearDirtyRows();
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try ws.sendBinary(snap);
             return;
         }
 
-        // Check if client is too far behind (needs full resync)
-        if (pane.needsFullResync(client_gen)) {
-            log.debug("Client gen {d} too old (base {d}), sending full snapshot", .{
+        // Get broadcast delta (thread-safe, generates once, caches for other clients)
+        const result = try pane.getBroadcastDelta();
+        defer pane.allocator.free(result.delta);
+
+        // Check if client can apply this delta
+        if (client_gen == result.from_gen) {
+            // Client is at the right generation, send delta
+            log.debug("Sending delta: gen {d} -> {d}", .{ result.from_gen, pane.generation });
+            try ws.sendBinary(result.delta);
+        } else if (client_gen < result.from_gen) {
+            // Client is behind, send full snapshot
+            log.debug("Client gen {d} < delta from_gen {d}, sending full snapshot", .{
                 client_gen,
-                pane.dirty_base_gen,
+                result.from_gen,
             });
-            try self.sendSnapshot(ws, pane);
-            // Clear dirty tracking after full snapshot (client is now up to date)
-            pane.clearDirtyRows();
-            return;
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try ws.sendBinary(snap);
+        } else {
+            // Client is ahead of from_gen - send delta anyway, client will verify
+            log.debug("Client gen {d} > delta from_gen {d}, sending delta (client will verify)", .{
+                client_gen,
+                result.from_gen,
+            });
+            try ws.sendBinary(result.delta);
         }
-
-        // Send delta with dirty rows
-        const dirty_count = pane.getDirtyRowCount();
-        log.debug("Sending delta: gen {d} -> {d}, {d} dirty rows", .{
-            client_gen,
-            pane.generation,
-            dirty_count,
-        });
-
-        const delta = try snapshot.generateDelta(self.allocator, pane, false);
-        defer self.allocator.free(delta);
-        try ws.sendBinary(delta);
-
-        // Clear dirty tracking after successful send (client now has these rows)
-        pane.clearDirtyRows();
     }
 
     /// Handle sync request - send delta or full snapshot based on client state
     fn handleSyncRequest(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64, client_min_row: u64) !void {
         _ = client_min_row; // TODO: use for pruning info
 
-        // DEBUG: Force full snapshots to isolate delta bugs
-        if (DEBUG_FORCE_FULL_SNAPSHOTS) {
-            log.debug("DEBUG: Forcing full snapshot (gen {d})", .{pane.generation});
-            try self.sendSnapshot(ws, pane);
-            pane.clearDirtyRows();
-            return;
-        }
-
-        // Check if client is too far behind
-        if (pane.needsFullResync(client_gen)) {
-            log.debug("Client gen {d} too old (base {d}), sending full snapshot", .{
-                client_gen,
-                pane.dirty_base_gen,
-            });
-            try self.sendSnapshot(ws, pane);
-            return;
-        }
-
         // Check if client is already up to date
         if (client_gen == pane.generation) {
             log.debug("Client already at gen {d}, no update needed", .{client_gen});
-            // Send empty delta
-            const delta = try snapshot.generateDelta(self.allocator, pane, true);
-            defer self.allocator.free(delta);
+            // Send empty delta with client's generation as both from and to
+            const delta = try snapshot.generateDelta(pane.allocator, pane, client_gen, true);
+            defer pane.allocator.free(delta);
             try ws.sendBinary(delta);
             return;
         }
 
-        // Send delta with dirty rows
-        log.debug("Sending delta: client gen {d} -> {d}, {d} dirty rows", .{
-            client_gen,
-            pane.generation,
-            pane.getDirtyRowCount(),
-        });
-
-        const delta = try snapshot.generateDelta(self.allocator, pane, false);
-        defer self.allocator.free(delta);
-        try ws.sendBinary(delta);
+        // Use sendUpdate which handles broadcast delta logic
+        try self.sendUpdate(ws, pane, client_gen);
     }
 
     /// Handle a message from a client
