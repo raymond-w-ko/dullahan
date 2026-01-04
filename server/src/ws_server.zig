@@ -4,6 +4,10 @@
 //! Uses binary msgpack for efficient data transmission.
 
 const std = @import("std");
+
+// DEBUG: Set to true to always send full snapshots instead of deltas
+// This helps isolate whether rendering bugs are in delta generation/application
+const DEBUG_FORCE_FULL_SNAPSHOTS = true;
 const posix = std.posix;
 const msgpack = @import("msgpack");
 const http = @import("http.zig");
@@ -291,6 +295,14 @@ pub const WsServer = struct {
     /// Send update to client - delta if possible, full snapshot if needed
     /// client_gen is the generation the client last received
     fn sendUpdate(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64) !void {
+        // DEBUG: Force full snapshots to isolate delta bugs
+        if (DEBUG_FORCE_FULL_SNAPSHOTS) {
+            log.debug("DEBUG: Forcing full snapshot (gen {d})", .{pane.generation});
+            try self.sendSnapshot(ws, pane);
+            pane.clearDirtyRows();
+            return;
+        }
+
         // Check if client is too far behind (needs full resync)
         if (pane.needsFullResync(client_gen)) {
             log.debug("Client gen {d} too old (base {d}), sending full snapshot", .{
@@ -322,6 +334,14 @@ pub const WsServer = struct {
     /// Handle sync request - send delta or full snapshot based on client state
     fn handleSyncRequest(self: *WsServer, ws: *websocket.Connection, pane: *Pane, client_gen: u64, client_min_row: u64) !void {
         _ = client_min_row; // TODO: use for pruning info
+
+        // DEBUG: Force full snapshots to isolate delta bugs
+        if (DEBUG_FORCE_FULL_SNAPSHOTS) {
+            log.debug("DEBUG: Forcing full snapshot (gen {d})", .{pane.generation});
+            try self.sendSnapshot(ws, pane);
+            pane.clearDirtyRows();
+            return;
+        }
 
         // Check if client is too far behind
         if (pane.needsFullResync(client_gen)) {

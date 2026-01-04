@@ -25,6 +25,9 @@ pub const Pty = @import("pty.zig").Pty;
 pub const PtyReader = @import("pty_reader.zig").PtyReader;
 pub const NotifyPipe = @import("notify_pipe.zig").NotifyPipe;
 
+// Utilities
+pub const process = @import("process.zig");
+
 // Signal handling
 pub const signal = @import("signal.zig");
 
