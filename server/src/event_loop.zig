@@ -214,10 +214,14 @@ pub const EventLoop = struct {
                 self.handleWsClient(client_idx) catch |e| {
                     if (e == error.ConnectionClosed) {
                         log.info("Client {d} disconnected", .{client_idx});
+                        self.removeClient(client_idx);
+                    } else if (e == error.WouldBlock) {
+                        // Timeout on partial frame - just continue, don't remove client
+                        log.debug("Client {d} read timeout (partial frame?)", .{client_idx});
                     } else {
                         log.err("Client {d} error: {any}", .{ client_idx, e });
+                        self.removeClient(client_idx);
                     }
-                    self.removeClient(client_idx);
                 };
             }
         }
@@ -377,7 +381,10 @@ pub const EventLoop = struct {
             }
         }
 
-        client.ws.setReadTimeout(0);
+        // Set a short read timeout so readFrame() doesn't block the event loop
+        // This allows the loop to check for shutdown signals even if a client
+        // sends an incomplete WebSocket frame
+        client.ws.setReadTimeout(100);
 
         try self.clients.append(self.allocator, client);
         log.info("Client connected, total clients: {d}", .{self.clients.items.len});

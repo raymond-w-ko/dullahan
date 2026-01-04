@@ -403,9 +403,28 @@ pub const Server = struct {
         log.debug("Accepted connection, reading request...", .{});
         errdefer conn.stream.close();
 
+        // Set a read timeout so we don't block forever waiting for HTTP request
+        const timeout = std.posix.timeval{
+            .sec = 0,
+            .usec = 500_000, // 500ms timeout
+        };
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+
         // Read HTTP request
         var buf: [4096]u8 = undefined;
-        const n = try conn.stream.read(&buf);
+        const n = conn.stream.read(&buf) catch |e| {
+            if (e == error.WouldBlock) {
+                log.debug("Read timeout waiting for HTTP request", .{});
+                conn.stream.close();
+                return null;
+            }
+            return e;
+        };
         log.debug("Read {d} bytes", .{n});
         if (n == 0) {
             log.debug("Empty request, closing", .{});
