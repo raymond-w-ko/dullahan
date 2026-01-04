@@ -126,6 +126,7 @@ pub const WsServer = struct {
         self.handleClient(conn, session) catch |e| {
             log.err("Client handler error: {any}", .{e});
         };
+        log.debug("Client thread exiting", .{});
     }
 
     /// Handle a single WebSocket client

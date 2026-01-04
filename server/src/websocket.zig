@@ -124,6 +124,29 @@ pub const Connection = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(stream: std.net.Stream, allocator: std.mem.Allocator) Connection {
+        // Set socket options for robustness after suspend/resume
+        // TCP keepalive: detect dead connections after machine sleep
+        const keepalive_enable: c_int = 1;
+        std.posix.setsockopt(
+            stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.KEEPALIVE,
+            std.mem.asBytes(&keepalive_enable),
+        ) catch {};
+
+        // Write timeout: prevent blocking forever on stale sockets
+        // 10 seconds is enough for network issues, but catches dead connections
+        const write_timeout = std.posix.timeval{
+            .sec = 10,
+            .usec = 0,
+        };
+        std.posix.setsockopt(
+            stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.SNDTIMEO,
+            std.mem.asBytes(&write_timeout),
+        ) catch {};
+
         return .{
             .stream = stream,
             .allocator = allocator,
