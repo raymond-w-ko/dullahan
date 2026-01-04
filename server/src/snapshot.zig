@@ -742,11 +742,13 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
         var row_map = msgpack.Payload.mapPayload(allocator);
         try row_map.mapPut("id", msgpack.Payload{ .uint = item.id });
 
-        // Get cells for this row
+        // Get cells for this row - MUST pad to pane.cols for consistent client decoding
         const cells = pin.cells(.all);
-        const cell_bytes = try allocator.alloc(u8, cells.len * 8);
+        const row_byte_size = @as(usize, pane.cols) * 8;
+        const cell_bytes = try allocator.alloc(u8, row_byte_size);
         defer allocator.free(cell_bytes);
 
+        // Copy actual cells
         for (cells, 0..) |cell, i| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
             @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
@@ -757,6 +759,12 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, empty: bool) ![]
                 const encoded = encodeStyle(style);
                 try styles_map.put(cell.style_id, encoded);
             }
+        }
+
+        // Pad remaining columns with zeros (empty cells)
+        if (cells.len < pane.cols) {
+            const padding_start = cells.len * 8;
+            @memset(cell_bytes[padding_start..], 0);
         }
 
         try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
