@@ -174,32 +174,39 @@ pub const Session = struct {
 
     /// Internal helper to format and log PTY traffic
     fn logPtyTraffic(self: *Session, debug_pane: *Pane, direction: []const u8, pane_id: u16, data: []const u8, color: []const u8) void {
+        // Format: "[HH:MM:SS.mmm] COLOR> pane N: RESET hex bytes | ascii\r\n"
+        // Use dynamic allocation to handle any size
 
-        // Format: "COLOR> pane N: RESET hex bytes | ascii\r\n"
-        // Use stack buffer for efficiency, truncate if too long
-        var buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        // Calculate buffer size: timestamp(14) + header(~20) + hex(3*len) + separator(3) + ascii(len) + newline(2)
+        const buf_size = 50 + data.len * 4;
+        const buf = self.allocator.alloc(u8, buf_size) catch return;
+        defer self.allocator.free(buf);
+
+        var fbs = std.io.fixedBufferStream(buf);
         const w = fbs.writer();
+
+        // Write timestamp [HH:MM:SS.mmm]
+        const ts_ms = std.time.milliTimestamp();
+        const ts_s: u64 = @intCast(@divTrunc(ts_ms, 1000));
+        const ms: u64 = @intCast(@mod(ts_ms, 1000));
+        const day_s = @mod(ts_s, 86400); // seconds since midnight
+        const hours = @divTrunc(day_s, 3600);
+        const mins = @divTrunc(@mod(day_s, 3600), 60);
+        const secs = @mod(day_s, 60);
+        w.print("\x1b[90m[{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}]\x1b[0m ", .{ hours, mins, secs, ms }) catch return;
 
         // Write color and direction
         w.writeAll(color) catch return;
-        w.print("{s} pane {d}: ", .{ direction, pane_id }) catch return;
-        w.writeAll("\x1b[0m") catch return; // reset color for hex
+        w.print("{s} pane {d}:\x1b[0m ", .{ direction, pane_id }) catch return;
 
-        // Write hex bytes (limit to 16 bytes to fit on one line)
-        const max_bytes = @min(data.len, 16);
-        for (data[0..max_bytes]) |byte| {
+        // Write ALL hex bytes
+        for (data) |byte| {
             w.print("{x:0>2} ", .{byte}) catch return;
-        }
-
-        // Indicate truncation
-        if (data.len > max_bytes) {
-            w.print("... (+{d} more) ", .{data.len - max_bytes}) catch return;
         }
 
         // Write ASCII representation
         w.writeAll("| ") catch return;
-        for (data[0..max_bytes]) |byte| {
+        for (data) |byte| {
             const c: u8 = if (byte >= 32 and byte < 127) byte else '.';
             w.print("{c}", .{c}) catch return;
         }
