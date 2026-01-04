@@ -37,6 +37,7 @@ export interface TerminalSnapshot {
 /** Binary msgpack snapshot from server */
 interface BinarySnapshot {
   type: "snapshot";
+  paneId: number;      // Pane ID for multi-pane support
   gen: number;         // Generation counter for delta sync
   cols: number;
   rows: number;
@@ -59,7 +60,9 @@ interface BinarySnapshot {
 /** Binary msgpack delta update from server */
 interface BinaryDelta {
   type: "delta";
-  gen: number;         // New generation after applying
+  paneId: number;      // Pane ID for multi-pane support
+  fromGen: number;     // Generation this delta applies FROM (client must be at this gen)
+  gen: number;         // New generation after applying (toGen)
   cols: number;
   rows: number;
   cursor: {
@@ -286,12 +289,32 @@ export class TerminalConnection {
       case "delta":
         debug.log("Raw delta message:", {
           type: msg.type,
+          fromGen: msg.fromGen,
           gen: msg.gen,
           hasRowIds: 'rowIds' in msg,
           rowIdsType: typeof (msg as any).rowIds,
           rowIdsConstructor: (msg as any).rowIds?.constructor?.name,
         });
-        this.applyDelta(msg);
+        // Check if we can apply this delta
+        // Client must be at fromGen to apply delta that brings us to gen
+        if (this._generation === msg.fromGen) {
+          this.applyDelta(msg);
+        } else if (this._generation < msg.fromGen) {
+          // We're behind - request full snapshot
+          debug.log(`Delta fromGen ${msg.fromGen} > our gen ${this._generation}, requesting snapshot`);
+          this._resyncCount++;
+          this.sendSync(this._generation, Number(this._minRowId));
+        } else {
+          // We're ahead of fromGen - this delta is stale, ignore it
+          // But if we're behind the target gen, request sync
+          if (this._generation < msg.gen) {
+            debug.log(`Stale delta (fromGen ${msg.fromGen} < our gen ${this._generation}), but behind target ${msg.gen}, requesting sync`);
+            this._resyncCount++;
+            this.sendSync(this._generation, Number(this._minRowId));
+          } else {
+            debug.log(`Stale delta ignored (fromGen ${msg.fromGen}, our gen ${this._generation})`);
+          }
+        }
         break;
       case "output":
         this.onOutput?.(msg.data);
@@ -531,7 +554,7 @@ export class TerminalConnection {
    * Apply a delta update to the local cache and notify as snapshot
    */
   private applyDelta(delta: BinaryDelta): void {
-    debug.log(`Applying delta: gen ${this._generation} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
+    debug.log(`Applying delta: gen ${delta.fromGen} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
     debug.log(`Delta details:`, {
       cols: delta.cols,
       rows: delta.rows,
