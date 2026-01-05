@@ -395,14 +395,18 @@ pub const EventLoop = struct {
         var client = ClientState.init(self.allocator, ws_conn.?);
 
         const window = self.session.activeWindow() orelse return;
+        log.info("Sending initial snapshots for {d} panes", .{window.paneCount()});
         var pane_it = window.panes.valueIterator();
         while (pane_it.next()) |pane| {
+            log.info("Sending snapshot for pane {d}, gen={d}", .{ pane.id, pane.generation });
             self.sendSnapshot(&client.ws, pane) catch |e| {
-                log.err("Failed to send initial snapshot: {any}", .{e});
+                log.err("Failed to send initial snapshot for pane {d}: {any}", .{ pane.id, e });
                 client.deinit();
                 return;
             };
-            pane.clearDirtyRows();
+            // Don't call clearDirtyRows() here - initial snapshot sends full state,
+            // and clearing would reset dirty_base_gen which affects broadcast deltas
+            // for other clients or subsequent updates
             client.setGeneration(pane.id, pane.generation);
         }
 
@@ -529,13 +533,16 @@ pub const EventLoop = struct {
         defer pane.allocator.free(result.delta);
 
         if (last_gen == result.from_gen) {
+            // Client can apply this delta
             try client.ws.sendBinary(result.delta);
-        } else if (last_gen < result.from_gen) {
+        } else {
+            // Client can't apply delta (generation mismatch), send full snapshot
+            log.debug("Pane {d}: client gen {d} != delta from_gen {d}, sending snapshot", .{
+                pane_id, last_gen, result.from_gen,
+            });
             const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
             defer pane.allocator.free(snap);
             try client.ws.sendBinary(snap);
-        } else {
-            try client.ws.sendBinary(result.delta);
         }
 
         client.setGeneration(pane_id, pane.generation);

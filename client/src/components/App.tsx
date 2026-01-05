@@ -153,8 +153,10 @@ export function App() {
     };
 
     conn.onSnapshot = (snap) => {
+      debug.log(`onSnapshot for pane ${snap.paneId}, gen=${snap.gen}, cells=${snap.cells.length}`);
       // Update per-pane snapshot
       setPaneSnapshots(prev => {
+        debug.log(`setPaneSnapshots: prev has panes [${[...prev.keys()].join(', ')}], adding pane ${snap.paneId}`);
         const next = new Map(prev);
         next.set(snap.paneId, snap);
         return next;
