@@ -293,24 +293,29 @@ pub const EventLoop = struct {
         if (result) |cmd_result| {
             self.commands_processed += 1;
 
-            const response = self.handleCommand(cmd_result.command) catch |e| blk: {
+            // Use arena allocator per-request to avoid leaking response data
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+
+            const response = self.handleCommand(cmd_result.command, arena_alloc) catch |e| blk: {
                 log.err("Command error: {any}", .{e});
                 break :blk ipc.Response.err("Internal error");
             };
 
-            self.ipc_server.sendResponse(cmd_result.conn, response, self.allocator) catch |e| {
+            self.ipc_server.sendResponse(cmd_result.conn, response, arena_alloc) catch |e| {
                 log.err("Send error: {any}", .{e});
             };
         }
     }
 
-    fn handleCommand(self: *EventLoop, command: ipc.Command) !ipc.Response {
+    fn handleCommand(self: *EventLoop, command: ipc.Command, alloc: std.mem.Allocator) !ipc.Response {
         return switch (command) {
             .ping => ipc.Response.ok("pong"),
 
             .status => blk: {
                 var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(self.allocator);
+                const writer = buf.writer(alloc);
 
                 const up = self.uptime();
                 const hours = @divFloor(up, 3600);
@@ -322,7 +327,7 @@ pub const EventLoop = struct {
                 try writer.print("Running: {any}\n", .{self.running});
                 try writer.print("Connected clients: {d}\n", .{self.clients.items.len});
 
-                const data = try buf.toOwnedSlice(self.allocator);
+                const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Server status", data);
             },
 
@@ -333,25 +338,25 @@ pub const EventLoop = struct {
 
             .help => blk: {
                 var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(self.allocator);
+                const writer = buf.writer(alloc);
                 try writer.writeAll("Available commands:\n");
                 inline for (std.meta.fields(ipc.Command)) |field| {
                     const cmd: ipc.Command = @enumFromInt(field.value);
                     try writer.print("  {s:<10} - {s}\n", .{ field.name, cmd.description() });
                 }
-                const data = try buf.toOwnedSlice(self.allocator);
+                const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Help", data);
             },
 
             .dump => blk: {
                 var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(self.allocator);
+                const writer = buf.writer(alloc);
 
                 const up = self.uptime();
                 try writer.print("Server: up={d}s cmds={d}\n", .{ up, self.commands_processed });
                 try self.session.dump(writer);
 
-                const data = try buf.toOwnedSlice(self.allocator);
+                const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("State dump", data);
             },
 
@@ -360,10 +365,10 @@ pub const EventLoop = struct {
                     break :blk ipc.Response.err("No active pane");
 
                 var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(self.allocator);
+                const writer = buf.writer(alloc);
                 try pane.dumpRaw(writer);
 
-                const data = try buf.toOwnedSlice(self.allocator);
+                const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Raw cell dump", data);
             },
 
