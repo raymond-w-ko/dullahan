@@ -171,14 +171,12 @@ pub const EventLoop = struct {
     }
 
     fn buildPollSet(self: *EventLoop) ![]posix.pollfd {
+        // Count PTYs via pane registry
         var pty_count: usize = 0;
-        var window_it = self.session.windows.valueIterator();
-        while (window_it.next()) |window| {
-            var pane_it = window.panes.valueIterator();
-            while (pane_it.next()) |pane| {
-                if (pane.getPtyFd() != null) {
-                    pty_count += 1;
-                }
+        var count_it = self.session.pane_registry.iterator();
+        while (count_it.next()) |pane_ptr| {
+            if (pane_ptr.*.getPtyFd() != null) {
+                pty_count += 1;
             }
         }
 
@@ -194,14 +192,12 @@ pub const EventLoop = struct {
             idx += 1;
         }
 
-        var window_it2 = self.session.windows.valueIterator();
-        while (window_it2.next()) |window| {
-            var pane_it = window.panes.valueIterator();
-            while (pane_it.next()) |pane| {
-                if (pane.getPtyFd()) |fd| {
-                    fds[idx] = .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 };
-                    idx += 1;
-                }
+        // Add PTY fds via pane registry
+        var pane_it = self.session.pane_registry.iterator();
+        while (pane_it.next()) |pane_ptr| {
+            if (pane_ptr.*.getPtyFd()) |fd| {
+                fds[idx] = .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 };
+                idx += 1;
             }
         }
 
@@ -258,28 +254,26 @@ pub const EventLoop = struct {
         // because fds array was built with that count
         const pty_start_idx = FIXED_FD_COUNT + poll_client_count;
         var pty_idx: usize = 0;
-        var window_it = self.session.windows.valueIterator();
-        while (window_it.next()) |window| {
-            var pane_it = window.panes.valueIterator();
-            while (pane_it.next()) |pane| {
-                if (pane.getPtyFd() != null) {
-                    const fd_idx = pty_start_idx + pty_idx;
-                    if (fd_idx < fds.len) {
-                        const revents = fds[fd_idx].revents;
+        var pane_it = self.session.pane_registry.iterator();
+        while (pane_it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
+            if (pane.getPtyFd() != null) {
+                const fd_idx = pty_start_idx + pty_idx;
+                if (fd_idx < fds.len) {
+                    const revents = fds[fd_idx].revents;
 
-                        if (revents & posix.POLL.IN != 0) {
-                            self.handlePtyData(pane) catch |e| {
-                                log.err("PTY read error for pane {d}: {any}", .{ pane.id, e });
-                            };
-                        }
-
-                        if (revents & (posix.POLL.HUP | posix.POLL.ERR) != 0) {
-                            log.info("PTY hangup/error for pane {d}", .{pane.id});
-                            _ = pane.isAlive();
-                        }
+                    if (revents & posix.POLL.IN != 0) {
+                        self.handlePtyData(pane) catch |e| {
+                            log.err("PTY read error for pane {d}: {any}", .{ pane.id, e });
+                        };
                     }
-                    pty_idx += 1;
+
+                    if (revents & (posix.POLL.HUP | posix.POLL.ERR) != 0) {
+                        log.info("PTY hangup/error for pane {d}", .{pane.id});
+                        _ = pane.isAlive();
+                    }
                 }
+                pty_idx += 1;
             }
         }
     }
@@ -399,10 +393,11 @@ pub const EventLoop = struct {
 
         var client = ClientState.init(self.allocator, ws_conn.?);
 
-        const window = self.session.activeWindow() orelse return;
-        log.info("Sending initial snapshots for {d} panes", .{window.paneCount()});
-        var pane_it = window.panes.valueIterator();
-        while (pane_it.next()) |pane| {
+        // Send initial snapshots for all panes via registry
+        log.info("Sending initial snapshots for {d} panes", .{self.session.pane_registry.count()});
+        var pane_it = self.session.pane_registry.iterator();
+        while (pane_it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
             log.info("Sending snapshot for pane {d}, gen={d}", .{ pane.id, pane.generation });
             self.sendSnapshot(&client.ws, pane) catch |e| {
                 log.err("Failed to send initial snapshot for pane {d}: {any}", .{ pane.id, e });
@@ -501,10 +496,10 @@ pub const EventLoop = struct {
     }
 
     fn sendClientUpdates(self: *EventLoop, client: *ClientState) !void {
-        const window = self.session.activeWindow() orelse return;
-        var it = window.panes.valueIterator();
-        while (it.next()) |pane| {
-            try self.sendPaneUpdate(client, pane);
+        // Send updates for all panes via registry
+        var it = self.session.pane_registry.iterator();
+        while (it.next()) |pane_ptr| {
+            try self.sendPaneUpdate(client, pane_ptr.*);
         }
     }
 
@@ -610,12 +605,8 @@ pub const EventLoop = struct {
 
             if (cols < 1 or cols > 500 or rows < 1 or rows > 500) return;
 
-            // Resize all panes, not just active (debug pane needs resize too)
-            const window = self.session.activeWindow() orelse return;
-            var pane_it = window.panes.valueIterator();
-            while (pane_it.next()) |pane| {
-                try pane.resize(cols, rows);
-            }
+            // Resize all panes via registry (debug pane needs resize too)
+            try self.session.pane_registry.resizeAll(cols, rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             const scroll_msg = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -723,12 +714,8 @@ pub const EventLoop = struct {
             const rows_payload = (payload.mapGet("rows") catch return) orelse return;
             const cols: u16 = @intCast(cols_payload.getUint() catch return);
             const rows: u16 = @intCast(rows_payload.getUint() catch return);
-            // Resize all panes, not just active (debug pane needs resize too)
-            const window = self.session.activeWindow() orelse return;
-            var pane_it = window.panes.valueIterator();
-            while (pane_it.next()) |pane| {
-                try pane.resize(cols, rows);
-            }
+            // Resize all panes via registry (debug pane needs resize too)
+            try self.session.pane_registry.resizeAll(cols, rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             const pane = self.session.activePane() orelse return;
             const delta_payload = (payload.mapGet("delta") catch return) orelse return;

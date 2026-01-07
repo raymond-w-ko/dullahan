@@ -163,7 +163,8 @@ pub const WsServer = struct {
 
         // Send initial snapshot for ALL panes from registry
         var pane_it = session.pane_registry.iterator();
-        while (pane_it.next()) |pane| {
+        while (pane_it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
             try self.sendSnapshot(&ws, pane);
             pane.clearDirtyRows();
             if (pane.id < pane_generations.len) {
@@ -205,7 +206,8 @@ pub const WsServer = struct {
 
                 // Check ALL panes for updates via registry
                 var update_it = session.pane_registry.iterator();
-                while (update_it.next()) |pane| {
+                while (update_it.next()) |pane_ptr| {
+                    const pane = pane_ptr.*;
                     const pane_id = pane.id;
                     if (pane_id >= pane_generations.len) continue;
 
@@ -319,7 +321,8 @@ pub const WsServer = struct {
     /// Send updates for any panes that have changed
     fn sendAllPaneUpdates(self: *WsServer, session: *Session, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
         var it = session.pane_registry.iterator();
-        while (it.next()) |pane| {
+        while (it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
             const pane_id = pane.id;
             if (pane_id >= pane_generations.len) continue;
 
