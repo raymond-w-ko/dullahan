@@ -151,6 +151,10 @@ export class TerminalConnection {
   // Per-pane delta sync state
   private _panes: Map<number, PaneState> = new Map();
 
+  // Pending resize tracking - resizes are queued and sent when connected
+  private _pendingResizes: Map<number, { cols: number; rows: number }> = new Map();
+  private _lastSentResizes: Map<number, { cols: number; rows: number }> = new Map();
+
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
   public onOutput: ((data: string) => void) | null = null;
@@ -238,6 +242,8 @@ export class TerminalConnection {
 
     this.ws.onopen = () => {
       debug.log("WebSocket connected");
+      // Flush any pending resizes now that we're connected
+      this.flushPendingResizes();
       this.onConnect?.();
     };
 
@@ -595,10 +601,108 @@ export class TerminalConnection {
   }
 
   /**
-   * Send resize for a specific pane
+   * Send resize for a specific pane (immediate, bypasses pending queue)
    */
   sendResize(paneId: number, cols: number, rows: number): void {
     this.send({ type: "resize", paneId, cols, rows });
+  }
+
+  /**
+   * Calculate pane dimensions from a container element.
+   * Returns { cols, rows } or { cols: -1, rows: -1 } if not ready (no measurement possible).
+   * This is synchronous and does not send anything.
+   */
+  calculatePaneSize(container: HTMLElement): { cols: number; rows: number } {
+    // Create temporary measurement element
+    const measure = document.createElement('div');
+    measure.className = 'terminal-line';
+    measure.style.cssText = `
+      position: absolute;
+      visibility: hidden;
+      pointer-events: none;
+    `;
+    measure.textContent = 'X';
+    container.appendChild(measure);
+
+    try {
+      const rect = measure.getBoundingClientRect();
+      const cellWidth = rect.width;
+      const cellHeight = rect.height;
+
+      // Not ready if we can't measure
+      if (cellWidth === 0 || cellHeight === 0) {
+        return { cols: -1, rows: -1 };
+      }
+
+      // Get container dimensions (minus padding)
+      const style = getComputedStyle(container);
+      const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const availableWidth = container.clientWidth - paddingX;
+      const availableHeight = container.clientHeight - paddingY;
+
+      // Not ready if container has no size
+      if (availableWidth <= 0 || availableHeight <= 0) {
+        return { cols: -1, rows: -1 };
+      }
+
+      // Calculate dimensions with safe minimums
+      const safeCellWidth = Math.max(cellWidth, 4);
+      const safeCellHeight = Math.max(cellHeight, 8);
+
+      const cols = Math.floor(availableWidth / safeCellWidth);
+      const rows = Math.floor(availableHeight / safeCellHeight);
+
+      // Clamp to reasonable terminal sizes (1-500 cols/rows)
+      return {
+        cols: Math.max(1, Math.min(500, cols)),
+        rows: Math.max(1, Math.min(500, rows)),
+      };
+    } finally {
+      container.removeChild(measure);
+    }
+  }
+
+  /**
+   * Mark that a pane needs to be resized.
+   * Does not send immediately - call flushPendingResizes() or wait for connection.
+   * Skips if dimensions match last sent values.
+   */
+  setPaneSize(paneId: number, cols: number, rows: number): void {
+    // Skip if not ready
+    if (cols < 0 || rows < 0) {
+      return;
+    }
+
+    // Skip if same as last sent
+    const lastSent = this._lastSentResizes.get(paneId);
+    if (lastSent && lastSent.cols === cols && lastSent.rows === rows) {
+      return;
+    }
+
+    // Queue the resize
+    this._pendingResizes.set(paneId, { cols, rows });
+    debug.log(`Queued resize for pane ${paneId}: ${cols}x${rows}`);
+
+    // Try to flush immediately if connected
+    this.flushPendingResizes();
+  }
+
+  /**
+   * Send all pending resizes if connected.
+   * Safe to call at any time - does nothing if not connected or no pending resizes.
+   */
+  flushPendingResizes(): void {
+    if (!this.isConnected || this._pendingResizes.size === 0) {
+      return;
+    }
+
+    for (const [paneId, size] of this._pendingResizes) {
+      debug.log(`Sending resize for pane ${paneId}: ${size.cols}x${size.rows}`);
+      this.send({ type: "resize", paneId, cols: size.cols, rows: size.rows });
+      this._lastSentResizes.set(paneId, size);
+    }
+    this._pendingResizes.clear();
   }
 
   /**

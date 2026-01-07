@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef, RefObject } from "preact/hooks";
+import { useEffect, useState, useRef } from "preact/hooks";
+import type { RefObject } from "preact";
 
 export interface TerminalDimensions {
   cols: number;

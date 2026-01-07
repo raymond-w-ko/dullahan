@@ -36,33 +36,16 @@ export function App() {
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
   const [calculatedDimensions, setCalculatedDimensions] = useState({ cols: 80, rows: 24 });
   const connectionRef = useRef<TerminalConnection | null>(null);
-  const resizeTimeoutRef = useRef<number | null>(null);
-  const lastSentDimensions = useRef({ cols: 0, rows: 0 });
-  
-  const handleDimensionsChange = useCallback((cols: number, rows: number) => {
-    // Only update if dimensions actually changed
-    if (cols === lastSentDimensions.current.cols && rows === lastSentDimensions.current.rows) {
-      return;
-    }
-    
+
+  // Handle dimension changes from panes - uses the new setPaneSize API
+  // which queues resizes and sends them when connected
+  const handleDimensionsChange = useCallback((paneId: number, cols: number, rows: number) => {
     setCalculatedDimensions({ cols, rows });
-    
-    // Debounce resize messages to avoid flooding during drag resize
-    if (resizeTimeoutRef.current) {
-      clearTimeout(resizeTimeoutRef.current);
+    const conn = connectionRef.current;
+    if (conn) {
+      // setPaneSize handles deduplication and queuing internally
+      conn.setPaneSize(paneId, cols, rows);
     }
-    resizeTimeoutRef.current = window.setTimeout(() => {
-      const conn = connectionRef.current;
-      // Double-check dimensions haven't been sent already
-      if (conn?.isConnected &&
-          (cols !== lastSentDimensions.current.cols || rows !== lastSentDimensions.current.rows)) {
-        debug.log(`Sending resize: ${cols}x${rows}`);
-        lastSentDimensions.current = { cols, rows };
-        // TODO(du-obn): Send resize to all panes or track focused pane
-        conn.sendResize(SHELL_PANE_1_ID, cols, rows);
-      }
-      resizeTimeoutRef.current = null;
-    }, 100); // 100ms debounce
   }, []);
 
   // Play bell audio using Web Audio API
@@ -192,10 +175,6 @@ export function App() {
 
     return () => {
       conn.disconnect();
-      // Clean up resize debounce timer
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -284,30 +263,15 @@ interface TerminalViewProps {
   cursorColor: string;
   cursorText: string;
   cursorBlink: '' | 'true' | 'false';
-  onDimensionsChange?: (cols: number, rows: number) => void;
   onKeyInput?: () => void;
   connection: TerminalConnection | null;
 }
 
-function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onDimensionsChange, onKeyInput, connection }: TerminalViewProps) {
+function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBlink, onKeyInput, connection }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
   const terminalRef = useRef<HTMLPreElement>(null);
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
-  const dimensions = useTerminalDimensions(terminalRef);
-  const lastReportedDimensions = useRef({ cols: 0, rows: 0 });
-
-  // Report dimension changes (with deduplication)
-  useEffect(() => {
-    if (onDimensionsChange && dimensions.cols > 0 && dimensions.rows > 0) {
-      // Only call if actually changed
-      if (dimensions.cols !== lastReportedDimensions.current.cols || 
-          dimensions.rows !== lastReportedDimensions.current.rows) {
-        lastReportedDimensions.current = { cols: dimensions.cols, rows: dimensions.rows };
-        onDimensionsChange(dimensions.cols, dimensions.rows);
-      }
-    }
-  }, [dimensions.cols, dimensions.rows, onDimensionsChange]);
 
   // Setup keyboard handler
   useEffect(() => {
@@ -398,7 +362,7 @@ interface TerminalPaneProps {
   cursorBlink: '' | 'true' | 'false';
   isReadOnly?: boolean;
   bellActive?: boolean;
-  onDimensionsChange?: (cols: number, rows: number) => void;
+  onDimensionsChange?: (paneId: number, cols: number, rows: number) => void;
   onKeyInput?: () => void;
   connection?: TerminalConnection | null;
   syncStats?: { deltas: number; resyncs: number; gen: number };
@@ -423,10 +387,40 @@ function TerminalPane({
   calculatedDimensions,
 }: TerminalPaneProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const dimensions = useTerminalDimensions(terminalRef);
+  const [localDimensions, setLocalDimensions] = useState({ cols: -1, rows: -1 });
+
+  // Calculate and report dimensions using connection's calculatePaneSize
+  useEffect(() => {
+    const container = terminalRef.current;
+    if (!container || !connection || isReadOnly) return;
+
+    const calculate = () => {
+      const size = connection.calculatePaneSize(container);
+      if (size.cols > 0 && size.rows > 0) {
+        setLocalDimensions(size);
+        onDimensionsChange?.(paneId, size.cols, size.rows);
+      }
+    };
+
+    // Initial calculation
+    calculate();
+
+    // Observe resize
+    const observer = new ResizeObserver(() => {
+      calculate();
+    });
+    observer.observe(container);
+
+    // Also recalculate when fonts load
+    document.fonts.ready.then(calculate);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [connection, paneId, isReadOnly, onDimensionsChange]);
 
   // Use calculated dimensions if provided, otherwise use local measurement
-  const displayDims = calculatedDimensions ?? dimensions;
+  const displayDims = calculatedDimensions ?? (localDimensions.cols > 0 ? localDimensions : { cols: 80, rows: 24 });
 
   // Handle click on pane to focus it
   const handlePaneClick = useCallback(() => {
@@ -460,22 +454,23 @@ function TerminalPane({
           {snapshot ? `${displayDims.cols}×${displayDims.rows}` : '—'}
         </span>
       </div>
-      {snapshot ? (
-        <TerminalView
-          snapshot={snapshot}
-          cursorStyle={cursorStyle}
-          cursorColor={cursorColor}
-          cursorText={cursorText}
-          cursorBlink={cursorBlink}
-          onDimensionsChange={isReadOnly ? undefined : onDimensionsChange}
-          onKeyInput={isReadOnly ? undefined : onKeyInput}
-          connection={isReadOnly ? null : connection ?? null}
-        />
-      ) : (
-        <div class="terminal terminal--empty" ref={terminalRef}>
-          {connected ? "Waiting..." : "Connecting..."}
-        </div>
-      )}
+      <div class="terminal-container" ref={terminalRef}>
+        {snapshot ? (
+          <TerminalView
+            snapshot={snapshot}
+            cursorStyle={cursorStyle}
+            cursorColor={cursorColor}
+            cursorText={cursorText}
+            cursorBlink={cursorBlink}
+            onKeyInput={isReadOnly ? undefined : onKeyInput}
+            connection={isReadOnly ? null : connection ?? null}
+          />
+        ) : (
+          <div class="terminal terminal--empty">
+            {connected ? "Waiting..." : "Connecting..."}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

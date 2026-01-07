@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import type { Cell } from '../../../protocol/schema/cell';
+import { ContentTag } from '../../../protocol/schema/cell';
 import type { StyleTable } from '../../../protocol/schema/style';
 
 export interface ScrollbackState {
@@ -50,7 +51,7 @@ const DEFAULT_MAX_ROWS = 10000;
 export function useScrollback(maxRows: number = DEFAULT_MAX_ROWS): [ScrollbackState, ScrollbackActions] {
   const [state, setState] = useState<ScrollbackState>({
     rows: [],
-    styles: {},
+    styles: new Map(),
     viewportTop: 0,
     viewportRows: 24,
     cols: 80,
@@ -74,7 +75,13 @@ export function useScrollback(maxRows: number = DEFAULT_MAX_ROWS): [ScrollbackSt
         const row: Cell[] = [];
         for (let x = 0; x < cols; x++) {
           const idx = y * cols + x;
-          row.push(cells[idx] || { codepoint: 32, styleId: 0 } as Cell);
+          row.push(cells[idx] || {
+            content: { tag: ContentTag.CODEPOINT, codepoint: 32 },
+            styleId: 0,
+            wide: 0,
+            protected: false,
+            hyperlink: false,
+          });
         }
         newRows.push(row);
       }
