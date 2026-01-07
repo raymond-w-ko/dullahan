@@ -611,56 +611,53 @@ export class TerminalConnection {
    * Calculate pane dimensions from a container element.
    * Returns { cols, rows } or { cols: -1, rows: -1 } if not ready (no measurement possible).
    * This is synchronous and does not send anything.
+   *
+   * Uses a persistent measurement element (.terminal-measure) that stays in the DOM
+   * for efficiency and debuggability in Chrome DevTools.
    */
   calculatePaneSize(container: HTMLElement): { cols: number; rows: number } {
-    // Create temporary measurement element
-    const measure = document.createElement('div');
-    measure.className = 'terminal-line';
-    measure.style.cssText = `
-      position: absolute;
-      visibility: hidden;
-      pointer-events: none;
-    `;
-    measure.textContent = 'X';
-    container.appendChild(measure);
-
-    try {
-      const rect = measure.getBoundingClientRect();
-      const cellWidth = rect.width;
-      const cellHeight = rect.height;
-
-      // Not ready if we can't measure
-      if (cellWidth === 0 || cellHeight === 0) {
-        return { cols: -1, rows: -1 };
-      }
-
-      // Get container dimensions (minus padding)
-      const style = getComputedStyle(container);
-      const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-      const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      const availableWidth = container.clientWidth - paddingX;
-      const availableHeight = container.clientHeight - paddingY;
-
-      // Not ready if container has no size
-      if (availableWidth <= 0 || availableHeight <= 0) {
-        return { cols: -1, rows: -1 };
-      }
-
-      // Calculate dimensions with safe minimums
-      const safeCellWidth = Math.max(cellWidth, 4);
-      const safeCellHeight = Math.max(cellHeight, 8);
-
-      const cols = Math.floor(availableWidth / safeCellWidth);
-      const rows = Math.floor(availableHeight / safeCellHeight);
-
-      // Clamp to reasonable terminal sizes (1-500 cols/rows)
-      return {
-        cols: Math.max(1, Math.min(500, cols)),
-        rows: Math.max(1, Math.min(500, rows)),
-      };
-    } finally {
-      container.removeChild(measure);
+    // Find or create persistent measurement element
+    let measure = container.querySelector('.terminal-measure') as HTMLDivElement | null;
+    if (!measure) {
+      measure = document.createElement('div');
+      measure.className = 'terminal-measure terminal-line';
+      measure.textContent = 'X';
+      container.appendChild(measure);
     }
+
+    const rect = measure.getBoundingClientRect();
+    const cellWidth = rect.width;
+    const cellHeight = rect.height;
+
+    // Not ready if we can't measure
+    if (cellWidth === 0 || cellHeight === 0) {
+      return { cols: -1, rows: -1 };
+    }
+
+    // Get container dimensions (minus padding)
+    const style = getComputedStyle(container);
+    const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const availableWidth = container.clientWidth - paddingX;
+    const availableHeight = container.clientHeight - paddingY;
+
+    // Not ready if container has no size
+    if (availableWidth <= 0 || availableHeight <= 0) {
+      return { cols: -1, rows: -1 };
+    }
+
+    // Calculate dimensions with safe minimums
+    const safeCellWidth = Math.max(cellWidth, 4);
+    const safeCellHeight = Math.max(cellHeight, 8);
+
+    const cols = Math.floor(availableWidth / safeCellWidth);
+    const rows = Math.floor(availableHeight / safeCellHeight);
+
+    // Clamp to reasonable terminal sizes (1-500 cols/rows)
+    return {
+      cols: Math.max(1, Math.min(500, cols)),
+      rows: Math.max(1, Math.min(500, rows)),
+    };
   }
 
   /**

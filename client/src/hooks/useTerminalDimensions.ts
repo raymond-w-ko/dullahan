@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import type { RefObject } from "preact";
 
 export interface TerminalDimensions {
@@ -11,6 +11,7 @@ export interface TerminalDimensions {
 /**
  * Hook to calculate visible terminal dimensions based on container size and font metrics.
  * Uses ResizeObserver to update on resize.
+ * Uses a persistent .terminal-measure element for efficiency and debuggability.
  */
 export function useTerminalDimensions(
   containerRef: RefObject<HTMLElement>
@@ -21,34 +22,26 @@ export function useTerminalDimensions(
     cellWidth: 0,
     cellHeight: 0,
   });
-  
-  const measureRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    // Create hidden measurement element that matches terminal line styling
-    const measure = document.createElement('div');
-    measure.className = 'terminal-line'; // Use same class as actual lines
-    measure.style.cssText = `
-      position: absolute;
-      visibility: hidden;
-      pointer-events: none;
-    `;
-    measure.textContent = 'X'; // Single character to measure width
-    container.appendChild(measure);
-    measureRef.current = measure;
+    // Find or create persistent measurement element
+    let measure = container.querySelector('.terminal-measure') as HTMLDivElement | null;
+    if (!measure) {
+      measure = document.createElement('div');
+      measure.className = 'terminal-measure terminal-line';
+      measure.textContent = 'X';
+      container.appendChild(measure);
+    }
 
     const calculate = () => {
       if (!measure || !container) return;
 
-      // Get cell dimensions from the measurement element
-      // Width: measure single character
-      // Height: use the line's actual height (includes line-height)
       const rect = measure.getBoundingClientRect();
-      const cellWidth = rect.width; // Width of 'X'
-      const cellHeight = rect.height; // Height of line (1.2em)
+      const cellWidth = rect.width;
+      const cellHeight = rect.height;
 
       if (cellWidth === 0 || cellHeight === 0) return;
 
@@ -59,15 +52,12 @@ export function useTerminalDimensions(
       const availableWidth = container.clientWidth - paddingX;
       const availableHeight = container.clientHeight - paddingY;
 
-      // Calculate dimensions, clamping to reasonable bounds
-      // Min cellHeight of 8px prevents division by tiny values before fonts load
       const safeCellWidth = Math.max(cellWidth, 4);
       const safeCellHeight = Math.max(cellHeight, 8);
-      
+
       const cols = Math.floor(availableWidth / safeCellWidth);
       const rows = Math.floor(availableHeight / safeCellHeight);
 
-      // Clamp to reasonable terminal sizes (1-500 cols/rows)
       setDimensions({
         cols: Math.max(1, Math.min(500, cols)),
         rows: Math.max(1, Math.min(500, rows)),
@@ -90,9 +80,7 @@ export function useTerminalDimensions(
 
     return () => {
       observer.disconnect();
-      if (measureRef.current && container.contains(measureRef.current)) {
-        container.removeChild(measureRef.current);
-      }
+      // Don't remove the measure element - it's persistent and may be shared
     };
   }, [containerRef]);
 

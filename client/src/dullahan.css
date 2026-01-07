@@ -200,6 +200,14 @@ html, body {
   overflow: hidden;
 }
 
+/* Persistent measurement element for calculating terminal dimensions */
+.terminal-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  /* Keep in DOM for Chrome DevTools inspection */
+}
+
 /* Bell attention animation - pulse titlebar only */
 .terminal-pane.bell-active .terminal-titlebar {
   animation: bell-attention 1s ease-in-out infinite;
