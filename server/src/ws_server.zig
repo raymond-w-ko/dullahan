@@ -152,7 +152,7 @@ pub const WsServer = struct {
 
         log.info("Client connected, sending initial snapshots for all panes", .{});
 
-        // Get active window to iterate all panes
+        // Get active window for active pane tracking
         const window = session.activeWindow() orelse {
             log.err("No active window", .{});
             return;
@@ -161,8 +161,8 @@ pub const WsServer = struct {
         // Track generation for each pane (indexed by pane ID)
         var pane_generations: [3]u64 = .{ 0, 0, 0 };
 
-        // Send initial snapshot for ALL panes
-        var pane_it = window.panes.valueIterator();
+        // Send initial snapshot for ALL panes from registry
+        var pane_it = session.pane_registry.iterator();
         while (pane_it.next()) |pane| {
             try self.sendSnapshot(&ws, pane);
             pane.clearDirtyRows();
@@ -171,7 +171,7 @@ pub const WsServer = struct {
             }
         }
 
-        log.info("Snapshots sent for {d} panes, entering message loop", .{window.paneCount()});
+        log.info("Snapshots sent for {d} panes, entering message loop", .{session.pane_registry.count()});
 
         // Set socket to non-blocking for poll-based I/O
         ws.setReadTimeout(0);
@@ -203,8 +203,8 @@ pub const WsServer = struct {
             if (poll_fds[1].revents & posix.POLL.IN != 0) {
                 session.notify_pipe.drain();
 
-                // Check ALL panes for updates
-                var update_it = window.panes.valueIterator();
+                // Check ALL panes for updates via registry
+                var update_it = session.pane_registry.iterator();
                 while (update_it.next()) |pane| {
                     const pane_id = pane.id;
                     if (pane_id >= pane_generations.len) continue;
@@ -262,7 +262,7 @@ pub const WsServer = struct {
                             log.err("Failed to handle text message: {any}", .{e});
                         };
                         // Send immediate feedback for any modified panes
-                        self.sendAllPaneUpdates(window, &ws, &pane_generations) catch {};
+                        self.sendAllPaneUpdates(session, &ws, &pane_generations) catch {};
                     },
                     .binary => {
                         // Parse msgpack client message
@@ -270,7 +270,7 @@ pub const WsServer = struct {
                             log.err("Failed to handle binary message: {any}", .{e});
                         };
                         // Send immediate feedback for any modified panes
-                        self.sendAllPaneUpdates(window, &ws, &pane_generations) catch {};
+                        self.sendAllPaneUpdates(session, &ws, &pane_generations) catch {};
                     },
                     .ping => {
                         ws.sendPong(frame.payload) catch {};
@@ -317,8 +317,8 @@ pub const WsServer = struct {
     }
 
     /// Send updates for any panes that have changed
-    fn sendAllPaneUpdates(self: *WsServer, window: *Window, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
-        var it = window.panes.valueIterator();
+    fn sendAllPaneUpdates(self: *WsServer, session: *Session, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
+        var it = session.pane_registry.iterator();
         while (it.next()) |pane| {
             const pane_id = pane.id;
             if (pane_id >= pane_generations.len) continue;
@@ -415,8 +415,11 @@ pub const WsServer = struct {
             };
             defer key_event.deinit();
 
-            // TODO(du-obn): Route by paneId instead of activePane()
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane = session.getPaneById(key_event.value.paneId) orelse {
+                log.warn("Key event for unknown pane {d}", .{key_event.value.paneId});
+                return;
+            };
 
             var output_buf: [32]u8 = undefined;
             const cursor_key_app = pane.isCursorKeyApplication();
@@ -442,8 +445,11 @@ pub const WsServer = struct {
 
             log.debug("Received text: {d} bytes", .{text_msg.value.data.len});
 
-            // TODO(du-obn): Route by paneId instead of activePane()
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane = session.getPaneById(text_msg.value.paneId) orelse {
+                log.warn("Text message for unknown pane {d}", .{text_msg.value.paneId});
+                return;
+            };
 
             // Log to debug pane
             session.logPtySend(pane.id, text_msg.value.data);
@@ -472,9 +478,11 @@ pub const WsServer = struct {
                 return;
             }
 
-            // TODO(du-obn): Route by paneId instead of activePane()
-            // Resize pane (this increments pane.generation)
-            const pane = session.activePane() orelse return;
+            // Route by paneId - resize pane (this increments pane.generation)
+            const pane = session.getPaneById(resize_msg.value.paneId) orelse {
+                log.warn("Resize message for unknown pane {d}", .{resize_msg.value.paneId});
+                return;
+            };
             try pane.resize(cols, rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {
             // Scroll request
@@ -486,8 +494,11 @@ pub const WsServer = struct {
             };
             defer scroll_msg.deinit();
 
-            // TODO(du-obn): Route by paneId instead of activePane()
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane = session.getPaneById(scroll_msg.value.paneId) orelse {
+                log.warn("Scroll message for unknown pane {d}", .{scroll_msg.value.paneId});
+                return;
+            };
             pane.scroll(scroll_msg.value.delta);
         } else if (std.mem.eql(u8, type_str, "ping")) {
             // Ping message - send binary pong
@@ -504,8 +515,11 @@ pub const WsServer = struct {
             };
             defer sync_msg.deinit();
 
-            // TODO(du-obn): Route by paneId instead of activePane()
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane = session.getPaneById(sync_msg.value.paneId) orelse {
+                log.warn("Sync message for unknown pane {d}", .{sync_msg.value.paneId});
+                return;
+            };
             try self.handleSyncRequest(ws, pane, sync_msg.value.gen, sync_msg.value.minRowId);
         } else if (std.mem.eql(u8, type_str, "focus")) {
             // Focus request - switch active pane
@@ -564,8 +578,13 @@ pub const WsServer = struct {
         };
 
         if (std.mem.eql(u8, type_str, "key")) {
-            // Keyboard event
-            const pane = session.activePane() orelse return;
+            // Keyboard event - route by paneId
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+            const pane = session.getPaneById(pane_id) orelse {
+                log.warn("Binary key event for unknown pane {d}", .{pane_id});
+                return;
+            };
 
             const key_payload = (payload.mapGet("key") catch return) orelse return;
             const key = key_payload.asStr() catch return;
@@ -602,8 +621,13 @@ pub const WsServer = struct {
                 };
             }
         } else if (std.mem.eql(u8, type_str, "text")) {
-            // IME composed text
-            const pane = session.activePane() orelse return;
+            // IME composed text - route by paneId
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+            const pane = session.getPaneById(pane_id) orelse {
+                log.warn("Binary text message for unknown pane {d}", .{pane_id});
+                return;
+            };
             const data_payload = (payload.mapGet("data") catch return) orelse return;
             const text = data_payload.asStr() catch return;
 
@@ -614,7 +638,13 @@ pub const WsServer = struct {
                 log.err("Failed to write text to PTY: {any}", .{e});
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+            const pane = session.getPaneById(pane_id) orelse {
+                log.warn("Binary resize message for unknown pane {d}", .{pane_id});
+                return;
+            };
             const cols_payload = (payload.mapGet("cols") catch return) orelse return;
             const rows_payload = (payload.mapGet("rows") catch return) orelse return;
             const cols: u16 = @intCast(cols_payload.getUint() catch return);
@@ -622,7 +652,13 @@ pub const WsServer = struct {
             log.info("Binary resize request: {d}x{d}", .{ cols, rows });
             try pane.resize(cols, rows);
         } else if (std.mem.eql(u8, type_str, "scroll")) {
-            const pane = session.activePane() orelse return;
+            // Route by paneId
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+            const pane = session.getPaneById(pane_id) orelse {
+                log.warn("Binary scroll message for unknown pane {d}", .{pane_id});
+                return;
+            };
             const delta_payload = (payload.mapGet("delta") catch return) orelse return;
             const delta: i32 = @intCast(delta_payload.getInt() catch return);
             pane.scroll(delta);
