@@ -1,9 +1,7 @@
 //! Session - the top-level container for windows
 //!
 //! A session represents a dullahan server instance with one or more windows.
-//! Each window contains one or more panes.
-//!
-//! Addressing: (window_id, pane_id) provides 2D indexing into terminal panes.
+//! Windows track layout, while panes are owned by the global PaneRegistry.
 //!
 //! Pane layout:
 //!   - Pane 0: Debug pane (virtual, no PTY) - shows PTY I/O traffic
@@ -15,17 +13,18 @@ const posix = std.posix;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
+const pane_registry_mod = @import("pane_registry.zig");
+const PaneRegistry = pane_registry_mod.PaneRegistry;
 
-/// Debug pane ID (virtual pane for debug output, no shell)
-pub const DEBUG_PANE_ID: u16 = 0;
-
-/// First shell pane ID
-pub const SHELL_PANE_1_ID: u16 = 1;
-
-/// Second shell pane ID
-pub const SHELL_PANE_2_ID: u16 = 2;
+// Re-export pane IDs from registry for backwards compatibility
+pub const DEBUG_PANE_ID = pane_registry_mod.DEBUG_PANE_ID;
+pub const SHELL_PANE_1_ID = pane_registry_mod.SHELL_PANE_1_ID;
+pub const SHELL_PANE_2_ID = pane_registry_mod.SHELL_PANE_2_ID;
 
 pub const Session = struct {
+    /// Global pane registry (owned externally, session has pointer)
+    pane_registry: *PaneRegistry,
+
     /// Windows in this session, indexed by window ID
     windows: std.AutoHashMap(u16, Window),
 
@@ -47,8 +46,10 @@ pub const Session = struct {
         rows: u16 = 24,
     };
 
-    pub fn init(allocator: std.mem.Allocator, opts: Options) !Session {
+    /// Initialize session with an external pane registry
+    pub fn init(allocator: std.mem.Allocator, pane_registry: *PaneRegistry, opts: Options) !Session {
         var session = Session{
+            .pane_registry = pane_registry,
             .windows = std.AutoHashMap(u16, Window).init(allocator),
             .active_window_id = 0,
             .default_cols = opts.cols,
@@ -56,7 +57,7 @@ pub const Session = struct {
             .allocator = allocator,
         };
 
-        // Create window without auto-creating pane (we'll create 3 manually)
+        // Create window (without creating panes - registry owns them)
         const window_id = session.next_window_id;
         session.next_window_id += 1;
 
@@ -66,26 +67,11 @@ pub const Session = struct {
             .id = window_id,
         }, .{ .create_initial_pane = false });
 
-        // Create pane 0: Debug pane (no shell)
-        _ = try window.createPane();
-        // Create pane 1: Shell terminal 1
-        _ = try window.createPane();
-        // Create pane 2: Shell terminal 2
-        _ = try window.createPane();
-
         // Set active pane to first shell (pane 1), not debug pane
         window.active_pane_id = SHELL_PANE_1_ID;
 
         try session.windows.put(window_id, window);
         session.active_window_id = window_id;
-
-        // Initialize debug pane with welcome message
-        if (session.getDebugPane()) |debug_pane| {
-            try debug_pane.feedDirect("\x1b[1;36m=== Dullahan Debug Console ===\x1b[0m\r\n");
-            try debug_pane.feedDirect("PTY I/O traffic will be logged here.\r\n");
-            try debug_pane.feedDirect("\x1b[31m> pane N: bytes sent TO pty (red)\x1b[0m\r\n");
-            try debug_pane.feedDirect("\x1b[34m< pane N: bytes recv FROM pty (blue)\x1b[0m\r\n\r\n");
-        }
 
         return session;
     }
@@ -125,31 +111,37 @@ pub const Session = struct {
         return self.getWindow(self.active_window_id);
     }
 
-    /// Get a pane by (window_id, pane_id) - the 2D index
-    pub fn getPane(self: *Session, window_id: u16, pane_id: u16) ?*Pane {
-        const window = self.getWindow(window_id) orelse return null;
-        return window.getPane(pane_id);
+    /// Get a pane by ID from the global registry
+    /// The window_id parameter is kept for API compatibility but ignored
+    /// (panes are now globally unique)
+    pub fn getPane(self: *Session, _: u16, pane_id: u16) ?*Pane {
+        return self.pane_registry.get(pane_id);
+    }
+
+    /// Get a pane by ID directly from registry
+    pub fn getPaneById(self: *Session, pane_id: u16) ?*Pane {
+        return self.pane_registry.get(pane_id);
     }
 
     /// Get the currently active pane (in the active window)
     pub fn activePane(self: *Session) ?*Pane {
         const window = self.activeWindow() orelse return null;
-        return window.activePane();
+        return self.pane_registry.get(window.active_pane_id);
     }
 
-    /// Get the debug pane (pane 0 in the active window)
+    /// Get the debug pane (pane 0)
     pub fn getDebugPane(self: *Session) ?*Pane {
-        return self.getPane(self.active_window_id, DEBUG_PANE_ID);
+        return self.pane_registry.getDebugPane();
     }
 
     /// Get shell pane 1
     pub fn getShellPane1(self: *Session) ?*Pane {
-        return self.getPane(self.active_window_id, SHELL_PANE_1_ID);
+        return self.pane_registry.getShellPane1();
     }
 
     /// Get shell pane 2
     pub fn getShellPane2(self: *Session) ?*Pane {
-        return self.getPane(self.active_window_id, SHELL_PANE_2_ID);
+        return self.pane_registry.getShellPane2();
     }
 
     /// Log bytes sent TO a pane's PTY (shown in red)
@@ -295,16 +287,24 @@ pub const Session = struct {
 };
 
 // Tests
-test "session creates with one window and three panes" {
-    var session = try Session.init(std.testing.allocator, .{});
+test "session creates with one window" {
+    // Create registry with 3 panes
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+    _ = try registry.create(); // pane 0
+    _ = try registry.create(); // pane 1
+    _ = try registry.create(); // pane 2
+
+    var session = try Session.init(std.testing.allocator, &registry, .{});
     defer session.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), session.windowCount());
 
     const window = session.activeWindow();
     try std.testing.expect(window != null);
-    // Session now creates 3 panes: debug (0), shell 1 (1), shell 2 (2)
-    try std.testing.expectEqual(@as(usize, 3), window.?.paneCount());
+
+    // Panes come from registry now
+    try std.testing.expectEqual(@as(usize, 3), registry.count());
 
     // Debug pane should exist
     try std.testing.expect(session.getDebugPane() != null);
@@ -315,21 +315,29 @@ test "session creates with one window and three panes" {
     try std.testing.expectEqual(SHELL_PANE_1_ID, window.?.active_pane_id);
 }
 
-test "session 2D indexing works" {
-    var session = try Session.init(std.testing.allocator, .{});
+test "session pane lookup works" {
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+    _ = try registry.create(); // pane 0
+
+    var session = try Session.init(std.testing.allocator, &registry, .{});
     defer session.deinit();
 
-    // Default session has window 0, pane 0
+    // Pane 0 exists in registry
     const pane = session.getPane(0, 0);
     try std.testing.expect(pane != null);
 
-    // Non-existent indices return null
-    try std.testing.expect(session.getPane(99, 0) == null);
+    // Non-existent pane returns null
     try std.testing.expect(session.getPane(0, 99) == null);
 }
 
 test "session can run command" {
-    var session = try Session.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+    _ = try registry.create(); // pane 0
+    _ = try registry.create(); // pane 1 (active)
+
+    var session = try Session.init(std.testing.allocator, &registry, .{});
     defer session.deinit();
 
     // Run a simple command

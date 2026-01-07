@@ -895,7 +895,7 @@ fn writeFunctionKey(output: []u8, fnum: u8) []u8 {
 
 test "parse key event" {
     const allocator = std.testing.allocator;
-    const json = "{\"type\":\"key\",\"key\":\"a\",\"code\":\"KeyA\",\"state\":\"down\",\"ctrl\":false,\"alt\":false,\"shift\":false,\"meta\":false}";
+    const json = "{\"type\":\"key\",\"paneId\":1,\"key\":\"a\",\"code\":\"KeyA\",\"state\":\"down\",\"ctrl\":false,\"alt\":false,\"shift\":false,\"meta\":false}";
 
     const parsed = try std.json.parseFromSlice(KeyEvent, allocator, json, .{
         .ignore_unknown_fields = true,
@@ -911,7 +911,7 @@ test "parse key event" {
 
 test "parse resize message" {
     const allocator = std.testing.allocator;
-    const json = "{\"type\":\"resize\",\"cols\":80,\"rows\":24}";
+    const json = "{\"type\":\"resize\",\"paneId\":1,\"cols\":80,\"rows\":24}";
 
     const parsed = try std.json.parseFromSlice(ResizeMessage, allocator, json, .{
         .ignore_unknown_fields = true,
@@ -925,7 +925,7 @@ test "parse resize message" {
 
 test "parse text message" {
     const allocator = std.testing.allocator;
-    const json = "{\"type\":\"text\",\"data\":\"hello\\nworld\"}";
+    const json = "{\"type\":\"text\",\"paneId\":1,\"data\":\"hello\\nworld\"}";
 
     const parsed = try std.json.parseFromSlice(TextMessage, allocator, json, .{
         .ignore_unknown_fields = true,
@@ -942,6 +942,7 @@ test "keyEventToBytes basic" {
     // Regular key
     const result = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "a",
         .code = "KeyA",
         .state = "down",
@@ -951,6 +952,7 @@ test "keyEventToBytes basic" {
     // Ctrl+C
     const ctrl_c = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "c",
         .code = "KeyC",
         .state = "down",
@@ -961,6 +963,7 @@ test "keyEventToBytes basic" {
     // Keyup should be ignored
     const keyup = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "a",
         .code = "KeyA",
         .state = "up",
@@ -974,6 +977,7 @@ test "keyEventToBytes arrow keys with DECCKM" {
     // Arrow up without DECCKM (normal mode) -> CSI A
     const up_normal = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "ArrowUp",
         .code = "ArrowUp",
         .state = "down",
@@ -983,6 +987,7 @@ test "keyEventToBytes arrow keys with DECCKM" {
     // Arrow up with DECCKM (application mode) -> SS3 A
     const up_app = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "ArrowUp",
         .code = "ArrowUp",
         .state = "down",
@@ -992,6 +997,7 @@ test "keyEventToBytes arrow keys with DECCKM" {
     // Arrow with modifier should still use CSI even in application mode
     const up_ctrl = keyEventToBytes(.{
         .type = "key",
+        .paneId = 1,
         .key = "ArrowUp",
         .code = "ArrowUp",
         .state = "down",

@@ -1,0 +1,186 @@
+//! PaneRegistry - global pane ownership and lookup
+//!
+//! The registry owns all panes globally, providing O(1) lookup by pane ID.
+//! This decouples pane lifetime from window/session lifetime and enables
+//! direct routing of messages by paneId.
+
+const std = @import("std");
+const Pane = @import("pane.zig").Pane;
+
+const log = std.log.scoped(.pane_registry);
+
+/// Well-known pane IDs (module-level for easy access)
+pub const DEBUG_PANE_ID: u16 = 0;
+pub const SHELL_PANE_1_ID: u16 = 1;
+pub const SHELL_PANE_2_ID: u16 = 2;
+
+pub const PaneRegistry = struct {
+    // Re-export pane IDs for struct-level access
+    pub const DEBUG_PANE = DEBUG_PANE_ID;
+    pub const SHELL_PANE_1 = SHELL_PANE_1_ID;
+    pub const SHELL_PANE_2 = SHELL_PANE_2_ID;
+
+    /// All panes, indexed by pane ID
+    panes: std.AutoHashMap(u16, *Pane),
+
+    /// Next pane ID to assign
+    next_id: u16 = 0,
+
+    /// Allocator for panes
+    allocator: std.mem.Allocator,
+
+    /// Default dimensions for new panes
+    default_cols: u16,
+    default_rows: u16,
+
+    pub const Options = struct {
+        cols: u16 = 80,
+        rows: u16 = 24,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, opts: Options) PaneRegistry {
+        return .{
+            .panes = std.AutoHashMap(u16, *Pane).init(allocator),
+            .allocator = allocator,
+            .default_cols = opts.cols,
+            .default_rows = opts.rows,
+        };
+    }
+
+    pub fn deinit(self: *PaneRegistry) void {
+        // Deinit and free all panes
+        var it = self.panes.valueIterator();
+        while (it.next()) |pane_ptr| {
+            pane_ptr.*.deinit();
+            self.allocator.destroy(pane_ptr.*);
+        }
+        self.panes.deinit();
+    }
+
+    /// Create a new pane with default dimensions
+    /// Returns the pane ID
+    pub fn create(self: *PaneRegistry) !u16 {
+        return self.createWithOptions(.{
+            .cols = self.default_cols,
+            .rows = self.default_rows,
+        });
+    }
+
+    /// Create a new pane with specific options
+    pub fn createWithOptions(self: *PaneRegistry, opts: Pane.Options) !u16 {
+        const pane_id = self.next_id;
+        self.next_id += 1;
+
+        // Allocate pane on heap
+        const pane_ptr = try self.allocator.create(Pane);
+        errdefer self.allocator.destroy(pane_ptr);
+
+        // Initialize pane with assigned ID
+        pane_ptr.* = try Pane.init(self.allocator, .{
+            .cols = opts.cols,
+            .rows = opts.rows,
+            .id = pane_id,
+        });
+        errdefer pane_ptr.deinit();
+
+        try self.panes.put(pane_id, pane_ptr);
+
+        log.debug("Created pane {d} ({d}x{d})", .{ pane_id, opts.cols, opts.rows });
+
+        return pane_id;
+    }
+
+    /// Get a pane by ID (O(1) lookup)
+    pub fn get(self: *PaneRegistry, id: u16) ?*Pane {
+        return self.panes.get(id);
+    }
+
+    /// Destroy a pane by ID
+    pub fn destroy(self: *PaneRegistry, id: u16) void {
+        if (self.panes.fetchRemove(id)) |entry| {
+            entry.value.deinit();
+            self.allocator.destroy(entry.value);
+            log.debug("Destroyed pane {d}", .{id});
+        }
+    }
+
+    /// Get pane count
+    pub fn count(self: *const PaneRegistry) usize {
+        return self.panes.count();
+    }
+
+    /// Iterator over all panes
+    pub fn iterator(self: *PaneRegistry) std.AutoHashMap(u16, *Pane).ValueIterator {
+        return self.panes.valueIterator();
+    }
+
+    /// Get debug pane (pane 0)
+    pub fn getDebugPane(self: *PaneRegistry) ?*Pane {
+        return self.get(DEBUG_PANE_ID);
+    }
+
+    /// Get shell pane 1
+    pub fn getShellPane1(self: *PaneRegistry) ?*Pane {
+        return self.get(SHELL_PANE_1_ID);
+    }
+
+    /// Get shell pane 2
+    pub fn getShellPane2(self: *PaneRegistry) ?*Pane {
+        return self.get(SHELL_PANE_2_ID);
+    }
+
+    /// Resize all panes
+    pub fn resizeAll(self: *PaneRegistry, cols: u16, rows: u16) !void {
+        self.default_cols = cols;
+        self.default_rows = rows;
+
+        var it = self.panes.valueIterator();
+        while (it.next()) |pane_ptr| {
+            try pane_ptr.*.resize(cols, rows);
+        }
+    }
+};
+
+// Tests
+test "pane registry can create and get panes" {
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+
+    const id1 = try registry.create();
+    const id2 = try registry.create();
+
+    try std.testing.expectEqual(@as(u16, 0), id1);
+    try std.testing.expectEqual(@as(u16, 1), id2);
+    try std.testing.expectEqual(@as(usize, 2), registry.count());
+
+    const pane1 = registry.get(id1);
+    try std.testing.expect(pane1 != null);
+    try std.testing.expectEqual(id1, pane1.?.id);
+
+    const pane2 = registry.get(id2);
+    try std.testing.expect(pane2 != null);
+    try std.testing.expectEqual(id2, pane2.?.id);
+}
+
+test "pane registry can destroy panes" {
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+
+    const id = try registry.create();
+    try std.testing.expectEqual(@as(usize, 1), registry.count());
+
+    registry.destroy(id);
+    try std.testing.expectEqual(@as(usize, 0), registry.count());
+    try std.testing.expect(registry.get(id) == null);
+}
+
+test "pane registry respects dimensions" {
+    var registry = PaneRegistry.init(std.testing.allocator, .{ .cols = 120, .rows = 40 });
+    defer registry.deinit();
+
+    const id = try registry.create();
+    const pane = registry.get(id).?;
+
+    try std.testing.expectEqual(@as(u16, 120), pane.cols);
+    try std.testing.expectEqual(@as(u16, 40), pane.rows);
+}

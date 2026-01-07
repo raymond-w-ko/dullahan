@@ -5,6 +5,7 @@
 const std = @import("std");
 const ipc = @import("ipc.zig");
 const Session = @import("session.zig").Session;
+const PaneRegistry = @import("pane_registry.zig").PaneRegistry;
 const http = @import("http.zig");
 const signal = @import("signal.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
@@ -31,7 +32,25 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     signal.install();
     defer signal.reset();
 
-    var session = try Session.init(allocator, .{});
+    // Create global pane registry
+    var pane_registry = PaneRegistry.init(allocator, .{});
+    defer pane_registry.deinit();
+
+    // Create panes: debug (0), shell 1 (1), shell 2 (2)
+    _ = try pane_registry.create(); // pane 0: debug
+    _ = try pane_registry.create(); // pane 1: shell
+    _ = try pane_registry.create(); // pane 2: shell
+
+    // Initialize debug pane with welcome message
+    if (pane_registry.getDebugPane()) |debug_pane| {
+        try debug_pane.feedDirect("\x1b[1;36m=== Dullahan Debug Console ===\x1b[0m\r\n");
+        try debug_pane.feedDirect("PTY I/O traffic will be logged here.\r\n");
+        try debug_pane.feedDirect("\x1b[31m> pane N: bytes sent TO pty (red)\x1b[0m\r\n");
+        try debug_pane.feedDirect("\x1b[34m< pane N: bytes recv FROM pty (blue)\x1b[0m\r\n\r\n");
+    }
+
+    // Create session with registry pointer
+    var session = try Session.init(allocator, &pane_registry, .{});
     defer session.deinit();
 
     var ipc_server = ipc.Server.init(config.ipc) catch |e| {
@@ -68,12 +87,12 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     defer event_loop.deinit();
 
     // Spawn shells in panes 1 and 2 (not debug pane 0)
-    if (session.getShellPane1()) |pane| {
+    if (pane_registry.getShellPane1()) |pane| {
         pane.spawnShell() catch |e| {
             log.err("Failed to spawn shell in pane 1: {any}", .{e});
         };
     }
-    if (session.getShellPane2()) |pane| {
+    if (pane_registry.getShellPane2()) |pane| {
         pane.spawnShell() catch |e| {
             log.err("Failed to spawn shell in pane 2: {any}", .{e});
         };

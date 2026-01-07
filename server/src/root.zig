@@ -21,6 +21,7 @@ pub const snapshot = @import("snapshot.zig");
 pub const Session = @import("session.zig").Session;
 pub const Window = @import("window.zig").Window;
 pub const Pane = @import("pane.zig").Pane;
+pub const PaneRegistry = @import("pane_registry.zig").PaneRegistry;
 pub const Pty = @import("pty.zig").Pty;
 
 // Event loop (single-threaded I/O)
