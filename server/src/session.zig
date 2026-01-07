@@ -41,6 +41,9 @@ pub const Session = struct {
     /// Allocator
     allocator: std.mem.Allocator,
 
+    /// Whether to log PTY traffic (hex + ASCII) to the debug pane
+    debug_pty_logging: bool = false,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -147,6 +150,7 @@ pub const Session = struct {
     /// Log bytes sent TO a pane's PTY (shown in red)
     /// Format: "> pane N: xx xx xx | ASCII"
     pub fn logPtySend(self: *Session, pane_id: u16, data: []const u8) void {
+        if (!self.debug_pty_logging) return;
         const debug_pane = self.getDebugPane() orelse return;
         self.logPtyTraffic(debug_pane, ">", pane_id, data, "\x1b[31m"); // red
     }
@@ -154,6 +158,7 @@ pub const Session = struct {
     /// Log bytes received FROM a pane's PTY (shown in blue)
     /// Format: "< pane N: xx xx xx | ASCII"
     pub fn logPtyRecv(self: *Session, pane_id: u16, data: []const u8) void {
+        if (!self.debug_pty_logging) return;
         const debug_pane = self.getDebugPane() orelse return;
         self.logPtyTraffic(debug_pane, "<", pane_id, data, "\x1b[34m"); // blue
     }
