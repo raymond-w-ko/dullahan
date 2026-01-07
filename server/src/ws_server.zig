@@ -318,6 +318,13 @@ pub const WsServer = struct {
         try ws.sendBinary(msg);
     }
 
+    /// Send a focus notification to a single client
+    fn sendFocus(self: *WsServer, ws: *websocket.Connection, pane_id: u16) !void {
+        const msg = try snapshot.generateFocusMessage(self.allocator, pane_id);
+        defer self.allocator.free(msg);
+        try ws.sendBinary(msg);
+    }
+
     /// Send updates for any panes that have changed
     fn sendAllPaneUpdates(self: *WsServer, session: *Session, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
         var it = session.pane_registry.iterator();
@@ -534,8 +541,39 @@ pub const WsServer = struct {
             };
             defer focus_msg.deinit();
 
-            log.info("Focus request for pane {d}", .{focus_msg.value.paneId});
-            // TODO(du-p5w): Implement focus change - update session.active_pane_id and notify clients
+            const new_pane_id = focus_msg.value.paneId;
+            log.info("Focus request for pane {d}", .{new_pane_id});
+
+            // Validate pane exists
+            const new_pane = session.getPaneById(new_pane_id) orelse {
+                log.warn("Focus request for unknown pane {d}", .{new_pane_id});
+                return;
+            };
+
+            // Get current active window and update focus
+            const window = session.activeWindow() orelse {
+                log.err("No active window for focus change", .{});
+                return;
+            };
+
+            const old_pane_id = window.active_pane_id;
+            if (old_pane_id != new_pane_id) {
+                // Update old pane's active state
+                if (session.getPaneById(old_pane_id)) |old_pane| {
+                    old_pane.active = false;
+                }
+
+                // Update new pane's active state and window
+                new_pane.active = true;
+                _ = window.setActivePane(new_pane_id);
+
+                log.info("Focus changed: pane {d} -> pane {d}", .{ old_pane_id, new_pane_id });
+            }
+
+            // Send focus confirmation to client
+            self.sendFocus(ws, new_pane_id) catch |send_err| {
+                log.err("Failed to send focus: {any}", .{send_err});
+            };
         } else {
             log.warn("Unknown message type: {s}", .{data});
         }
@@ -669,6 +707,41 @@ pub const WsServer = struct {
             const pong = try snapshot.generateBinaryPong(self.allocator);
             defer self.allocator.free(pong);
             try ws.sendBinary(pong);
+        } else if (std.mem.eql(u8, type_str, "focus")) {
+            // Focus request - route by paneId
+            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
+            const new_pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
+
+            log.info("Binary focus request for pane {d}", .{new_pane_id});
+
+            // Validate pane exists
+            const new_pane = session.getPaneById(new_pane_id) orelse {
+                log.warn("Binary focus request for unknown pane {d}", .{new_pane_id});
+                return;
+            };
+
+            // Get current active window and update focus
+            const window = session.activeWindow() orelse {
+                log.err("No active window for focus change", .{});
+                return;
+            };
+
+            const old_pane_id = window.active_pane_id;
+            if (old_pane_id != new_pane_id) {
+                // Update old pane's active state
+                if (session.getPaneById(old_pane_id)) |old_pane| {
+                    old_pane.active = false;
+                }
+
+                // Update new pane's active state and window
+                new_pane.active = true;
+                _ = window.setActivePane(new_pane_id);
+
+                log.info("Focus changed: pane {d} -> pane {d}", .{ old_pane_id, new_pane_id });
+            }
+
+            // Send focus confirmation to client
+            try self.sendFocus(ws, new_pane_id);
         } else {
             log.warn("Unknown binary message type: {s}", .{type_str});
         }

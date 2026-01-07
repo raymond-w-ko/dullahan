@@ -109,11 +109,18 @@ interface BellMessage {
   type: "bell";
 }
 
+/** Focus change notification from server */
+interface FocusServerMessage {
+  type: "focus";
+  paneId: number;
+}
+
 export type BinaryServerMessage =
   | BinarySnapshot
   | BinaryDelta
   | TitleMessage
   | BellMessage
+  | FocusServerMessage
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -149,6 +156,7 @@ export class TerminalConnection {
   public onOutput: ((data: string) => void) | null = null;
   public onTitle: ((title: string) => void) | null = null;
   public onBell: (() => void) | null = null;
+  public onFocus: ((paneId: number) => void) | null = null;
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
@@ -390,6 +398,10 @@ export class TerminalConnection {
       case "bell":
         debug.log("Received bell");
         this.onBell?.();
+        break;
+      case "focus":
+        debug.log("Received focus:", msg.paneId);
+        this.onFocus?.(msg.paneId);
         break;
       case "pong":
         // Ignore pong

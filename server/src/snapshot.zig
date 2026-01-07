@@ -578,6 +578,46 @@ pub fn generateBellMessage(allocator: std.mem.Allocator) ![]u8 {
     return result;
 }
 
+/// Generate a binary msgpack focus message
+/// Notifies clients which pane is now focused
+pub fn generateFocusMessage(allocator: std.mem.Allocator, pane_id: u16) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("focus", allocator));
+    try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
+
+    const max_size = 64;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack focus: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const result = try compress(msgpack_data, allocator);
+    allocator.free(buffer);
+
+    return result;
+}
+
 /// Generate a binary msgpack pong message
 pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
