@@ -355,6 +355,19 @@ pub const WsServer = struct {
             return;
         }
 
+        // Check if pane requires full resync (e.g., screen switch, resize)
+        // This must be checked BEFORE getBroadcastDelta to avoid sending stale deltas
+        if (pane.needsFullResync(client_gen)) {
+            log.debug("Pane requires full resync (client_gen {d} < dirty_base_gen {d})", .{
+                client_gen,
+                pane.dirty_base_gen,
+            });
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try ws.sendBinary(snap);
+            return;
+        }
+
         // Get broadcast delta (thread-safe, generates once, caches for other clients)
         const result = try pane.getBroadcastDelta();
         defer pane.allocator.free(result.delta);

@@ -80,6 +80,11 @@ pub const Pane = struct {
     /// The fromGen of the cached delta (what generation clients need to be at to apply it)
     cached_delta_from_gen: u64 = 0,
 
+    /// Track whether we were last on alternate screen to detect screen switches
+    /// Screen switches (primary <-> alternate) require full resync because
+    /// row IDs are completely different between screens
+    last_was_alt_screen: bool = false,
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -240,6 +245,18 @@ pub const Pane = struct {
             self.vt_stream = self.terminal.vtStream();
         }
         try self.vt_stream.?.nextSlice(data);
+
+        // Check for screen switch (primary <-> alternate)
+        // Row IDs are completely different between screens, so clients need full resync
+        const is_alt_screen = self.terminal.screens.active_key == .alternate;
+        if (is_alt_screen != self.last_was_alt_screen) {
+            log.debug("Screen switch detected: {s} -> {s}, forcing full resync", .{
+                if (self.last_was_alt_screen) "alternate" else "primary",
+                if (is_alt_screen) "alternate" else "primary",
+            });
+            self.last_was_alt_screen = is_alt_screen;
+            self.forceFullResync();
+        }
 
         // Collect dirty rows from ghostty's dirty tracking
         self.collectDirtyRows();
@@ -521,6 +538,17 @@ pub const Pane = struct {
         // with an older generation
         self.dirty_rows.clearRetainingCapacity();
         self.dirty_base_gen = self.generation;
+
+        // Invalidate cached delta - next getBroadcastDelta will regenerate
+        // with from_gen = generation, which forces full snapshot for all clients
+        // since client_gen < from_gen will be true
+        if (self.cached_delta) |old| {
+            self.allocator.free(old);
+            self.cached_delta = null;
+        }
+        // Set last_broadcast_gen to current so next delta has from_gen = generation
+        // This ensures client_gen < from_gen triggers snapshot in sendUpdate
+        self.last_broadcast_gen = self.generation;
     }
 
     /// Get the set of dirty row IDs since last clear.
