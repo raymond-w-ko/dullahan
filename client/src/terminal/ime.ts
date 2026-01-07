@@ -14,6 +14,7 @@
 
 export interface TextMessage {
   type: 'text';
+  paneId: number;     // Target pane ID
   data: string;       // UTF-8 composed text
   timestamp: number;  // High-resolution timestamp
 }
@@ -22,6 +23,21 @@ export type TextCallback = (message: TextMessage) => void;
 
 export class IMEHandler {
   private callback: TextCallback | null = null;
+  private _paneId: number = 1; // Default pane ID
+
+  /**
+   * Set the target pane ID for text messages
+   */
+  setPaneId(paneId: number): void {
+    this._paneId = paneId;
+  }
+
+  /**
+   * Get the current target pane ID
+   */
+  get paneId(): number {
+    return this._paneId;
+  }
 
   /**
    * Set callback for text messages
@@ -47,6 +63,7 @@ export class IMEHandler {
 
     const message: TextMessage = {
       type: 'text',
+      paneId: this._paneId,
       data: text,
       timestamp: performance.now(),
     };

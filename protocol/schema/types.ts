@@ -61,10 +61,15 @@ export type Color =
 // Client -> Server Messages
 // ============================================================================
 
+// All client messages must include paneId to route to specific pane
 export type ClientMessage =
-  | { type: "input"; data: string } // Keyboard input (raw bytes)
-  | { type: "resize"; cols: number; rows: number }
-  | { type: "ping" };
+  | { type: "key"; paneId: number; key: string; code: string; keyCode: number; state: "down" | "up"; ctrl: boolean; alt: boolean; shift: boolean; meta: boolean; repeat: boolean; timestamp: number }
+  | { type: "text"; paneId: number; data: string; timestamp: number }
+  | { type: "resize"; paneId: number; cols: number; rows: number }
+  | { type: "scroll"; paneId: number; delta: number }
+  | { type: "sync"; paneId: number; gen: number; minRowId: number }
+  | { type: "focus"; paneId: number }  // Request focus on pane
+  | { type: "ping" };  // Ping doesn't need paneId
 
 // ============================================================================
 // Default/empty values

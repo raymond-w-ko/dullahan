@@ -117,13 +117,15 @@ export type BinaryServerMessage =
   | { type: "output"; data: string }
   | { type: "pong" };
 
+// All client messages (except ping) include paneId to route to specific pane
 export type ClientMessage =
   | KeyMessage
   | TextMessage
-  | { type: "resize"; cols: number; rows: number }
-  | { type: "scroll"; delta: number }  // Scroll viewport by delta rows (negative = up)
+  | { type: "resize"; paneId: number; cols: number; rows: number }
+  | { type: "scroll"; paneId: number; delta: number }  // Scroll viewport by delta rows (negative = up)
   | { type: "ping" }
-  | { type: "sync"; gen: number; minRowId: number };
+  | { type: "sync"; paneId: number; gen: number; minRowId: number }
+  | { type: "focus"; paneId: number };  // Request focus on pane
 
 /** Delta update event with applied changes */
 export interface DeltaUpdate {
@@ -364,14 +366,14 @@ export class TerminalConnection {
           // We're behind - request full snapshot
           debug.log(`Pane ${paneId}: Delta fromGen ${msg.fromGen} > our gen ${paneState.generation}, requesting snapshot`);
           paneState.resyncCount++;
-          this.sendSyncForPane(paneId, paneState.generation, Number(paneState.minRowId));
+          this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
         } else {
           // We're ahead of fromGen - this delta is stale, ignore it
           // But if we're behind the target gen, request sync
           if (paneState.generation < msg.gen) {
             debug.log(`Pane ${paneId}: Stale delta (fromGen ${msg.fromGen} < our gen ${paneState.generation}), but behind target ${msg.gen}, requesting sync`);
             paneState.resyncCount++;
-            this.sendSyncForPane(paneId, paneState.generation, Number(paneState.minRowId));
+            this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
           } else {
             debug.log(`Pane ${paneId}: Stale delta ignored (fromGen ${msg.fromGen}, our gen ${paneState.generation})`);
           }
@@ -580,16 +582,19 @@ export class TerminalConnection {
     this.send(message);
   }
 
-  sendResize(cols: number, rows: number): void {
-    this.send({ type: "resize", cols, rows });
+  /**
+   * Send resize for a specific pane
+   */
+  sendResize(paneId: number, cols: number, rows: number): void {
+    this.send({ type: "resize", paneId, cols, rows });
   }
 
   /**
    * Scroll the terminal viewport by delta rows.
    * Negative values scroll up (toward history), positive scroll down.
    */
-  sendScroll(delta: number): void {
-    this.send({ type: "scroll", delta });
+  sendScroll(paneId: number, delta: number): void {
+    this.send({ type: "scroll", paneId, delta });
   }
 
   /**
@@ -604,21 +609,13 @@ export class TerminalConnection {
   }
 
   /**
-   * Request delta update from server.
-   * @param gen Client's current generation
-   * @param minRowId Oldest row ID client has cached
+   * Request delta update from server for a specific pane.
+   * @param paneId Target pane ID
+   * @param gen Client's current generation for this pane
+   * @param minRowId Oldest row ID client has cached for this pane
    */
-  sendSync(gen: number, minRowId: number): void {
-    this.send({ type: "sync", gen, minRowId });
-  }
-
-  /**
-   * Request sync for a specific pane
-   */
-  sendSyncForPane(paneId: number, gen: number, minRowId: number): void {
-    // TODO(du-xxx): Server needs to support pane-specific sync messages
-    // For now, just send a regular sync
-    this.send({ type: "sync", gen, minRowId });
+  sendSync(paneId: number, gen: number, minRowId: number): void {
+    this.send({ type: "sync", paneId, gen, minRowId });
   }
 
   /**
@@ -626,7 +623,7 @@ export class TerminalConnection {
    */
   requestSyncAll(): void {
     for (const [paneId, state] of this._panes) {
-      this.sendSyncForPane(paneId, state.generation, Number(state.minRowId));
+      this.sendSync(paneId, state.generation, Number(state.minRowId));
     }
   }
 

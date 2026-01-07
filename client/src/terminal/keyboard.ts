@@ -13,6 +13,7 @@
 
 export interface KeyMessage {
   type: 'key';
+  paneId: number;     // Target pane ID
   key: string;        // Logical key value ("a", "Enter", "ArrowUp")
   code: string;       // Physical key code ("KeyA", "Enter", "ArrowUp")
   keyCode: number;    // Legacy keyCode (deprecated but useful)
@@ -32,10 +33,25 @@ export class KeyboardHandler {
   private callback: KeyboardCallback | null = null;
   private boundKeyDown: (e: KeyboardEvent) => void;
   private boundKeyUp: (e: KeyboardEvent) => void;
+  private _paneId: number = 1; // Default pane ID
 
   constructor() {
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundKeyUp = this.handleKeyUp.bind(this);
+  }
+
+  /**
+   * Set the target pane ID for keyboard events
+   */
+  setPaneId(paneId: number): void {
+    this._paneId = paneId;
+  }
+
+  /**
+   * Get the current target pane ID
+   */
+  get paneId(): number {
+    return this._paneId;
   }
 
   /**
@@ -100,6 +116,7 @@ export class KeyboardHandler {
 
     const message: KeyMessage = {
       type: 'key',
+      paneId: this._paneId,
       key: e.key,
       code: e.code,
       keyCode: e.keyCode,

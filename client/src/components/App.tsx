@@ -54,11 +54,12 @@ export function App() {
     resizeTimeoutRef.current = window.setTimeout(() => {
       const conn = connectionRef.current;
       // Double-check dimensions haven't been sent already
-      if (conn?.isConnected && 
+      if (conn?.isConnected &&
           (cols !== lastSentDimensions.current.cols || rows !== lastSentDimensions.current.rows)) {
         debug.log(`Sending resize: ${cols}x${rows}`);
         lastSentDimensions.current = { cols, rows };
-        conn.sendResize(cols, rows);
+        // TODO(du-obn): Send resize to all panes or track focused pane
+        conn.sendResize(SHELL_PANE_1_ID, cols, rows);
       }
       resizeTimeoutRef.current = null;
     }, 100); // 100ms debounce
@@ -346,10 +347,11 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
   const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault();
     if (!connection?.isConnected) return;
-    
+
     // Convert wheel delta to rows (roughly 3 rows per scroll tick)
     const delta = Math.sign(e.deltaY) * 3;
-    connection.sendScroll(delta);
+    // TODO(du-obn): Track focused pane for scroll
+    connection.sendScroll(SHELL_PANE_1_ID, delta);
   }, [connection]);
 
   // Attach wheel handler

@@ -91,6 +91,8 @@ Response to client ping.
 
 ### Client → Server (JSON)
 
+**IMPORTANT:** All messages (except `ping`) must include `paneId` to route to the correct pane.
+
 #### Key
 
 Keyboard event with full fidelity.
@@ -98,6 +100,7 @@ Keyboard event with full fidelity.
 ```json
 {
   "type": "key",
+  "paneId": 1,
   "key": "a",
   "code": "KeyA",
   "keyCode": 65,
@@ -118,7 +121,9 @@ IME composed text (CJK, emoji, etc).
 ```json
 {
   "type": "text",
-  "data": "日本語"
+  "paneId": 1,
+  "data": "日本語",
+  "timestamp": 12345.67
 }
 ```
 
@@ -127,6 +132,7 @@ IME composed text (CJK, emoji, etc).
 ```json
 {
   "type": "resize",
+  "paneId": 1,
   "cols": 120,
   "rows": 40
 }
@@ -137,19 +143,32 @@ IME composed text (CJK, emoji, etc).
 ```json
 {
   "type": "scroll",
+  "paneId": 1,
   "delta": -5
 }
 ```
 
 #### Sync
 
-Request delta update from server.
+Request delta update from server for a specific pane.
 
 ```json
 {
   "type": "sync",
+  "paneId": 1,
   "gen": 500,
   "minRowId": 1000
+}
+```
+
+#### Focus
+
+Request focus change to a specific pane.
+
+```json
+{
+  "type": "focus",
+  "paneId": 1
 }
 ```
 

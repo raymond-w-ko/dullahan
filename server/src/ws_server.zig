@@ -26,6 +26,7 @@ const log = std.log.scoped(.ws_server);
 /// Keyboard event from client
 const KeyEvent = struct {
     type: []const u8,
+    paneId: u16,    // Target pane ID
     key: []const u8,
     code: []const u8,
     state: []const u8,
@@ -41,12 +42,14 @@ const KeyEvent = struct {
 /// IME composed text from client
 const TextMessage = struct {
     type: []const u8,
+    paneId: u16,    // Target pane ID
     data: []const u8,
 };
 
 /// Terminal resize request from client
 const ResizeMessage = struct {
     type: []const u8,
+    paneId: u16,    // Target pane ID
     cols: u16,
     rows: u16,
 };
@@ -54,14 +57,22 @@ const ResizeMessage = struct {
 /// Scroll request from client
 const ScrollMessage = struct {
     type: []const u8,
-    delta: i32,  // Negative = scroll up (toward history), positive = scroll down
+    paneId: u16,    // Target pane ID
+    delta: i32,     // Negative = scroll up (toward history), positive = scroll down
 };
 
 /// Sync request from client for delta updates
 const SyncMessage = struct {
     type: []const u8,
-    gen: u64,      // Client's current generation
-    minRowId: u64, // Oldest row ID client has
+    paneId: u16,    // Target pane ID
+    gen: u64,       // Client's current generation
+    minRowId: u64,  // Oldest row ID client has
+};
+
+/// Focus request from client
+const FocusMessage = struct {
+    type: []const u8,
+    paneId: u16,    // Pane to focus
 };
 
 /// Generic message to peek at type field
@@ -404,6 +415,7 @@ pub const WsServer = struct {
             };
             defer key_event.deinit();
 
+            // TODO(du-obn): Route by paneId instead of activePane()
             const pane = session.activePane() orelse return;
 
             var output_buf: [32]u8 = undefined;
@@ -430,6 +442,7 @@ pub const WsServer = struct {
 
             log.debug("Received text: {d} bytes", .{text_msg.value.data.len});
 
+            // TODO(du-obn): Route by paneId instead of activePane()
             const pane = session.activePane() orelse return;
 
             // Log to debug pane
@@ -459,6 +472,7 @@ pub const WsServer = struct {
                 return;
             }
 
+            // TODO(du-obn): Route by paneId instead of activePane()
             // Resize pane (this increments pane.generation)
             const pane = session.activePane() orelse return;
             try pane.resize(cols, rows);
@@ -472,6 +486,7 @@ pub const WsServer = struct {
             };
             defer scroll_msg.deinit();
 
+            // TODO(du-obn): Route by paneId instead of activePane()
             const pane = session.activePane() orelse return;
             pane.scroll(scroll_msg.value.delta);
         } else if (std.mem.eql(u8, type_str, "ping")) {
@@ -489,8 +504,21 @@ pub const WsServer = struct {
             };
             defer sync_msg.deinit();
 
+            // TODO(du-obn): Route by paneId instead of activePane()
             const pane = session.activePane() orelse return;
             try self.handleSyncRequest(ws, pane, sync_msg.value.gen, sync_msg.value.minRowId);
+        } else if (std.mem.eql(u8, type_str, "focus")) {
+            // Focus request - switch active pane
+            const focus_msg = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse focus message: {any}", .{e});
+                return;
+            };
+            defer focus_msg.deinit();
+
+            log.info("Focus request for pane {d}", .{focus_msg.value.paneId});
+            // TODO(du-p5w): Implement focus change - update session.active_pane_id and notify clients
         } else {
             log.warn("Unknown message type: {s}", .{data});
         }
