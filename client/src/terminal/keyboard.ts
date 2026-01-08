@@ -100,6 +100,14 @@ export class KeyboardHandler {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
+    // Allow Cmd+C (macOS) or Ctrl+Shift+C to copy when there's a selection
+    const hasSelection = window.getSelection()?.toString();
+    const isCopyShortcut = (e.metaKey && e.key === 'c') || (e.ctrlKey && e.shiftKey && e.key === 'C');
+    if (hasSelection && isCopyShortcut) {
+      // Let browser handle copy
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
     this.sendKey(e, 'down');
