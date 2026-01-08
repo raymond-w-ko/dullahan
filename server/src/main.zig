@@ -5,6 +5,7 @@ const dullahan = @import("dullahan");
 const cli = dullahan.cli;
 const server = dullahan.server;
 const ipc = dullahan.ipc;
+const test_runners = dullahan.test_runners;
 
 // Custom logging to file
 const log_file_path = "/tmp/dullahan.log";
@@ -63,7 +64,13 @@ pub fn main() !void {
         return;
     }
 
-    if (args.serve) {
+    if (args.test_command) |test_cmd| {
+        // Run test utility
+        test_runners.runTest(allocator, test_cmd) catch |e| {
+            std.debug.print("Test error: {}\n", .{e});
+            std.process.exit(1);
+        };
+    } else if (args.serve) {
         // Run as server
         const config = server.RunConfig{
             .ipc = .{

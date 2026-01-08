@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const ipc = @import("ipc.zig");
+const test_runners = @import("test_runners.zig");
 
 pub const CliArgs = struct {
     command: ?ipc.Command = null,
@@ -15,6 +16,7 @@ pub const CliArgs = struct {
     help: bool = false,
     serve: bool = false,
     no_spawn: bool = false,
+    test_command: ?test_runners.TestCommand = null,
 
     pub fn parse(allocator: std.mem.Allocator) !CliArgs {
         _ = allocator;
@@ -30,6 +32,19 @@ pub const CliArgs = struct {
                 args.no_spawn = true;
             } else if (std.mem.eql(u8, arg, "serve")) {
                 args.serve = true;
+            } else if (std.mem.eql(u8, arg, "test")) {
+                // Next arg should be test subcommand
+                if (arg_iter.next()) |test_arg| {
+                    if (test_runners.TestCommand.fromString(test_arg)) |cmd| {
+                        args.test_command = cmd;
+                    } else {
+                        // Unknown test command, show help
+                        args.test_command = .help;
+                    }
+                } else {
+                    // No subcommand given, show help
+                    args.test_command = .help;
+                }
             } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
                 const val = arg["--timeout=".len..];
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch 5000;
@@ -59,6 +74,7 @@ pub fn printUsage() void {
         \\  ping          Check if server is responsive
         \\  quit          Shutdown the server
         \\  help          Show available commands
+        \\  test          Run test utilities (see 'dullahan test help')
         \\
         \\Options:
         \\  -h, --help           Show this help
@@ -73,6 +89,7 @@ pub fn printUsage() void {
         \\  dullahan serve --static-dir=./client    # Serve client files
         \\  dullahan status                         # Get server status
         \\  dullahan --timeout=1000 ping            # Ping with 1s timeout
+        \\  dullahan test keytest-kitty             # Run keyboard tester
         \\
     ;
     std.debug.print("{s}", .{usage});

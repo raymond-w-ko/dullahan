@@ -44,6 +44,7 @@ If that audit trail is missing, then you must act as if the operation never happ
 - Source of truth for all terminal state
 - Sends full snapshots and delta updates to connected clients
 - Runs as a daemon on Linux/macOS (Windows support planned)
+- **Single binary**: `zig-out/bin/dullahan` — all functionality in one executable
 - **Two communication channels:**
   - **IPC socket** (`/tmp/dullahan.sock`) — CLI control (ping, status, quit)
   - **WebSocket** (port `7681`) — Client connections for terminal data
@@ -89,13 +90,16 @@ The server includes an IPC system for runtime inspection. **Never run `dullahan 
 - Inspect runtime state: `dullahan status`  
 - Clean shutdown before rebuild: `dullahan quit`
 
-### Keyboard Testing Tools
+### Test Utilities
 
-Standalone tools for debugging keyboard input (run in a real terminal like Ghostty):
+Integrated test commands for debugging (run in a real terminal like Ghostty):
 
 ```bash
-./zig-out/bin/keytest-kitty   # Kitty keyboard protocol tester
-./zig-out/bin/keytest-bytes   # Byte coverage tester (256-byte grid)
+./zig-out/bin/dullahan test help            # Show available test commands
+./zig-out/bin/dullahan test keytest-kitty   # Kitty keyboard protocol tester
+./zig-out/bin/dullahan test keytest-bytes   # Byte coverage tester (256-byte grid)
+./zig-out/bin/dullahan test delta-gen       # Generate delta sync test fixtures
+./zig-out/bin/dullahan test shell-delta     # Shell delta sync test
 ```
 
 **keytest-kitty** — Tests Kitty keyboard protocol with full event reporting:
@@ -108,6 +112,14 @@ Standalone tools for debugging keyboard input (run in a real terminal like Ghost
 - Grid of 0x00-0xFF, lights up when byte received
 - Detects escape sequences (shows warning instead of lighting intermediate bytes)
 - Useful for testing raw terminal input handling
+
+**delta-gen** — Generates test fixtures for delta sync verification:
+- Creates `test_fixtures/delta/` with snapshot and delta files
+- Useful for protocol testing and debugging
+
+**shell-delta** — End-to-end delta sync test:
+- Spawns a real shell, sends arrow keys
+- Compares delta vs snapshot for correctness
 
 ### Ports & Paths
 
@@ -149,8 +161,7 @@ dullahan/
 │       ├── pane.zig         # Pane (terminal + PTY)
 │       ├── terminal.zig     # ghostty-vt wrapper
 │       ├── pty.zig          # PTY allocation (Linux/macOS)
-│       ├── keytest_kitty.zig  # Kitty keyboard protocol tester
-│       └── keytest_bytes.zig  # Byte coverage tester
+│       └── test_runners.zig # Integrated test utilities (keytest, delta tests)
 │
 ├── client/
 │   ├── package.json

@@ -50,28 +50,6 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Key tester - Kitty protocol
-    const keytest_kitty = b.addExecutable(.{
-        .name = "keytest-kitty",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/keytest_kitty.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(keytest_kitty);
-
-    // Byte coverage tester - shows all 256 bytes
-    const keytest_bytes = b.addExecutable(.{
-        .name = "keytest-bytes",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/keytest_bytes.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    b.installArtifact(keytest_bytes);
-
     // Run step
     const run_step = b.step("run", "Run the server");
     const run_cmd = b.addRunArtifact(exe);
@@ -125,51 +103,4 @@ pub fn build(b: *std.Build) void {
     // `zig build test-integration` runs only integration tests
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
-
-    // ============================================================
-    // Delta sync test data generator
-    // ============================================================
-
-    const delta_test_gen = b.addExecutable(.{
-        .name = "delta-test-gen",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/delta_test_gen.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "dullahan", .module = dullahan_mod },
-            },
-        }),
-    });
-
-    b.installArtifact(delta_test_gen);
-
-    // `zig build gen-delta-test` generates test fixtures
-    const gen_delta_step = b.step("gen-delta-test", "Generate delta sync test fixtures");
-    const run_delta_gen = b.addRunArtifact(delta_test_gen);
-    run_delta_gen.setCwd(b.path(".."));  // Run from project root
-    gen_delta_step.dependOn(&run_delta_gen.step);
-
-    // ============================================================
-    // Shell delta test (spawns real shell, presses up, compares delta vs snapshot)
-    // ============================================================
-
-    const shell_delta_test = b.addExecutable(.{
-        .name = "shell-delta-test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/shell_delta_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "dullahan", .module = dullahan_mod },
-            },
-        }),
-    });
-
-    b.installArtifact(shell_delta_test);
-
-    // `zig build run-shell-delta-test` runs the shell delta test
-    const shell_test_step = b.step("run-shell-delta-test", "Run shell delta sync test");
-    const run_shell_test = b.addRunArtifact(shell_delta_test);
-    shell_test_step.dependOn(&run_shell_test.step);
 }
