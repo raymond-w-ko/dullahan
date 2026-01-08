@@ -42,7 +42,7 @@ pub const Session = struct {
     allocator: std.mem.Allocator,
 
     /// Whether to log PTY traffic (hex + ASCII) to the debug pane
-    debug_pty_logging: bool = false,
+    debug_pty_logging: bool = true,
 
     pub const Options = struct {
         cols: u16 = 80,

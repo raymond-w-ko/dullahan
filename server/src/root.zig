@@ -33,6 +33,9 @@ pub const process = @import("process.zig");
 // Signal handling
 pub const signal = @import("signal.zig");
 
+// Unified logging (file + console + stderr)
+pub const dlog = @import("dlog.zig");
+
 // Test runners (integrated test commands)
 pub const test_runners = @import("test_runners.zig");
 

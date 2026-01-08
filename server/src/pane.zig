@@ -10,6 +10,7 @@ const Terminal = ghostty.Terminal;
 const Pty = @import("pty.zig").Pty;
 const snapshot = @import("snapshot.zig");
 const process = @import("process.zig");
+const dlog = @import("dlog.zig");
 
 const log = std.log.scoped(.pane);
 
@@ -287,11 +288,12 @@ pub const Pane = struct {
         self.terminal.screens.active.pages.clearDirty();
     }
     
-    /// Handle terminal queries that require responses (DA1, etc.)
+    /// Handle terminal queries that require responses (DA1, DSR, etc.)
     /// These are sent by shells/apps to detect terminal capabilities
     fn handleTerminalQueries(self: *Pane, data: []const u8) void {
         // Look for DA1: ESC [ c or ESC [ 0 c
         // DA1 = Primary Device Attributes
+        // DSR: ESC [ 5 n (status) or ESC [ 6 n (cursor position)
         var i: usize = 0;
         while (i < data.len) : (i += 1) {
             if (data[i] == 0x1b and i + 2 < data.len) {
@@ -308,6 +310,18 @@ pub const Pane = struct {
                     } else if (data[i + 2] == '>' and i + 3 < data.len and data[i + 3] == 'c') {
                         // ESC [ > c - DA2 (Secondary Device Attributes)
                         self.sendDA2Response();
+                        i += 3;
+                    } else if (i + 3 < data.len and data[i + 2] == '5' and data[i + 3] == 'n') {
+                        // ESC [ 5 n - DSR (Device Status Report)
+                        self.sendDSRStatusResponse();
+                        i += 3;
+                    } else if (i + 3 < data.len and data[i + 2] == '6' and data[i + 3] == 'n') {
+                        // ESC [ 6 n - DSR (Cursor Position Report)
+                        self.sendDSRCursorResponse();
+                        i += 3;
+                    } else if (i + 3 < data.len and data[i + 2] >= '0' and data[i + 2] <= '9' and data[i + 3] == 'n') {
+                        // ESC [ X n - Unknown DSR request
+                        self.logUnknownDSR(data[i + 2]);
                         i += 3;
                     }
                 }
@@ -341,6 +355,42 @@ pub const Pane = struct {
             log.warn("Failed to send DA2 response: {any}", .{e});
         };
         log.debug("Sent DA2 response", .{});
+    }
+
+    /// Send DSR (Device Status Report) response for status query (CSI 5 n)
+    /// Response: CSI 0 n (terminal OK)
+    fn sendDSRStatusResponse(self: *Pane) void {
+        const response = "\x1b[0n";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send DSR status response: {any}", .{e});
+        };
+        dlog.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
+    }
+
+    /// Send DSR (Device Status Report) cursor position response (CSI 6 n)
+    /// Response: CSI row ; col R (1-indexed)
+    fn sendDSRCursorResponse(self: *Pane) void {
+        // Get cursor position from terminal (0-indexed), convert to 1-indexed
+        const cursor = self.terminal.screens.active.cursor;
+        const row = cursor.y + 1;
+        const col = cursor.x + 1;
+
+        // Format response: ESC [ row ; col R
+        var buf: [32]u8 = undefined;
+        const response = std.fmt.bufPrint(&buf, "\x1b[{d};{d}R", .{ row, col }) catch {
+            log.warn("Failed to format DSR cursor response", .{});
+            return;
+        };
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send DSR cursor response: {any}", .{e});
+        };
+        dlog.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
+    }
+
+    /// Log unimplemented DSR request
+    fn logUnknownDSR(self: *Pane, param: u8) void {
+        dlog.missing("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
     }
 
     /// Parse OSC (Operating System Command) sequences for title changes.

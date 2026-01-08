@@ -9,6 +9,7 @@ const PaneRegistry = @import("pane_registry.zig").PaneRegistry;
 const http = @import("http.zig");
 const signal = @import("signal.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
+const dlog = @import("dlog.zig");
 
 const log = std.log.scoped(.server);
 
@@ -41,12 +42,17 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     _ = try pane_registry.create(); // pane 1: shell
     _ = try pane_registry.create(); // pane 2: shell
 
-    // Initialize debug pane with welcome message
+    // Initialize debug pane with welcome message and set up unified logging
     if (pane_registry.getDebugPane()) |debug_pane| {
+        // Set debug pane for unified logging (file + console + stderr)
+        dlog.setDebugPane(debug_pane);
+
         try debug_pane.feedDirect("\x1b[1;36m=== Dullahan Debug Console ===\x1b[0m\r\n");
         try debug_pane.feedDirect("PTY I/O traffic will be logged here.\r\n");
         try debug_pane.feedDirect("\x1b[31m> pane N: bytes sent TO pty (red)\x1b[0m\r\n");
         try debug_pane.feedDirect("\x1b[34m< pane N: bytes recv FROM pty (blue)\x1b[0m\r\n\r\n");
+
+        dlog.info("Debug console initialized", .{});
     }
 
     // Create session with registry pointer
