@@ -205,7 +205,12 @@ html, body {
   position: absolute;
   visibility: hidden;
   pointer-events: none;
-  /* Keep in DOM for Chrome DevTools inspection */
+  /* Must explicitly set terminal font since parent may not have it */
+  font-family: var(--term-font);
+  font-size: var(--term-font-size);
+  font-weight: var(--term-font-weight, normal);
+  font-feature-settings: var(--term-font-feature, normal);
+  line-height: var(--term-line-height);
 }
 
 /* Bell attention animation - pulse titlebar only */

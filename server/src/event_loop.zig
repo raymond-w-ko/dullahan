@@ -5,7 +5,12 @@
 
 const std = @import("std");
 const posix = std.posix;
+const builtin = @import("builtin");
 const msgpack = @import("msgpack");
+
+const sys = @cImport({
+    @cInclude("sys/ioctl.h");
+});
 const ipc = @import("ipc.zig");
 const http = @import("http.zig");
 const websocket = @import("websocket.zig");
@@ -383,6 +388,44 @@ pub const EventLoop = struct {
                 pane.stopCapture();
 
                 break :blk ipc.Response.okWithData("Capture started", "Sent 'claude\\n'. Run 'dump-raw' to see terminal state, check /tmp/dullahan-capture.hex for hex dump.");
+            },
+
+            .ttysize => blk: {
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                const writer = buf.writer(alloc);
+
+                // Query stdin (fd 0) for terminal size
+                const TIOCGWINSZ: u32 = if (builtin.os.tag == .macos) 0x40087468 else 0x5413;
+                var ws: extern struct {
+                    ws_row: u16 = 0,
+                    ws_col: u16 = 0,
+                    ws_xpixel: u16 = 0,
+                    ws_ypixel: u16 = 0,
+                } = .{};
+
+                if (sys.ioctl(0, TIOCGWINSZ, @intFromPtr(&ws)) < 0) {
+                    // Try stdout if stdin doesn't work
+                    if (sys.ioctl(1, TIOCGWINSZ, @intFromPtr(&ws)) < 0) {
+                        break :blk ipc.Response.err("ioctl TIOCGWINSZ failed (not a tty?)");
+                    }
+                }
+
+                try writer.print("Server console size (ioctl):\n", .{});
+                try writer.print("  cols: {d}\n", .{ws.ws_col});
+                try writer.print("  rows: {d}\n", .{ws.ws_row});
+                try writer.print("  xpixel: {d}\n", .{ws.ws_xpixel});
+                try writer.print("  ypixel: {d}\n", .{ws.ws_ypixel});
+
+                // Also show pane sizes from registry
+                try writer.print("\nVirtual terminal pane sizes:\n", .{});
+                var it = self.session.pane_registry.iterator();
+                while (it.next()) |pane_ptr| {
+                    const pane = pane_ptr.*;
+                    try writer.print("  pane {d}: {d}x{d}\n", .{ pane.id, pane.cols, pane.rows });
+                }
+
+                const data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Server console size", data);
             },
         };
     }

@@ -23,6 +23,7 @@ pub const Command = enum {
     dump,
     @"dump-raw",
     @"debug-capture",
+    ttysize,
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -33,6 +34,7 @@ pub const Command = enum {
             .{ "dump", .dump },
             .{ "dump-raw", .@"dump-raw" },
             .{ "debug-capture", .@"debug-capture" },
+            .{ "ttysize", .ttysize },
         });
         return map.get(s);
     }
@@ -46,6 +48,7 @@ pub const Command = enum {
             .dump => "Dump terminal state (compact, human-readable)",
             .@"dump-raw" => "Dump raw terminal cells with escape codes visible",
             .@"debug-capture" => "Run 'claude', capture PTY output as hex to /tmp/dullahan-capture.hex",
+            .ttysize => "Query server's console terminal size via ioctl TIOCGWINSZ",
         };
     }
 };
