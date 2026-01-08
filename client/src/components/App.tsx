@@ -286,8 +286,11 @@ function TerminalView({ snapshot, cursorStyle, cursorColor, cursorText, cursorBl
       if (connection?.isConnected) {
         connection.sendKey(msg);
       }
-      // Dismiss bell on any keyboard input
-      onKeyInput?.();
+      // Dismiss bell on keydown, ignoring modifier-only keys
+      const isModifierOnly = ['Shift', 'Control', 'Alt', 'Meta'].includes(msg.key);
+      if (msg.state === 'down' && !isModifierOnly) {
+        onKeyInput?.();
+      }
     });
 
     ime.setCallback((msg) => {
