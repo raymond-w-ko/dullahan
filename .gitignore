@@ -34,6 +34,10 @@ Thumbs.db
 # bv (beads viewer) local config and caches
 .bv/
 
+# beads internal sync files
+.beads/.sync.lock
+.beads/sync_base.jsonl
+
 # Dependency source checkouts (for reference only)
 deps/
 dist/
