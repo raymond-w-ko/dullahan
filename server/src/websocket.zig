@@ -8,6 +8,17 @@ const base64 = std.base64;
 
 const log = std.log.scoped(.websocket);
 
+/// Write all bytes to a stream, handling partial writes.
+/// Loops until all bytes are written or an error occurs.
+pub fn streamWriteAll(stream: std.net.Stream, bytes: []const u8) !void {
+    var written: usize = 0;
+    while (written < bytes.len) {
+        const n = try stream.write(bytes[written..]);
+        if (n == 0) return error.ConnectionClosed;
+        written += n;
+    }
+}
+
 /// WebSocket frame opcodes
 pub const Opcode = enum(u4) {
     continuation = 0x0,
@@ -196,28 +207,28 @@ pub const Connection = struct {
     pub fn sendText(self: *Connection, message: []const u8) !void {
         const frame = try createFrame(self.allocator, .text, message);
         defer self.allocator.free(frame);
-        _ = try self.stream.write(frame);
+        try streamWriteAll(self.stream, frame);
     }
 
     /// Send a binary message
     pub fn sendBinary(self: *Connection, data: []const u8) !void {
         const frame = try createFrame(self.allocator, .binary, data);
         defer self.allocator.free(frame);
-        _ = try self.stream.write(frame);
+        try streamWriteAll(self.stream, frame);
     }
 
     /// Send a close frame
     pub fn sendClose(self: *Connection) !void {
         const frame = try createFrame(self.allocator, .close, &.{});
         defer self.allocator.free(frame);
-        _ = try self.stream.write(frame);
+        try streamWriteAll(self.stream, frame);
     }
 
     /// Send a pong frame (response to ping)
     pub fn sendPong(self: *Connection, payload: []const u8) !void {
         const frame = try createFrame(self.allocator, .pong, payload);
         defer self.allocator.free(frame);
-        _ = try self.stream.write(frame);
+        try streamWriteAll(self.stream, frame);
     }
 
     /// Read and parse one WebSocket frame

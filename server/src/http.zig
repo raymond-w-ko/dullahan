@@ -127,7 +127,7 @@ pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const
     try writer.writeAll("\r\n");
     try writer.writeAll(body);
 
-    _ = try stream.write(fbs.getWritten());
+    try websocket.streamWriteAll(stream, fbs.getWritten());
 }
 
 /// Send HTTP response headers only (for streaming body)
@@ -143,7 +143,7 @@ pub fn sendResponseHeaders(stream: std.net.Stream, status: []const u8, headers: 
     try writer.print("Content-Length: {d}\r\n", .{content_length});
     try writer.writeAll("\r\n");
 
-    _ = try stream.write(fbs.getWritten());
+    try websocket.streamWriteAll(stream, fbs.getWritten());
 }
 
 /// Send WebSocket upgrade response
@@ -160,7 +160,7 @@ pub fn sendWebSocketUpgrade(stream: std.net.Stream, client_key: []const u8) !voi
     try writer.print("Sec-WebSocket-Accept: {s}\r\n", .{accept_key});
     try writer.writeAll("\r\n");
 
-    _ = try stream.write(fbs.getWritten());
+    try websocket.streamWriteAll(stream, fbs.getWritten());
 }
 
 /// Get MIME type for file extension
@@ -301,7 +301,7 @@ pub const Server = struct {
         while (true) {
             const n = file.read(&buf) catch return;
             if (n == 0) break;
-            _ = stream.write(buf[0..n]) catch return;
+            websocket.streamWriteAll(stream, buf[0..n]) catch return;
         }
     }
 
@@ -330,7 +330,7 @@ pub const Server = struct {
         }, asset.content.len) catch return true;
 
         // Stream body
-        _ = stream.write(asset.content) catch {};
+        websocket.streamWriteAll(stream, asset.content) catch {};
 
         return true;
     }

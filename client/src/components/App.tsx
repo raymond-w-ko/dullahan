@@ -180,17 +180,17 @@ export function App() {
 
   return (
     <div class="app" data-theme={theme}>
-      <aside class="sidebar">
-        <div class="sidebar-logo" title="Dullahan">D</div>
-        <div class="sidebar-spacer" />
-        <button 
-          class={`sidebar-btn ${connected ? 'sidebar-btn--connected' : 'sidebar-btn--disconnected'}`}
+      <aside class="bottombar">
+        <div class="bottombar-logo" title="Dullahan">D</div>
+        <div class="bottombar-spacer" />
+        <button
+          class={`bottombar-btn ${connected ? 'bottombar-btn--connected' : 'bottombar-btn--disconnected'}`}
           title={connected ? 'Connected' : 'Disconnected'}
         >
           {connected ? '●' : '○'}
         </button>
-        <button 
-          class="sidebar-btn" 
+        <button
+          class="bottombar-btn"
           onClick={() => setSettingsOpen(true)}
           title="Settings"
         >
