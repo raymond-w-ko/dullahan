@@ -1,4 +1,4 @@
-.PHONY: all build clean dev server client fmt themes dist
+.PHONY: all build clean dev prod server client fmt themes dist
 
 all: build
 
@@ -13,14 +13,6 @@ server:
 
 client: themes
 	cd client && bun run build
-
-dev: client server
-	pkill -9 -x dullahan || true
-	./server/zig-out/bin/dullahan serve
-
-prod: dist
-	pkill -9 -x dullahan || true
-	./dist/dullahan serve
 
 # =============================================================================
 # Distribution build (production, single binary with embedded client)
@@ -76,3 +68,11 @@ clean:
 
 fmt:
 	zig fmt server/src/
+
+dev: client server
+	pkill -9 -x dullahan || true
+	./server/zig-out/bin/dullahan serve
+
+prod: dist
+	pkill -9 -x dullahan || true
+	./dist/dullahan serve
