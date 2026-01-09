@@ -8,14 +8,19 @@ all: build
 
 build: server client
 
-dev:
-	@echo "TODO: run server and client in dev mode"
-
 server:
 	cd server && zig build
 
 client: themes
 	cd client && bun run build
+
+dev: client server
+	pkill -9 -x dullahan || true
+	./server/zig-out/bin/dullahan serve
+
+prod: dist
+	pkill -9 -x dullahan || true
+	./dist/dullahan serve
 
 # =============================================================================
 # Distribution build (production, single binary with embedded client)
