@@ -11,6 +11,7 @@ const std = @import("std");
 pub const Asset = struct {
     content: []const u8,
     mime_type: []const u8,
+    etag: []const u8,
 };
 
 /// In debug/stub builds, no assets are embedded

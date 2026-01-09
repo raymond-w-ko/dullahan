@@ -8,6 +8,7 @@
  */
 
 import { writeFileSync, existsSync, mkdirSync, copyFileSync, readFileSync } from "fs";
+import { createHash } from "crypto";
 
 const ASSETS_DIR = "server/src/assets";
 const OUTPUT_FILE = "server/src/embedded_assets.zig";
@@ -16,6 +17,12 @@ interface Asset {
   urlPath: string;     // URL path (e.g., "/index.html")
   embedPath: string;   // Path for @embedFile (relative to server/src/)
   mimeType: string;
+  etag: string;        // ETag for caching (hash of content)
+}
+
+function computeEtag(content: Buffer | string): string {
+  const hash = createHash("md5").update(content).digest("hex").slice(0, 16);
+  return `"${hash}"`;
 }
 
 function getMimeType(filename: string): string {
@@ -75,29 +82,34 @@ function prepareAssets(): Asset[] {
 </body>
 </html>`;
   writeFileSync(`${ASSETS_DIR}/index.html`, indexHtml);
-  assets.push({ urlPath: "/", embedPath: "assets/index.html", mimeType: "text/html" });
-  assets.push({ urlPath: "/index.html", embedPath: "assets/index.html", mimeType: "text/html" });
-  
+  const indexEtag = computeEtag(indexHtml);
+  assets.push({ urlPath: "/", embedPath: "assets/index.html", mimeType: "text/html", etag: indexEtag });
+  assets.push({ urlPath: "/index.html", embedPath: "assets/index.html", mimeType: "text/html", etag: indexEtag });
+
   // CSS files
   for (const css of ["palette.css", "dullahan.css", "themes.css"]) {
     if (copyAsset(`client/src/${css}`, `${ASSETS_DIR}/${css}`)) {
-      assets.push({ urlPath: `/${css}`, embedPath: `assets/${css}`, mimeType: "text/css" });
+      const content = readFileSync(`${ASSETS_DIR}/${css}`);
+      assets.push({ urlPath: `/${css}`, embedPath: `assets/${css}`, mimeType: "text/css", etag: computeEtag(content) });
     }
   }
-  
+
   // JS bundle + sourcemap
   if (copyAsset("client/dist/main.js", `${ASSETS_DIR}/main.js`)) {
-    assets.push({ urlPath: "/main.js", embedPath: "assets/main.js", mimeType: "application/javascript" });
+    const content = readFileSync(`${ASSETS_DIR}/main.js`);
+    assets.push({ urlPath: "/main.js", embedPath: "assets/main.js", mimeType: "application/javascript", etag: computeEtag(content) });
   }
   if (copyAsset("client/dist/main.js.map", `${ASSETS_DIR}/main.js.map`)) {
-    assets.push({ urlPath: "/main.js.map", embedPath: "assets/main.js.map", mimeType: "application/json" });
+    const content = readFileSync(`${ASSETS_DIR}/main.js.map`);
+    assets.push({ urlPath: "/main.js.map", embedPath: "assets/main.js.map", mimeType: "application/json", etag: computeEtag(content) });
   }
-  
+
   // Favicon
   if (copyAsset("client/favicon.png", `${ASSETS_DIR}/favicon.png`)) {
-    assets.push({ urlPath: "/favicon.png", embedPath: "assets/favicon.png", mimeType: "image/png" });
+    const content = readFileSync(`${ASSETS_DIR}/favicon.png`);
+    assets.push({ urlPath: "/favicon.png", embedPath: "assets/favicon.png", mimeType: "image/png", etag: computeEtag(content) });
   }
-  
+
   return assets;
 }
 
@@ -112,6 +124,7 @@ function generateZigFile(assets: Asset[]): void {
     "pub const Asset = struct {",
     "    content: []const u8,",
     "    mime_type: []const u8,",
+    "    etag: []const u8,",
     "};",
     "",
     "/// Embedded asset data",
@@ -141,7 +154,9 @@ function generateZigFile(assets: Asset[]): void {
 
   for (const asset of assets) {
     const idx = fileMap.get(asset.embedPath);
-    lines.push(`    .{ "${asset.urlPath}", Asset{ .content = assets.file_${idx}, .mime_type = "${asset.mimeType}" } },`);
+    // Escape the quotes in etag for Zig string literal
+    const escapedEtag = asset.etag.replace(/"/g, '\\"');
+    lines.push(`    .{ "${asset.urlPath}", Asset{ .content = assets.file_${idx}, .mime_type = "${asset.mimeType}", .etag = "${escapedEtag}" } },`);
   }
 
   lines.push("});");

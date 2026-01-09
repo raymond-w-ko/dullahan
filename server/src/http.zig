@@ -218,7 +218,7 @@ pub const Server = struct {
     /// Serve a static file (from embedded assets or filesystem)
     fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) void {
         // Try embedded assets first (for single-binary distribution)
-        if (self.serveEmbeddedFile(stream, url_path)) {
+        if (self.serveEmbeddedFile(stream, url_path, request)) {
             return;
         }
 
@@ -306,7 +306,7 @@ pub const Server = struct {
     }
 
     /// Serve a file from embedded assets, returns true if served
-    fn serveEmbeddedFile(self: *Server, stream: std.net.Stream, url_path: []const u8) bool {
+    fn serveEmbeddedFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) bool {
         _ = self;
 
         // Normalize path for lookup
@@ -317,16 +317,29 @@ pub const Server = struct {
 
         const asset = embedded_assets.get(lookup_path) orelse return false;
 
-        log.debug("Serving embedded asset: {s} ({d} bytes, {s})", .{
+        log.debug("Serving embedded asset: {s} ({d} bytes, {s}, etag={s})", .{
             lookup_path,
             asset.content.len,
             asset.mime_type,
+            asset.etag,
         });
+
+        // Check If-None-Match for 304 response
+        if (request.getHeader("if-none-match")) |client_etag| {
+            if (std.mem.eql(u8, client_etag, asset.etag)) {
+                sendResponse(stream, "304 Not Modified", &.{
+                    .{ "ETag", asset.etag },
+                    .{ "Cache-Control", "no-cache" },
+                }, "") catch {};
+                return true;
+            }
+        }
 
         // Send headers first, then stream body (files can be large)
         sendResponseHeaders(stream, "200 OK", &.{
             .{ "Content-Type", asset.mime_type },
-            .{ "Cache-Control", "public, max-age=31536000, immutable" },
+            .{ "Cache-Control", "no-cache" },
+            .{ "ETag", asset.etag },
         }, asset.content.len) catch return true;
 
         // Stream body
