@@ -24,7 +24,8 @@ export function App() {
   // Per-pane snapshots
   const [paneSnapshots, setPaneSnapshots] = useState<Map<number, TerminalSnapshot>>(new Map());
   const [error, setError] = useState<string | null>(null);
-  const [syncStats, setSyncStats] = useState({ deltas: 0, resyncs: 0, gen: 0 });
+  // Per-pane sync stats (deltas, resyncs, generation)
+  const [syncStats, setSyncStats] = useState<Map<number, { deltas: number; resyncs: number; gen: number }>>(new Map());
   const [terminalTitle, setTerminalTitle] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [bellActive, setBellActive] = useState(false);
@@ -145,22 +146,30 @@ export function App() {
         next.set(snap.paneId, snap);
         return next;
       });
-      // Update sync stats from connection (totals across all panes)
-      setSyncStats({
-        deltas: conn.totalDeltaCount,
-        resyncs: conn.totalResyncCount,
-        gen: snap.gen,
+      // Update per-pane sync stats
+      setSyncStats(prev => {
+        const next = new Map(prev);
+        next.set(snap.paneId, {
+          deltas: conn.getDeltaCount(snap.paneId),
+          resyncs: conn.getResyncCount(snap.paneId),
+          gen: snap.gen,
+        });
+        return next;
       });
     };
 
     conn.onDelta = (delta) => {
-      // Update sync stats
-      setSyncStats({
-        deltas: conn.totalDeltaCount,
-        resyncs: conn.totalResyncCount,
-        gen: delta.gen,
+      // Update per-pane sync stats
+      setSyncStats(prev => {
+        const next = new Map(prev);
+        next.set(delta.paneId, {
+          deltas: conn.getDeltaCount(delta.paneId),
+          resyncs: conn.getResyncCount(delta.paneId),
+          gen: delta.gen,
+        });
+        return next;
       });
-      debug.log(`Delta applied: gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
+      debug.log(`Delta applied: pane=${delta.paneId}, gen=${delta.gen}, changed=${delta.changedRowIds.length} rows`);
     };
 
     conn.onTitle = (title) => {
@@ -213,6 +222,7 @@ export function App() {
             cursorText={cursorText}
             cursorBlink={cursorBlink}
             isReadOnly={true}
+            syncStats={syncStats.get(DEBUG_PANE_ID)}
           />
 
           {/* Pane 1 - Shell Terminal */}
@@ -229,7 +239,7 @@ export function App() {
             onDimensionsChange={handleDimensionsChange}
             onKeyInput={dismissBell}
             connection={connectionRef.current}
-            syncStats={syncStats}
+            syncStats={syncStats.get(SHELL_PANE_1_ID)}
             calculatedDimensions={calculatedDimensions}
           />
 
@@ -245,6 +255,7 @@ export function App() {
             cursorBlink={cursorBlink}
             onDimensionsChange={handleDimensionsChange}
             connection={connectionRef.current}
+            syncStats={syncStats.get(SHELL_PANE_2_ID)}
           />
         </div>
       </main>

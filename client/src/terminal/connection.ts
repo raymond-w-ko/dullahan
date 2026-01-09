@@ -136,6 +136,7 @@ export type ClientMessage =
 
 /** Delta update event with applied changes */
 export interface DeltaUpdate {
+  paneId: number;
   gen: number;
   cols: number;
   rows: number;
@@ -868,6 +869,19 @@ export class TerminalConnection {
 
     // Notify via onSnapshot (unified handler)
     this.onSnapshot?.(snapshot);
+
+    // Notify delta listeners with change info
+    this.onDelta?.({
+      paneId,
+      gen: delta.gen,
+      cols: delta.cols,
+      rows: delta.rows,
+      scrollback: {
+        totalRows: delta.vp.totalRows,
+        viewportTop: delta.vp.viewportTop,
+      },
+      changedRowIds: delta.dirtyRows.map(r => BigInt(r.id)),
+    });
 
     // Extract title from delta if present
     const deltaTitle = (delta as any).title;
