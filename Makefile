@@ -69,6 +69,10 @@ clean:
 fmt:
 	zig fmt server/src/
 
+# =============================================================================
+# Run targets
+# =============================================================================
+
 dev: client server
 	pkill -9 -x dullahan || true
 	./server/zig-out/bin/dullahan serve
