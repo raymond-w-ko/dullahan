@@ -136,12 +136,39 @@ interface FocusServerMessage {
   paneId: number;
 }
 
+/** Master changed notification from server */
+interface MasterChangedMessage {
+  type: "master_changed";
+  masterId: string | null;
+}
+
+/** Window layout from server */
+export interface WindowInfo {
+  id: number;
+  activePaneId: number;
+  panes: number[];
+}
+
+/** Layout update event */
+export interface LayoutUpdate {
+  activeWindowId: number;
+  windows: WindowInfo[];
+}
+
+interface LayoutMessage {
+  type: "layout";
+  activeWindowId: number;
+  windows: WindowInfo[];
+}
+
 export type BinaryServerMessage =
   | BinarySnapshot
   | BinaryDelta
   | TitleMessage
   | BellMessage
   | FocusServerMessage
+  | MasterChangedMessage
+  | LayoutMessage
   | { type: "output"; data: string }
   | { type: "pong" };
 
@@ -154,7 +181,8 @@ export type ClientMessage =
   | { type: "ping" }
   | { type: "sync"; paneId: number; gen: number; minRowId: number }
   | { type: "focus"; paneId: number }  // Request focus on pane
-  | { type: "hello"; clientId: string };  // Client identification on connect
+  | { type: "hello"; clientId: string }  // Client identification on connect
+  | { type: "request_master" };  // Request to become master
 
 /** Delta update event with applied changes */
 export interface DeltaUpdate {
@@ -188,6 +216,12 @@ export class TerminalConnection {
   // Client identification (persisted per session)
   private _clientId: string;
 
+  // Master/slave state - tracks if this client is the master
+  private _masterId: string | null = null;
+
+  // Layout state - current window/pane mappings
+  private _layout: LayoutUpdate | null = null;
+
   // Per-pane delta sync state
   private _panes: Map<number, PaneState> = new Map();
 
@@ -204,6 +238,8 @@ export class TerminalConnection {
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
+  public onMasterChanged: ((masterId: string | null, isMaster: boolean) => void) | null = null;
+  public onLayout: ((layout: LayoutUpdate) => void) | null = null;
 
   constructor(url?: string) {
     // Get or generate client ID
@@ -221,6 +257,21 @@ export class TerminalConnection {
   /** Get this client's unique ID */
   get clientId(): string {
     return this._clientId;
+  }
+
+  /** Check if this client is the current master */
+  get isMaster(): boolean {
+    return this._masterId !== null && this._masterId === this._clientId;
+  }
+
+  /** Get the current master's ID (or null if no master) */
+  get masterId(): string | null {
+    return this._masterId;
+  }
+
+  /** Get the current layout (or null if not received yet) */
+  get layout(): LayoutUpdate | null {
+    return this._layout;
   }
 
   /** Get or create pane state */
@@ -468,6 +519,22 @@ export class TerminalConnection {
         debug.log("Received focus:", msg.paneId);
         this.onFocus?.(msg.paneId);
         break;
+      case "master_changed": {
+        this._masterId = msg.masterId;
+        const isMaster = this._masterId !== null && this._masterId === this._clientId;
+        debug.log("Master changed:", msg.masterId, "isMaster:", isMaster);
+        this.onMasterChanged?.(msg.masterId, isMaster);
+        break;
+      }
+      case "layout": {
+        this._layout = {
+          activeWindowId: msg.activeWindowId,
+          windows: msg.windows,
+        };
+        debug.log("Layout received:", msg.windows.length, "windows, active:", msg.activeWindowId);
+        this.onLayout?.(this._layout);
+        break;
+      }
       case "pong":
         // Ignore pong
         break;
@@ -785,6 +852,16 @@ export class TerminalConnection {
    */
   sendFocus(paneId: number): void {
     this.send({ type: "focus", paneId });
+  }
+
+  /**
+   * Request to become the master client.
+   * Only one client can be master at a time. The master can perform
+   * privileged operations like resize, create panes, move panes.
+   */
+  requestMaster(): void {
+    debug.log("Requesting master status");
+    this.send({ type: "request_master" });
   }
 
   sendPing(): void {

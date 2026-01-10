@@ -151,6 +151,10 @@ pub const EventLoop = struct {
     start_time: i64,
     commands_processed: u64 = 0,
 
+    // Master/slave state: only one client can be master at a time
+    // Master client can perform privileged operations (resize, create panes, etc.)
+    master_id: ?[]const u8 = null,
+
     const IPC_FD_INDEX = 0;
     const HTTP_FD_INDEX = 1;
     const FIXED_FD_COUNT = 2;
@@ -175,6 +179,10 @@ pub const EventLoop = struct {
             client.deinit();
         }
         self.clients.deinit(self.allocator);
+        // Free master_id if allocated
+        if (self.master_id) |id| {
+            self.allocator.free(id);
+        }
     }
 
     pub fn uptime(self: *const EventLoop) i64 {
@@ -357,12 +365,22 @@ pub const EventLoop = struct {
                 try writer.print("Running: {any}\n", .{self.running});
                 try writer.print("Connected clients: {d}\n", .{self.clients.items.len});
 
+                // Show master status
+                if (self.master_id) |master| {
+                    const short_master = if (master.len >= 8) master[0..8] else master;
+                    try writer.print("Master: {s}...\n", .{short_master});
+                } else {
+                    try writer.writeAll("Master: (none)\n");
+                }
+
                 // List connected clients
                 if (self.clients.items.len > 0) {
                     try writer.writeAll("Clients:\n");
                     for (self.clients.items, 0..) |*client, i| {
+                        const is_master = if (client.client_id) |id| self.isMaster(id) else false;
+                        const master_marker: []const u8 = if (is_master) " [MASTER]" else "";
                         if (client.client_id) |id| {
-                            try writer.print("  [{d}] {s}\n", .{ i, id });
+                            try writer.print("  [{d}] {s}{s}\n", .{ i, id, master_marker });
                         } else {
                             try writer.print("  [{d}] (anonymous)\n", .{i});
                         }
@@ -496,6 +514,36 @@ pub const EventLoop = struct {
             client.setGeneration(pane.id, pane.generation);
         }
 
+        // Send layout message (window→pane mappings)
+        {
+            const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session) catch |e| {
+                log.err("Failed to generate layout message: {any}", .{e});
+                client.deinit();
+                return;
+            };
+            defer self.allocator.free(layout_msg);
+            client.ws.sendBinary(layout_msg) catch |e| {
+                log.err("Failed to send layout message: {any}", .{e});
+                client.deinit();
+                return;
+            };
+        }
+
+        // Send current master state
+        {
+            const master_msg = snapshot.generateMasterChangedMessage(self.allocator, self.master_id) catch |e| {
+                log.err("Failed to generate master_changed message: {any}", .{e});
+                client.deinit();
+                return;
+            };
+            defer self.allocator.free(master_msg);
+            client.ws.sendBinary(master_msg) catch |e| {
+                log.err("Failed to send master_changed message: {any}", .{e});
+                client.deinit();
+                return;
+            };
+        }
+
         // Set short read/write timeouts so the event loop doesn't block
         // This allows the loop to check for shutdown signals even if:
         // - A client sends an incomplete WebSocket frame (read blocks)
@@ -577,8 +625,16 @@ pub const EventLoop = struct {
 
     fn removeClient(self: *EventLoop, idx: usize) void {
         var client = self.clients.orderedRemove(idx);
+        const was_master = if (client.client_id) |id| self.isMaster(id) else false;
         log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
         client.deinit();
+
+        // If disconnecting client was master, clear master and broadcast
+        if (was_master) {
+            self.setMaster(null) catch |e| {
+                log.err("Failed to clear master on disconnect: {any}", .{e});
+            };
+        }
     }
 
     /// Find a client by their UUID
@@ -602,6 +658,58 @@ pub const EventLoop = struct {
             }
         }
         return count;
+    }
+
+    /// Check if a client is the current master
+    pub fn isMaster(self: *EventLoop, client_id: []const u8) bool {
+        if (self.master_id) |master| {
+            return std.mem.eql(u8, master, client_id);
+        }
+        return false;
+    }
+
+    /// Set a new master (or clear if null). Broadcasts master_changed to all clients.
+    pub fn setMaster(self: *EventLoop, new_master_id: ?[]const u8) !void {
+        // Free old master_id
+        if (self.master_id) |old| {
+            self.allocator.free(old);
+        }
+
+        // Set new master_id
+        if (new_master_id) |id| {
+            self.master_id = try self.allocator.dupe(u8, id);
+            log.info("Master set to: {s}", .{if (id.len >= 8) id[0..8] else id});
+        } else {
+            self.master_id = null;
+            log.info("Master cleared (no master)", .{});
+        }
+
+        // Broadcast master_changed to all clients
+        try self.broadcastMasterChanged();
+    }
+
+    /// Broadcast master_changed message to all connected clients
+    fn broadcastMasterChanged(self: *EventLoop) !void {
+        const msg = try snapshot.generateMasterChangedMessage(self.allocator, self.master_id);
+        defer self.allocator.free(msg);
+
+        for (self.clients.items) |*client| {
+            client.ws.sendBinary(msg) catch |e| {
+                log.err("Failed to broadcast master_changed: {any}", .{e});
+            };
+        }
+    }
+
+    /// Broadcast layout message to all connected clients
+    fn broadcastLayout(self: *EventLoop) !void {
+        const msg = try snapshot.generateLayoutMessage(self.allocator, self.session);
+        defer self.allocator.free(msg);
+
+        for (self.clients.items) |*client| {
+            client.ws.sendBinary(msg) catch |e| {
+                log.err("Failed to broadcast layout: {any}", .{e});
+            };
+        }
     }
 
     fn sendClientUpdates(self: *EventLoop, client: *ClientState) !void {
@@ -758,6 +866,17 @@ pub const EventLoop = struct {
                 return;
             };
             log.info("Client identified: {s}", .{client.shortId()});
+        } else if (std.mem.eql(u8, type_str, "request_master")) {
+            // Client is requesting to become master
+            const client_id = client.client_id orelse {
+                log.warn("Anonymous client tried to request master", .{});
+                return;
+            };
+
+            // Set this client as master (broadcasts to all clients)
+            self.setMaster(client_id) catch |e| {
+                log.err("Failed to set master: {any}", .{e});
+            };
         }
     }
 
@@ -862,6 +981,17 @@ pub const EventLoop = struct {
                 return;
             };
             log.info("Client identified: {s}", .{client.shortId()});
+        } else if (std.mem.eql(u8, type_str, "request_master")) {
+            // Client is requesting to become master
+            const client_id = client.client_id orelse {
+                log.warn("Anonymous client tried to request master", .{});
+                return;
+            };
+
+            // Set this client as master (broadcasts to all clients)
+            self.setMaster(client_id) catch |e| {
+                log.err("Failed to set master: {any}", .{e});
+            };
         }
     }
 

@@ -8,6 +8,7 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 const snappy = @import("snappy");
 const Pane = @import("pane.zig").Pane;
+const Session = @import("session.zig").Session;
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
 const Cell = ghostty.page.Cell;
@@ -903,6 +904,124 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     payload.free(allocator);
 
     // Compress
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const result = try compress(msgpack_data, allocator);
+    allocator.free(buffer);
+
+    return result;
+}
+
+/// Generate a binary msgpack master_changed message
+/// Notifies clients when the master client changes
+/// master_id: null means no master, otherwise the UUID of the master client
+pub fn generateMasterChangedMessage(allocator: std.mem.Allocator, master_id: ?[]const u8) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("master_changed", allocator));
+
+    if (master_id) |id| {
+        try payload.mapPut("masterId", try msgpack.Payload.strToPayload(id, allocator));
+    } else {
+        try payload.mapPut("masterId", msgpack.Payload{ .nil = {} });
+    }
+
+    const max_size = 256;
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack master_changed: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    const msgpack_len = write_stream.pos;
+    const msgpack_data = buffer[0..msgpack_len];
+
+    const result = try compress(msgpack_data, allocator);
+    allocator.free(buffer);
+
+    return result;
+}
+
+/// Generate a binary msgpack layout message
+/// Contains window→pane mappings for client UI
+pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("layout", allocator));
+    try payload.mapPut("activeWindowId", msgpack.Payload{ .uint = session.active_window_id });
+
+    // Build windows array
+    const window_count = session.windowCount();
+    var windows_array = try msgpack.Payload.arrPayload(window_count, allocator);
+
+    var window_idx: usize = 0;
+    var it = session.windows.iterator();
+    while (it.next()) |entry| {
+        const window_id = entry.key_ptr.*;
+        const window = entry.value_ptr;
+
+        var window_map = msgpack.Payload.mapPayload(allocator);
+        try window_map.mapPut("id", msgpack.Payload{ .uint = window_id });
+        try window_map.mapPut("activePaneId", msgpack.Payload{ .uint = window.active_pane_id });
+
+        // Build panes array for this window
+        const pane_count = window.paneCount();
+        var panes_array = try msgpack.Payload.arrPayload(pane_count, allocator);
+
+        for (window.pane_ids.items, 0..) |pane_id, pane_idx| {
+            try panes_array.setArrElement(pane_idx, msgpack.Payload{ .uint = pane_id });
+        }
+
+        try window_map.mapPut("panes", panes_array);
+        try windows_array.setArrElement(window_idx, window_map);
+        window_idx += 1;
+    }
+
+    try payload.mapPut("windows", windows_array);
+
+    // Encode to msgpack
+    const max_size = 16 * 1024; // 16KB should be plenty for layout
+    const buffer = try allocator.alloc(u8, max_size);
+    errdefer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload) catch |e| {
+        log.err("Failed to encode msgpack layout: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    payload.free(allocator);
+
     const msgpack_len = write_stream.pos;
     const msgpack_data = buffer[0..msgpack_len];
 
