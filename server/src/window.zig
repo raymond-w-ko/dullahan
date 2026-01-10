@@ -18,6 +18,9 @@ pub const Window = struct {
     cols: u16,
     rows: u16,
 
+    /// Pane IDs belonging to this window (order matters for layout)
+    pane_ids: std.ArrayListUnmanaged(u16) = .{},
+
     /// Allocator
     allocator: std.mem.Allocator,
 
@@ -43,13 +46,43 @@ pub const Window = struct {
             .id = opts.id,
             .cols = opts.cols,
             .rows = opts.rows,
+            .pane_ids = .{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Window) void {
-        // Window no longer owns panes - nothing to deinit
-        _ = self;
+        self.pane_ids.deinit(self.allocator);
+    }
+
+    /// Add a pane to this window
+    pub fn addPane(self: *Window, pane_id: u16) !void {
+        try self.pane_ids.append(self.allocator, pane_id);
+    }
+
+    /// Remove a pane from this window
+    pub fn removePane(self: *Window, pane_id: u16) void {
+        var i: usize = 0;
+        while (i < self.pane_ids.items.len) {
+            if (self.pane_ids.items[i] == pane_id) {
+                _ = self.pane_ids.orderedRemove(i);
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    /// Check if window contains a pane
+    pub fn hasPane(self: *const Window, pane_id: u16) bool {
+        for (self.pane_ids.items) |id| {
+            if (id == pane_id) return true;
+        }
+        return false;
+    }
+
+    /// Get pane count
+    pub fn paneCount(self: *const Window) usize {
+        return self.pane_ids.items.len;
     }
 
     /// Set the active pane by ID

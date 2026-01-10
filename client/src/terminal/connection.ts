@@ -5,6 +5,7 @@ import { debug } from "../debug";
 
 import { decode } from "@msgpack/msgpack";
 import { snappyUncompress } from "hysnappy";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Read varint-encoded uncompressed length from Snappy data.
@@ -144,7 +145,7 @@ export type BinaryServerMessage =
   | { type: "output"; data: string }
   | { type: "pong" };
 
-// All client messages (except ping) include paneId to route to specific pane
+// All client messages (except ping/hello) include paneId to route to specific pane
 export type ClientMessage =
   | KeyMessage
   | TextMessage
@@ -152,7 +153,8 @@ export type ClientMessage =
   | { type: "scroll"; paneId: number; delta: number }  // Scroll viewport by delta rows (negative = up)
   | { type: "ping" }
   | { type: "sync"; paneId: number; gen: number; minRowId: number }
-  | { type: "focus"; paneId: number };  // Request focus on pane
+  | { type: "focus"; paneId: number }  // Request focus on pane
+  | { type: "hello"; clientId: string };  // Client identification on connect
 
 /** Delta update event with applied changes */
 export interface DeltaUpdate {
@@ -164,10 +166,27 @@ export interface DeltaUpdate {
   changedRowIds: bigint[]; // Row IDs that were updated
 }
 
+/** Storage key for client ID */
+const CLIENT_ID_KEY = "dullahan_client_id";
+
+/** Get or generate client ID (persisted in sessionStorage) */
+function getClientId(): string {
+  let clientId = sessionStorage.getItem(CLIENT_ID_KEY);
+  if (!clientId) {
+    clientId = uuidv4();
+    sessionStorage.setItem(CLIENT_ID_KEY, clientId);
+    debug.log("Generated new client ID:", clientId);
+  }
+  return clientId;
+}
+
 export class TerminalConnection {
   private ws: WebSocket | null = null;
   private url: string;
   private reconnectTimer: number | null = null;
+
+  // Client identification (persisted per session)
+  private _clientId: string;
 
   // Per-pane delta sync state
   private _panes: Map<number, PaneState> = new Map();
@@ -187,6 +206,9 @@ export class TerminalConnection {
   public onError: ((error: string) => void) | null = null;
 
   constructor(url?: string) {
+    // Get or generate client ID
+    this._clientId = getClientId();
+
     if (url) {
       this.url = url;
     } else {
@@ -194,6 +216,11 @@ export class TerminalConnection {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       this.url = `${protocol}//${window.location.host}`;
     }
+  }
+
+  /** Get this client's unique ID */
+  get clientId(): string {
+    return this._clientId;
   }
 
   /** Get or create pane state */
@@ -269,6 +296,9 @@ export class TerminalConnection {
 
     this.ws.onopen = () => {
       debug.log("WebSocket connected");
+      // Send hello message to identify this client
+      this.send({ type: "hello", clientId: this._clientId });
+      debug.log("Sent hello with client ID:", this._clientId);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
       this.onConnect?.();

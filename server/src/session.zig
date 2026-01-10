@@ -49,9 +49,10 @@ pub const Session = struct {
         rows: u16 = 24,
     };
 
-    /// Initialize session with an external pane registry
+    /// Initialize session with an external pane registry.
+    /// Does NOT create any windows or panes - use createWindowWithPanes() for that.
     pub fn init(allocator: std.mem.Allocator, pane_registry: *PaneRegistry, opts: Options) !Session {
-        var session = Session{
+        return Session{
             .pane_registry = pane_registry,
             .windows = std.AutoHashMap(u16, Window).init(allocator),
             .active_window_id = 0,
@@ -59,24 +60,6 @@ pub const Session = struct {
             .default_rows = opts.rows,
             .allocator = allocator,
         };
-
-        // Create window (without creating panes - registry owns them)
-        const window_id = session.next_window_id;
-        session.next_window_id += 1;
-
-        var window = try Window.initWithOptions(allocator, .{
-            .cols = opts.cols,
-            .rows = opts.rows,
-            .id = window_id,
-        }, .{ .create_initial_pane = false });
-
-        // Set active pane to first shell (pane 1), not debug pane
-        window.active_pane_id = SHELL_PANE_1_ID;
-
-        try session.windows.put(window_id, window);
-        session.active_window_id = window_id;
-
-        return session;
     }
 
     pub fn deinit(self: *Session) void {
@@ -87,7 +70,7 @@ pub const Session = struct {
         self.windows.deinit();
     }
 
-    /// Create a new window
+    /// Create a new window (empty, no panes)
     pub fn createWindow(self: *Session) !u16 {
         const window_id = self.next_window_id;
         self.next_window_id += 1;
@@ -102,6 +85,50 @@ pub const Session = struct {
         self.active_window_id = window_id;
 
         return window_id;
+    }
+
+    /// Create a new window with a debug pane and two shell panes.
+    /// This is the standard window layout: [debug, shell1, shell2]
+    /// Returns { window_id, debug_pane_id, shell1_pane_id, shell2_pane_id }
+    pub fn createWindowWithPanes(self: *Session) !struct { window_id: u16, debug_pane_id: u16, shell1_pane_id: u16, shell2_pane_id: u16 } {
+        // Create window
+        const window_id = self.next_window_id;
+        self.next_window_id += 1;
+
+        var window = try Window.init(self.allocator, .{
+            .cols = self.default_cols,
+            .rows = self.default_rows,
+            .id = window_id,
+        });
+        errdefer window.deinit();
+
+        // Create panes using registry
+        const debug_pane_id = try self.pane_registry.createDebugPane();
+        errdefer self.pane_registry.destroy(debug_pane_id);
+
+        const shell1_pane_id = try self.pane_registry.createShellPane();
+        errdefer self.pane_registry.destroy(shell1_pane_id);
+
+        const shell2_pane_id = try self.pane_registry.createShellPane();
+        errdefer self.pane_registry.destroy(shell2_pane_id);
+
+        // Add panes to window
+        try window.addPane(debug_pane_id);
+        try window.addPane(shell1_pane_id);
+        try window.addPane(shell2_pane_id);
+
+        // Set active pane to first shell (not debug)
+        window.active_pane_id = shell1_pane_id;
+
+        try self.windows.put(window_id, window);
+        self.active_window_id = window_id;
+
+        return .{
+            .window_id = window_id,
+            .debug_pane_id = debug_pane_id,
+            .shell1_pane_id = shell1_pane_id,
+            .shell2_pane_id = shell2_pane_id,
+        };
     }
 
     /// Get a window by ID
@@ -292,32 +319,37 @@ pub const Session = struct {
 };
 
 // Tests
-test "session creates with one window" {
-    // Create registry with 3 panes
+test "session init creates empty session" {
     var registry = PaneRegistry.init(std.testing.allocator, .{});
     defer registry.deinit();
-    _ = try registry.create(); // pane 0
-    _ = try registry.create(); // pane 1
-    _ = try registry.create(); // pane 2
 
     var session = try Session.init(std.testing.allocator, &registry, .{});
     defer session.deinit();
 
+    // Session starts with no windows
+    try std.testing.expectEqual(@as(usize, 0), session.windowCount());
+}
+
+test "session createWindow works" {
+    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    defer registry.deinit();
+
+    var session = try Session.init(std.testing.allocator, &registry, .{});
+    defer session.deinit();
+
+    // Create a window and add panes manually (without spawning shells)
+    const window_id = try session.createWindow();
+    try std.testing.expectEqual(@as(u16, 0), window_id);
     try std.testing.expectEqual(@as(usize, 1), session.windowCount());
 
-    const window = session.activeWindow();
-    try std.testing.expect(window != null);
+    // Create panes and add to window
+    const pane_id = try registry.create();
+    const window = session.getWindow(window_id).?;
+    try window.addPane(pane_id);
+    window.active_pane_id = pane_id;
 
-    // Panes come from registry now
-    try std.testing.expectEqual(@as(usize, 3), registry.count());
-
-    // Debug pane should exist
-    try std.testing.expect(session.getDebugPane() != null);
-    // Shell panes should exist
-    try std.testing.expect(session.getShellPane1() != null);
-    try std.testing.expect(session.getShellPane2() != null);
-    // Active pane should be shell 1 (not debug)
-    try std.testing.expectEqual(SHELL_PANE_1_ID, window.?.active_pane_id);
+    try std.testing.expectEqual(@as(usize, 1), window.paneCount());
+    try std.testing.expect(window.hasPane(pane_id));
 }
 
 test "session pane lookup works" {
@@ -339,11 +371,16 @@ test "session pane lookup works" {
 test "session can run command" {
     var registry = PaneRegistry.init(std.testing.allocator, .{});
     defer registry.deinit();
-    _ = try registry.create(); // pane 0
-    _ = try registry.create(); // pane 1 (active)
 
     var session = try Session.init(std.testing.allocator, &registry, .{});
     defer session.deinit();
+
+    // Create a window with a pane
+    const window_id = try session.createWindow();
+    const pane_id = try registry.create();
+    const window = session.getWindow(window_id).?;
+    try window.addPane(pane_id);
+    window.active_pane_id = pane_id;
 
     // Run a simple command
     try session.runCommand(&.{ "echo", "hello" });

@@ -129,6 +129,30 @@ pub const PaneRegistry = struct {
         return self.get(SHELL_PANE_2_ID);
     }
 
+    /// Create a debug pane (no shell, for debug console output)
+    /// Returns the pane ID
+    pub fn createDebugPane(self: *PaneRegistry) !u16 {
+        const pane_id = try self.create();
+        // Debug pane doesn't spawn a shell - it receives direct feed
+        log.info("Created debug pane {d}", .{pane_id});
+        return pane_id;
+    }
+
+    /// Create a shell pane (spawns a shell process)
+    /// Returns the pane ID
+    pub fn createShellPane(self: *PaneRegistry) !u16 {
+        const pane_id = try self.create();
+        const pane = self.get(pane_id) orelse return error.PaneNotFound;
+
+        pane.spawnShell() catch |e| {
+            log.err("Failed to spawn shell in pane {d}: {any}", .{ pane_id, e });
+            return e;
+        };
+
+        log.info("Created shell pane {d}", .{pane_id});
+        return pane_id;
+    }
+
     /// Resize all panes
     pub fn resizeAll(self: *PaneRegistry, cols: u16, rows: u16) !void {
         self.default_cols = cols;

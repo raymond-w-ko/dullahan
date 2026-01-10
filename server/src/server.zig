@@ -37,13 +37,22 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var pane_registry = PaneRegistry.init(allocator, .{});
     defer pane_registry.deinit();
 
-    // Create panes: debug (0), shell 1 (1), shell 2 (2)
-    _ = try pane_registry.create(); // pane 0: debug
-    _ = try pane_registry.create(); // pane 1: shell
-    _ = try pane_registry.create(); // pane 2: shell
+    // Create session with registry pointer
+    var session = try Session.init(allocator, &pane_registry, .{});
+    defer session.deinit();
+
+    // Create initial window with debug pane + 2 shell panes
+    // This uses the reusable createWindowWithPanes() method
+    const initial = try session.createWindowWithPanes();
+    log.info("Created window {d} with panes: debug={d}, shell1={d}, shell2={d}", .{
+        initial.window_id,
+        initial.debug_pane_id,
+        initial.shell1_pane_id,
+        initial.shell2_pane_id,
+    });
 
     // Initialize debug pane with welcome message and set up unified logging
-    if (pane_registry.getDebugPane()) |debug_pane| {
+    if (pane_registry.get(initial.debug_pane_id)) |debug_pane| {
         // Set debug pane for unified logging (file + console + stderr)
         dlog.setDebugPane(debug_pane);
 
@@ -54,10 +63,6 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
         dlog.info("Debug console initialized", .{});
     }
-
-    // Create session with registry pointer
-    var session = try Session.init(allocator, &pane_registry, .{});
-    defer session.deinit();
 
     var ipc_server = ipc.Server.init(config.ipc) catch |e| {
         if (e == error.AddressInUse) {
@@ -92,17 +97,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session);
     defer event_loop.deinit();
 
-    // Spawn shells in panes 1 and 2 (not debug pane 0)
-    if (pane_registry.getShellPane1()) |pane| {
-        pane.spawnShell() catch |e| {
-            log.err("Failed to spawn shell in pane 1: {any}", .{e});
-        };
-    }
-    if (pane_registry.getShellPane2()) |pane| {
-        pane.spawnShell() catch |e| {
-            log.err("Failed to spawn shell in pane 2: {any}", .{e});
-        };
-    }
+    // Note: Shells are already spawned by createWindowWithPanes() -> createShellPane()
 
     log.info("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]", .{ config.ipc.socket_path, config.ws_port });
     std.debug.print("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]\n", .{ config.ipc.socket_path, config.ws_port });
