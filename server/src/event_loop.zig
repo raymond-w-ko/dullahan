@@ -918,6 +918,19 @@ pub const EventLoop = struct {
             self.broadcastLayout() catch |e| {
                 log.err("Failed to broadcast layout: {any}", .{e});
             };
+
+            // Send initial snapshots for new panes to all clients
+            const new_pane_ids = [_]u16{ result.shell1_pane_id, result.shell2_pane_id, result.shell3_pane_id };
+            for (new_pane_ids) |pane_id| {
+                if (self.session.pane_registry.get(pane_id)) |pane| {
+                    for (self.clients.items) |*c| {
+                        self.sendSnapshot(&c.ws, pane) catch |e| {
+                            log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
+                        };
+                        c.setGeneration(pane_id, pane.generation);
+                    }
+                }
+            }
         }
     }
 
@@ -1074,6 +1087,19 @@ pub const EventLoop = struct {
             self.broadcastLayout() catch |e| {
                 log.err("Failed to broadcast layout: {any}", .{e});
             };
+
+            // Send initial snapshots for new panes to all clients
+            const new_pane_ids = [_]u16{ result.shell1_pane_id, result.shell2_pane_id, result.shell3_pane_id };
+            for (new_pane_ids) |pane_id| {
+                if (self.session.pane_registry.get(pane_id)) |pane| {
+                    for (self.clients.items) |*c| {
+                        self.sendSnapshot(&c.ws, pane) catch |e| {
+                            log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
+                        };
+                        c.setGeneration(pane_id, pane.generation);
+                    }
+                }
+            }
         }
     }
 

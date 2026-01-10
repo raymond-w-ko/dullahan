@@ -11,8 +11,10 @@ export function WindowSwitcher() {
   // Convert windows map to sorted array
   const windowList = Array.from(windows.values()).sort((a, b) => a.id - b.id);
 
-  // Don't show if only one window
-  if (windowList.length <= 1 && !isMaster) {
+  // Show switcher if multiple windows exist (anyone can switch)
+  // or if master (who can create new windows via + button)
+  const hasMultipleWindows = windowList.length > 1;
+  if (!hasMultipleWindows && !isMaster) {
     return null;
   }
 
