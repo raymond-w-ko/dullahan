@@ -18,8 +18,8 @@ cd "$SERVER_DIR"
 echo "Fetching latest ghostty main..."
 zig fetch --save=ghostty "git+https://github.com/ghostty-org/ghostty#main"
 
-# Extract the commit hash from build.zig.zon
-COMMIT=$(grep -o '#[a-f0-9]\{40\}' build.zig.zon | tr -d '#')
+# Extract the ghostty commit hash from build.zig.zon
+COMMIT=$(grep 'ghostty-org/ghostty' build.zig.zon | grep -o '#[a-f0-9]\{40\}' | tr -d '#')
 echo "Resolved commit: $COMMIT"
 
 cd ..
