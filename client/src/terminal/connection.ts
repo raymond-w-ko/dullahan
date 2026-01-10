@@ -715,22 +715,28 @@ export class TerminalConnection {
 
   /**
    * Send keyboard event (full fidelity for Kitty protocol support)
+   * Only master can send input.
    */
   sendKey(message: KeyMessage): void {
+    if (!this.isMaster) return;
     this.send(message);
   }
 
   /**
    * Send composed text (IME input)
+   * Only master can send input.
    */
   sendText(message: TextMessage): void {
+    if (!this.isMaster) return;
     this.send(message);
   }
 
   /**
    * Send resize for a specific pane (immediate, bypasses pending queue)
+   * Only master can resize.
    */
   sendResize(paneId: number, cols: number, rows: number): void {
+    if (!this.isMaster) return;
     this.send({ type: "resize", paneId, cols, rows });
   }
 
@@ -826,9 +832,10 @@ export class TerminalConnection {
   /**
    * Send all pending resizes if connected.
    * Safe to call at any time - does nothing if not connected or no pending resizes.
+   * Only master can resize.
    */
   flushPendingResizes(): void {
-    if (!this.isConnected || this._pendingResizes.size === 0) {
+    if (!this.isConnected || this._pendingResizes.size === 0 || !this.isMaster) {
       return;
     }
 
@@ -843,8 +850,10 @@ export class TerminalConnection {
   /**
    * Scroll the terminal viewport by delta rows.
    * Negative values scroll up (toward history), positive scroll down.
+   * Only master can scroll.
    */
   sendScroll(paneId: number, delta: number): void {
+    if (!this.isMaster) return;
     this.send({ type: "scroll", paneId, delta });
   }
 
