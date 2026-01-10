@@ -158,8 +158,9 @@ pub const WsServer = struct {
             return;
         };
 
-        // Track generation for each pane (indexed by pane ID)
-        var pane_generations: [3]u64 = .{ 0, 0, 0 };
+        // Track generation for each pane (dynamic map by pane ID)
+        var pane_generations = std.AutoHashMap(u16, u64).init(self.allocator);
+        defer pane_generations.deinit();
 
         // Send initial snapshot for ALL panes from registry
         var pane_it = session.pane_registry.iterator();
@@ -167,9 +168,7 @@ pub const WsServer = struct {
             const pane = pane_ptr.*;
             try self.sendSnapshot(&ws, pane);
             pane.clearDirtyRows();
-            if (pane.id < pane_generations.len) {
-                pane_generations[pane.id] = pane.generation;
-            }
+            try pane_generations.put(pane.id, pane.generation);
         }
 
         log.info("Snapshots sent for {d} panes, entering message loop", .{session.pane_registry.count()});
@@ -209,9 +208,7 @@ pub const WsServer = struct {
                 while (update_it.next()) |pane_ptr| {
                     const pane = pane_ptr.*;
                     const pane_id = pane.id;
-                    if (pane_id >= pane_generations.len) continue;
-
-                    const last_gen = pane_generations[pane_id];
+                    const last_gen = pane_generations.get(pane_id) orelse 0;
 
                     // Check for title change on any pane
                     if (pane.hasTitleChanged()) {
@@ -240,7 +237,7 @@ pub const WsServer = struct {
                             log.err("Failed to send update for pane {d}: {any}", .{ pane_id, send_err });
                             return;
                         };
-                        pane_generations[pane_id] = pane.generation;
+                        pane_generations.put(pane_id, pane.generation) catch {};
                     }
                 }
             }
@@ -326,17 +323,16 @@ pub const WsServer = struct {
     }
 
     /// Send updates for any panes that have changed
-    fn sendAllPaneUpdates(self: *WsServer, session: *Session, ws: *websocket.Connection, pane_generations: *[3]u64) !void {
+    fn sendAllPaneUpdates(self: *WsServer, session: *Session, ws: *websocket.Connection, pane_generations: *std.AutoHashMap(u16, u64)) !void {
         var it = session.pane_registry.iterator();
         while (it.next()) |pane_ptr| {
             const pane = pane_ptr.*;
             const pane_id = pane.id;
-            if (pane_id >= pane_generations.len) continue;
+            const last_gen = pane_generations.get(pane_id) orelse 0;
 
-            const last_gen = pane_generations[pane_id];
             if (pane.generation != last_gen) {
                 try self.sendUpdate(ws, pane, last_gen);
-                pane_generations[pane_id] = pane.generation;
+                try pane_generations.put(pane_id, pane.generation);
             }
         }
     }
