@@ -111,7 +111,7 @@ export function TerminalView({
     <pre
       class="terminal"
       ref={terminalRef}
-      tabIndex={isReadOnly ? undefined : 0}
+      tabIndex={0}
     >
       {isScrolledUp && (
         <div class="scrollback-indicator">
