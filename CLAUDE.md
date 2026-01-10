@@ -53,10 +53,47 @@ If that audit trail is missing, then you must act as if the operation never happ
 - Browser-based UI supporting multiple simultaneous connections
 - Responsive design for desktop, laptop, and mobile
 - **Uses Bun** for package management and running TypeScript
+- **Master/Slave model** — first client becomes master, others are read-only viewers
 - Rendering backends (in order of development):
-  1. **React/Preact** — initial implementation
+  1. **React/Preact** — initial implementation (current)
   2. **Canvas** — explicit font drawing for performance
   3. **WebGL** — custom shaders for effects (à la Ghostty)
+
+### Master/Slave Client Model
+
+Dullahan supports multiple simultaneous browser connections with a master/slave hierarchy:
+
+- **Master client**: First client to connect (or one who requests master). Can:
+  - Send keyboard input (`sendKey`, `sendText`)
+  - Resize terminals (`sendResize`)
+  - Scroll terminals (`sendScroll`)
+  - Create new windows
+- **Slave clients**: Read-only viewers. Can:
+  - View all terminal content (receive snapshots/deltas)
+  - Switch between windows (local view preference only)
+  - Request to become master
+
+**Key files:**
+- `server/src/event_loop.zig` — master assignment, input routing
+- `client/src/terminal/connection.ts` — master checks on input methods
+- `client/src/components/MasterIndicator.tsx` — UI showing master status
+
+### Window/Pane Architecture
+
+Windows and panes are **dynamic** — windows can have variable numbers of panes:
+
+- **Window 0** (initial): Debug pane + 2 shell panes (created by `session.createInitialLayout()`)
+- **New windows**: 3 shell panes (created by `session.createShellWindow()`)
+- **Pane IDs**: Only `DEBUG_PANE_ID` (0) is special; all others are dynamically allocated
+- **Grid layout**: Uses CSS `grid-template-columns: repeat(N, 1fr)` where N = pane count
+
+**Client state starts empty** — the server populates windows/panes via layout messages:
+```typescript
+windows: new Map(),  // Populated by server layout message
+panes: new Map(),    // Created on-demand when snapshots arrive
+```
+
+**Important ordering caveat**: Snapshots may arrive before layout messages. The client creates pane state on-demand in `setPaneSnapshot()` to handle this.
 
 ```bash
 cd client
@@ -153,12 +190,14 @@ dullahan/
 │       ├── ipc.zig          # Unix socket IPC for CLI control
 │       ├── http.zig         # HTTP server with WebSocket upgrade
 │       ├── websocket.zig    # WebSocket frame encoding/decoding
-│       ├── ws_server.zig    # WebSocket client handler
+│       ├── ws_server.zig    # WebSocket client handler (per-connection)
+│       ├── event_loop.zig   # Central event loop (master/slave, message routing)
 │       ├── snapshot.zig     # Terminal state → msgpack + delta generation
 │       ├── embedded_assets.zig # Embedded client for single-binary dist
-│       ├── session.zig      # Session (contains windows)
+│       ├── session.zig      # Session (creates windows, initial layout)
 │       ├── window.zig       # Window (contains panes)
-│       ├── pane.zig         # Pane (terminal + PTY)
+│       ├── pane.zig         # Pane (terminal + PTY + generation tracking)
+│       ├── pane_registry.zig # Pane ID allocation (only DEBUG_PANE_ID=0 is special)
 │       ├── terminal.zig     # ghostty-vt wrapper
 │       ├── pty.zig          # PTY allocation (Linux/macOS)
 │       └── test_runners.zig # Integrated test utilities (keytest, delta tests)
@@ -172,13 +211,20 @@ dullahan/
 │   ├── serve.ts             # dev server
 │   ├── src/
 │   │   ├── main.ts          # entry point
+│   │   ├── store.ts         # reactive state management
+│   │   ├── config.ts        # user preferences (localStorage)
 │   │   ├── dullahan.css     # base styles + 256-color palette
 │   │   ├── themes.css       # 453 Ghostty themes (generated, gitignored)
 │   │   ├── themes.ts        # theme name index (generated, gitignored)
 │   │   ├── components/
-│   │   │   └── App.tsx      # main terminal UI
+│   │   │   ├── App.tsx           # root component
+│   │   │   ├── TerminalGrid.tsx  # dynamic pane grid layout
+│   │   │   ├── TerminalPane.tsx  # individual terminal pane
+│   │   │   ├── WindowSwitcher.tsx # tab bar for window switching
+│   │   │   ├── MasterIndicator.tsx # master/slave status UI
+│   │   │   └── Settings.tsx      # settings panel
 │   │   └── terminal/
-│   │       └── connection.ts # WebSocket client
+│   │       └── connection.ts # WebSocket client + master checks
 │   └── dist/                # build output (gitignored)
 │
 ├── protocol/                # shared definitions
@@ -264,6 +310,46 @@ _rowCache: Map<bigint, Cell[]>;     // Cached row data
 ```
 
 **Debug UI:** Titlebar shows `Δ{deltas} ⟳{resyncs}` for sync statistics.
+
+### Common Pitfalls
+
+**Don't hardcode pane counts or IDs:**
+```zig
+// ❌ BAD - assumes exactly 3 panes
+var pane_generations: [3]u64 = .{ 0, 0, 0 };
+
+// ✅ GOOD - dynamic
+var pane_generations = std.AutoHashMap(u16, u64).init(allocator);
+```
+
+**Handle message ordering:**
+```typescript
+// Snapshots may arrive before layout - create pane on-demand
+export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
+  let pane = store.panes.get(paneId);
+  if (!pane) {
+    pane = createPaneState(paneId);  // Don't discard!
+    store.panes.set(paneId, pane);
+  }
+  pane.snapshot = snapshot;
+}
+```
+
+**Broadcast to all clients, not just one:**
+```zig
+// When creating new panes, send snapshots to ALL clients
+for (self.clients.items) |*client| {
+    self.sendSnapshot(&client.ws, new_pane);
+}
+```
+
+**Check master before sending input:**
+```typescript
+sendKey(message: KeyMessage): void {
+  if (!this.isMaster) return;  // Slaves are read-only
+  this.send(message);
+}
+```
 
 ---
 
