@@ -15,6 +15,11 @@ const point = ghostty.point;
 
 const log = std.log.scoped(.snapshot);
 
+/// Minimum payload size (bytes) before applying Snappy compression.
+/// Below this threshold, compression overhead isn't worth it.
+/// Typical terminal snapshots are 10-50KB, deltas are 100B-5KB.
+const snappy_compression_threshold = 256;
+
 // ============================================================================
 // Buffer Stream for msgpack encoding
 // ============================================================================
@@ -71,22 +76,30 @@ pub fn computeRowId(pin: anytype) u64 {
     return pin.node.serial * PAGE_SIZE + pin.y;
 }
 
-/// Compress data with Snappy.
-/// Returns owned slice with 1-byte header (always 1 = compressed) that caller must free.
+/// Compress data with Snappy if above threshold, otherwise pass through.
+/// Returns owned slice with 1-byte header (0 = uncompressed, 1 = compressed) that caller must free.
 fn compress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    const compressed_max = snappy.raw.maxCompressedLength(data.len);
-    const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
-    errdefer allocator.free(compressed_buf);
+    if (data.len >= snappy_compression_threshold) {
+        const compressed_max = snappy.raw.maxCompressedLength(data.len);
+        const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
+        errdefer allocator.free(compressed_buf);
 
-    compressed_buf[0] = 1; // Header: compressed
-    const compressed_len = snappy.raw.compress(data, compressed_buf[1..]) catch |e| {
-        log.err("Failed to compress: {any}", .{e});
-        return error.CompressionFailed;
-    };
+        compressed_buf[0] = 1; // Header: compressed
+        const compressed_len = snappy.raw.compress(data, compressed_buf[1..]) catch |e| {
+            log.err("Failed to compress: {any}", .{e});
+            return error.CompressionFailed;
+        };
 
-    // Trim to actual size
-    const result = try allocator.realloc(compressed_buf, compressed_len + 1);
-    return result;
+        // Trim to actual size
+        const result = try allocator.realloc(compressed_buf, compressed_len + 1);
+        return result;
+    } else {
+        // Small payload: skip compression
+        const result = try allocator.alloc(u8, data.len + 1);
+        result[0] = 0; // Header: uncompressed
+        @memcpy(result[1..], data);
+        return result;
+    }
 }
 
 // ============================================================================
