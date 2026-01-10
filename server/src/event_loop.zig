@@ -892,16 +892,16 @@ pub const EventLoop = struct {
                 return;
             }
 
-            // Create new window with standard pane layout
-            const result = self.session.createWindowWithPanes() catch |e| {
+            // Create new window with 3 shell panes (no debug pane)
+            const result = self.session.createShellWindow() catch |e| {
                 log.err("Failed to create new window: {any}", .{e});
                 return;
             };
             log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
                 result.window_id,
-                result.debug_pane_id,
                 result.shell1_pane_id,
                 result.shell2_pane_id,
+                result.shell3_pane_id,
             });
 
             // Broadcast updated layout to all clients
@@ -1038,16 +1038,16 @@ pub const EventLoop = struct {
                 return;
             }
 
-            // Create new window with standard pane layout
-            const result = self.session.createWindowWithPanes() catch |e| {
+            // Create new window with 3 shell panes (no debug pane)
+            const result = self.session.createShellWindow() catch |e| {
                 log.err("Failed to create new window: {any}", .{e});
                 return;
             };
             log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
                 result.window_id,
-                result.debug_pane_id,
                 result.shell1_pane_id,
                 result.shell2_pane_id,
+                result.shell3_pane_id,
             });
 
             // Broadcast updated layout to all clients

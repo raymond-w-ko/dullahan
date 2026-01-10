@@ -88,7 +88,7 @@ pub const Session = struct {
     }
 
     /// Create a new window with a debug pane and two shell panes.
-    /// This is the standard window layout: [debug, shell1, shell2]
+    /// This is the standard window layout for window 0: [debug, shell1, shell2]
     /// Returns { window_id, debug_pane_id, shell1_pane_id, shell2_pane_id }
     pub fn createWindowWithPanes(self: *Session) !struct { window_id: u16, debug_pane_id: u16, shell1_pane_id: u16, shell2_pane_id: u16 } {
         // Create window
@@ -128,6 +128,50 @@ pub const Session = struct {
             .debug_pane_id = debug_pane_id,
             .shell1_pane_id = shell1_pane_id,
             .shell2_pane_id = shell2_pane_id,
+        };
+    }
+
+    /// Create a new window with three shell panes (no debug pane).
+    /// Used for additional windows created after window 0.
+    /// Returns { window_id, shell1_pane_id, shell2_pane_id, shell3_pane_id }
+    pub fn createShellWindow(self: *Session) !struct { window_id: u16, shell1_pane_id: u16, shell2_pane_id: u16, shell3_pane_id: u16 } {
+        // Create window
+        const window_id = self.next_window_id;
+        self.next_window_id += 1;
+
+        var window = try Window.init(self.allocator, .{
+            .cols = self.default_cols,
+            .rows = self.default_rows,
+            .id = window_id,
+        });
+        errdefer window.deinit();
+
+        // Create 3 shell panes
+        const shell1_pane_id = try self.pane_registry.createShellPane();
+        errdefer self.pane_registry.destroy(shell1_pane_id);
+
+        const shell2_pane_id = try self.pane_registry.createShellPane();
+        errdefer self.pane_registry.destroy(shell2_pane_id);
+
+        const shell3_pane_id = try self.pane_registry.createShellPane();
+        errdefer self.pane_registry.destroy(shell3_pane_id);
+
+        // Add panes to window
+        try window.addPane(shell1_pane_id);
+        try window.addPane(shell2_pane_id);
+        try window.addPane(shell3_pane_id);
+
+        // Set active pane to first shell
+        window.active_pane_id = shell1_pane_id;
+
+        try self.windows.put(window_id, window);
+        self.active_window_id = window_id;
+
+        return .{
+            .window_id = window_id,
+            .shell1_pane_id = shell1_pane_id,
+            .shell2_pane_id = shell2_pane_id,
+            .shell3_pane_id = shell3_pane_id,
         };
     }
 
