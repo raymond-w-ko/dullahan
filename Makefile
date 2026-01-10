@@ -75,8 +75,8 @@ fmt:
 
 dev: client server
 	pkill -9 -x dullahan || true
-	./server/zig-out/bin/dullahan serve
+	./server/zig-out/bin/dullahan serve --port=7682
 
 prod: dist
 	pkill -9 -x dullahan || true
-	./dist/dullahan serve
+	./dist/dullahan serve --port=7681
