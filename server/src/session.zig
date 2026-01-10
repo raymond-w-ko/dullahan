@@ -16,10 +16,8 @@ const Pty = @import("pty.zig").Pty;
 const pane_registry_mod = @import("pane_registry.zig");
 const PaneRegistry = pane_registry_mod.PaneRegistry;
 
-// Re-export pane IDs from registry for backwards compatibility
+// Re-export debug pane ID from registry (pane 0 in window 0)
 pub const DEBUG_PANE_ID = pane_registry_mod.DEBUG_PANE_ID;
-pub const SHELL_PANE_1_ID = pane_registry_mod.SHELL_PANE_1_ID;
-pub const SHELL_PANE_2_ID = pane_registry_mod.SHELL_PANE_2_ID;
 
 pub const Session = struct {
     /// Global pane registry (owned externally, session has pointer)
@@ -203,19 +201,9 @@ pub const Session = struct {
         return self.pane_registry.get(window.active_pane_id);
     }
 
-    /// Get the debug pane (pane 0)
+    /// Get the debug pane (pane 0 in window 0)
     pub fn getDebugPane(self: *Session) ?*Pane {
         return self.pane_registry.getDebugPane();
-    }
-
-    /// Get shell pane 1
-    pub fn getShellPane1(self: *Session) ?*Pane {
-        return self.pane_registry.getShellPane1();
-    }
-
-    /// Get shell pane 2
-    pub fn getShellPane2(self: *Session) ?*Pane {
-        return self.pane_registry.getShellPane2();
     }
 
     /// Log bytes sent TO a pane's PTY (shown in red)

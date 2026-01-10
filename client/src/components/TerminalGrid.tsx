@@ -24,8 +24,14 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
     return <div class="terminal-grid terminal-grid--error">Window {windowId} not found</div>;
   }
 
+  // Dynamic grid: 1fr per pane for horizontal splits
+  const paneCount = window.paneIds.length;
+  const gridStyle = {
+    gridTemplateColumns: `repeat(${paneCount}, 1fr)`,
+  };
+
   return (
-    <div class="terminal-grid">
+    <div class="terminal-grid" style={gridStyle}>
       {window.paneIds.map((paneId) => (
         <TerminalPane key={paneId} paneId={paneId} />
       ))}

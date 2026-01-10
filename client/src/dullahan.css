@@ -231,7 +231,7 @@ html, body {
 .terminal-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* grid-template-columns set dynamically via inline style based on pane count */
   gap: 0;
   min-height: 0;
 }

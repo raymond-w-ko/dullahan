@@ -5,11 +5,6 @@ import { TerminalConnection } from "./terminal/connection";
 import type { TerminalSnapshot, LayoutUpdate } from "./terminal/connection";
 import * as config from "./config";
 
-// Pane IDs (must match server session.zig)
-export const DEBUG_PANE_ID = 0;
-export const SHELL_PANE_1_ID = 1;
-export const SHELL_PANE_2_ID = 2;
-
 export interface WindowState {
   id: number;
   paneIds: number[];
@@ -82,24 +77,10 @@ const store: Store = {
   masterId: null,
 
   activeWindowId: 0,
-  windows: new Map([
-    [
-      0,
-      {
-        id: 0,
-        paneIds: [DEBUG_PANE_ID, SHELL_PANE_1_ID, SHELL_PANE_2_ID],
-        focusedPaneId: SHELL_PANE_1_ID,
-      },
-    ],
-  ]),
+  windows: new Map(),  // Populated by server layout message
+  panes: new Map(),    // Populated by server layout message
 
-  panes: new Map([
-    [DEBUG_PANE_ID, createPaneState(DEBUG_PANE_ID, "Debug Console", false)],
-    [SHELL_PANE_1_ID, createPaneState(SHELL_PANE_1_ID, "Shell 1", false)],
-    [SHELL_PANE_2_ID, createPaneState(SHELL_PANE_2_ID, "Shell 2", false)],
-  ]),
-
-  focusedPaneId: SHELL_PANE_1_ID,
+  focusedPaneId: 0,
 
   bellActive: false,
   settingsOpen: false,

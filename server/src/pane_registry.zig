@@ -9,16 +9,12 @@ const Pane = @import("pane.zig").Pane;
 
 const log = std.log.scoped(.pane_registry);
 
-/// Well-known pane IDs (module-level for easy access)
+/// Well-known pane ID for debug console (always pane 0 in window 0)
 pub const DEBUG_PANE_ID: u16 = 0;
-pub const SHELL_PANE_1_ID: u16 = 1;
-pub const SHELL_PANE_2_ID: u16 = 2;
 
 pub const PaneRegistry = struct {
-    // Re-export pane IDs for struct-level access
+    // Re-export debug pane ID for struct-level access
     pub const DEBUG_PANE = DEBUG_PANE_ID;
-    pub const SHELL_PANE_1 = SHELL_PANE_1_ID;
-    pub const SHELL_PANE_2 = SHELL_PANE_2_ID;
 
     /// All panes, indexed by pane ID
     panes: std.AutoHashMap(u16, *Pane),
@@ -114,19 +110,9 @@ pub const PaneRegistry = struct {
         return self.panes.valueIterator();
     }
 
-    /// Get debug pane (pane 0)
+    /// Get debug pane (pane 0 in window 0)
     pub fn getDebugPane(self: *PaneRegistry) ?*Pane {
         return self.get(DEBUG_PANE_ID);
-    }
-
-    /// Get shell pane 1
-    pub fn getShellPane1(self: *PaneRegistry) ?*Pane {
-        return self.get(SHELL_PANE_1_ID);
-    }
-
-    /// Get shell pane 2
-    pub fn getShellPane2(self: *PaneRegistry) ?*Pane {
-        return self.get(SHELL_PANE_2_ID);
     }
 
     /// Create a debug pane (no shell, for debug console output)
