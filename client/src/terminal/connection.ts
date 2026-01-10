@@ -663,12 +663,23 @@ export class TerminalConnection {
       return { cols: -1, rows: -1 };
     }
 
-    // Get container dimensions (minus padding)
-    const style = getComputedStyle(container);
-    const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-    const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-    const availableWidth = container.clientWidth - paddingX;
-    const availableHeight = container.clientHeight - paddingY;
+    // Get container dimensions (minus container padding)
+    const containerStyle = getComputedStyle(container);
+    const containerPaddingX = parseFloat(containerStyle.paddingLeft) + parseFloat(containerStyle.paddingRight);
+    const containerPaddingY = parseFloat(containerStyle.paddingTop) + parseFloat(containerStyle.paddingBottom);
+
+    // Also account for .terminal element padding inside the container
+    const terminal = container.querySelector('.terminal') as HTMLElement | null;
+    let terminalPaddingX = 0;
+    let terminalPaddingY = 0;
+    if (terminal) {
+      const terminalStyle = getComputedStyle(terminal);
+      terminalPaddingX = parseFloat(terminalStyle.paddingLeft) + parseFloat(terminalStyle.paddingRight);
+      terminalPaddingY = parseFloat(terminalStyle.paddingTop) + parseFloat(terminalStyle.paddingBottom);
+    }
+
+    const availableWidth = container.clientWidth - containerPaddingX - terminalPaddingX;
+    const availableHeight = container.clientHeight - containerPaddingY - terminalPaddingY;
 
     // Not ready if container has no size
     if (availableWidth <= 0 || availableHeight <= 0) {
