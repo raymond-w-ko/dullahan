@@ -67,6 +67,11 @@ const FocusMessage = struct {
     paneId: u16,
 };
 
+const HelloMessage = struct {
+    type: []const u8,
+    clientId: []const u8,
+};
+
 const MessageType = struct {
     type: []const u8,
 };
@@ -81,6 +86,10 @@ pub const ClientState = struct {
     connected: bool = true,
     allocator: std.mem.Allocator,
 
+    /// Client's unique ID (set when client sends "hello" message)
+    /// UUIDv4 format, e.g. "550e8400-e29b-41d4-a716-446655440000"
+    client_id: ?[]const u8 = null,
+
     pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
         return .{
             .ws = ws,
@@ -90,9 +99,31 @@ pub const ClientState = struct {
     }
 
     pub fn deinit(self: *ClientState) void {
+        // Free client ID if allocated
+        if (self.client_id) |id| {
+            self.allocator.free(id);
+        }
         self.pane_generations.deinit();
         self.ws.close();
         self.connected = false;
+    }
+
+    /// Set the client ID (called when "hello" message is received)
+    pub fn setClientId(self: *ClientState, id: []const u8) !void {
+        // Free old ID if any
+        if (self.client_id) |old_id| {
+            self.allocator.free(old_id);
+        }
+        // Allocate and copy new ID
+        self.client_id = try self.allocator.dupe(u8, id);
+    }
+
+    /// Get short client ID for logging (first 8 chars or "anonymous")
+    pub fn shortId(self: *const ClientState) []const u8 {
+        if (self.client_id) |id| {
+            return if (id.len >= 8) id[0..8] else id;
+        }
+        return "anon";
     }
 
     pub fn getGeneration(self: *ClientState, pane_id: u16) u64 {
@@ -326,6 +357,18 @@ pub const EventLoop = struct {
                 try writer.print("Running: {any}\n", .{self.running});
                 try writer.print("Connected clients: {d}\n", .{self.clients.items.len});
 
+                // List connected clients
+                if (self.clients.items.len > 0) {
+                    try writer.writeAll("Clients:\n");
+                    for (self.clients.items, 0..) |*client, i| {
+                        if (client.client_id) |id| {
+                            try writer.print("  [{d}] {s}\n", .{ i, id });
+                        } else {
+                            try writer.print("  [{d}] (anonymous)\n", .{i});
+                        }
+                    }
+                }
+
                 const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Server status", data);
             },
@@ -534,8 +577,31 @@ pub const EventLoop = struct {
 
     fn removeClient(self: *EventLoop, idx: usize) void {
         var client = self.clients.orderedRemove(idx);
+        log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
         client.deinit();
-        log.info("Client removed, total clients: {d}", .{self.clients.items.len});
+    }
+
+    /// Find a client by their UUID
+    pub fn getClientById(self: *EventLoop, client_id: []const u8) ?*ClientState {
+        for (self.clients.items) |*client| {
+            if (client.client_id) |id| {
+                if (std.mem.eql(u8, id, client_id)) {
+                    return client;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Get count of identified clients (those who have sent hello)
+    pub fn getIdentifiedClientCount(self: *EventLoop) usize {
+        var count: usize = 0;
+        for (self.clients.items) |*client| {
+            if (client.client_id != null) {
+                count += 1;
+            }
+        }
+        return count;
     }
 
     fn sendClientUpdates(self: *EventLoop, client: *ClientState) !void {
@@ -681,6 +747,17 @@ pub const EventLoop = struct {
             if (window.setActivePane(focus_msg.value.paneId)) {
                 log.info("Switched to pane {d}", .{focus_msg.value.paneId});
             }
+        } else if (std.mem.eql(u8, type_str, "hello")) {
+            const hello_msg = std.json.parseFromSlice(HelloMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return;
+            defer hello_msg.deinit();
+
+            client.setClientId(hello_msg.value.clientId) catch |e| {
+                log.err("Failed to set client ID: {any}", .{e});
+                return;
+            };
+            log.info("Client identified: {s}", .{client.shortId()});
         }
     }
 
@@ -776,6 +853,15 @@ pub const EventLoop = struct {
             if (window.setActivePane(pane_id)) {
                 log.info("Switched to pane {d}", .{pane_id});
             }
+        } else if (std.mem.eql(u8, type_str, "hello")) {
+            const client_id_payload = (payload.mapGet("clientId") catch return) orelse return;
+            const client_id = client_id_payload.asStr() catch return;
+
+            client.setClientId(client_id) catch |e| {
+                log.err("Failed to set client ID: {any}", .{e});
+                return;
+            };
+            log.info("Client identified: {s}", .{client.shortId()});
         }
     }
 
