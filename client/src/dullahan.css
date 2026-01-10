@@ -306,7 +306,7 @@ html, body {
 }
 
 .terminal-line {
-  height: 1.2em;
+  height: calc(1em * var(--term-line-height));
   white-space: pre;
 }
 
