@@ -37,7 +37,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
   }
 
   const { snapshot, syncStats, isReadOnly, title, dimensions } = pane;
-  const { connected, bellActive, cursorStyle, cursorColor, cursorText, cursorBlink, focusedPaneId } = store;
+  const { connected, bellActive, cursorStyle, cursorColor, cursorText, cursorBlink, focusedPaneId, dimensionVersion } = store;
 
   // This pane has bell if it's focused and bell is active
   const hasBell = bellActive && focusedPaneId === paneId && !isReadOnly;
@@ -71,7 +71,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
     return () => {
       observer.disconnect();
     };
-  }, [connection, paneId, isReadOnly]);
+  }, [connection, paneId, isReadOnly, dimensionVersion]);
 
   // Handle click on pane to focus it
   const handlePaneClick = useCallback(() => {

@@ -39,6 +39,7 @@ export interface Store {
   // UI state
   bellActive: boolean;
   settingsOpen: boolean;
+  dimensionVersion: number; // Incremented when font settings change
 
   // Config (mirrored from config module for reactivity)
   theme: string;
@@ -93,6 +94,7 @@ const store: Store = {
 
   bellActive: false,
   settingsOpen: false,
+  dimensionVersion: 0, // Incremented when font settings change to trigger recalc
 
   theme: config.get("theme") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
@@ -206,6 +208,12 @@ export function setFocusedPane(paneId: number) {
   notify();
 }
 
+// Trigger dimension recalculation (for font setting changes)
+export function triggerDimensionRecalc() {
+  store.dimensionVersion++;
+  notify();
+}
+
 // Config sync
 export function syncConfig() {
   store.theme = config.get("theme") as string;
@@ -263,6 +271,17 @@ export function initConnection() {
       key === "cursorBlink"
     ) {
       syncConfig();
+    }
+    // Font-related settings need dimension recalculation
+    if (
+      key === "fontSize" ||
+      key === "fontFamily" ||
+      key === "lineHeight" ||
+      key === "fontStyle" ||
+      key === "fontFeature"
+    ) {
+      // Short delay to let CSS update before measuring
+      setTimeout(() => triggerDimensionRecalc(), 50);
     }
   });
 }
