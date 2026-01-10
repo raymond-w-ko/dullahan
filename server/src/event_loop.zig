@@ -873,6 +873,16 @@ pub const EventLoop = struct {
                 return;
             };
             log.info("Client identified: {s}", .{client.shortId()});
+
+            // Auto-assign as master if no master exists
+            if (self.master_id == null) {
+                if (client.client_id) |cid| {
+                    log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                    self.setMaster(cid) catch |e| {
+                        log.err("Failed to auto-set master: {any}", .{e});
+                    };
+                }
+            }
         } else if (std.mem.eql(u8, type_str, "request_master")) {
             // Client is requesting to become master
             const client_id = client.client_id orelse {
@@ -1012,13 +1022,23 @@ pub const EventLoop = struct {
             }
         } else if (std.mem.eql(u8, type_str, "hello")) {
             const client_id_payload = (payload.mapGet("clientId") catch return) orelse return;
-            const client_id = client_id_payload.asStr() catch return;
+            const client_id_str = client_id_payload.asStr() catch return;
 
-            client.setClientId(client_id) catch |e| {
+            client.setClientId(client_id_str) catch |e| {
                 log.err("Failed to set client ID: {any}", .{e});
                 return;
             };
             log.info("Client identified: {s}", .{client.shortId()});
+
+            // Auto-assign as master if no master exists
+            if (self.master_id == null) {
+                if (client.client_id) |cid| {
+                    log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                    self.setMaster(cid) catch |e| {
+                        log.err("Failed to auto-set master: {any}", .{e});
+                    };
+                }
+            }
         } else if (std.mem.eql(u8, type_str, "request_master")) {
             // Client is requesting to become master
             const client_id = client.client_id orelse {
