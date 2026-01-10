@@ -884,6 +884,30 @@ pub const EventLoop = struct {
             self.setMaster(client_id) catch |e| {
                 log.err("Failed to set master: {any}", .{e});
             };
+        } else if (std.mem.eql(u8, type_str, "new_window")) {
+            // Only master can create windows
+            const client_id = client.client_id orelse return;
+            if (!self.isMaster(client_id)) {
+                log.debug("Rejecting new_window from non-master client {s}", .{client.shortId()});
+                return;
+            }
+
+            // Create new window with standard pane layout
+            const result = self.session.createWindowWithPanes() catch |e| {
+                log.err("Failed to create new window: {any}", .{e});
+                return;
+            };
+            log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
+                result.window_id,
+                result.debug_pane_id,
+                result.shell1_pane_id,
+                result.shell2_pane_id,
+            });
+
+            // Broadcast updated layout to all clients
+            self.broadcastLayout() catch |e| {
+                log.err("Failed to broadcast layout: {any}", .{e});
+            };
         }
     }
 
@@ -1005,6 +1029,30 @@ pub const EventLoop = struct {
             // Set this client as master (broadcasts to all clients)
             self.setMaster(client_id) catch |e| {
                 log.err("Failed to set master: {any}", .{e});
+            };
+        } else if (std.mem.eql(u8, type_str, "new_window")) {
+            // Only master can create windows
+            const client_id = client.client_id orelse return;
+            if (!self.isMaster(client_id)) {
+                log.debug("Rejecting new_window from non-master client {s}", .{client.shortId()});
+                return;
+            }
+
+            // Create new window with standard pane layout
+            const result = self.session.createWindowWithPanes() catch |e| {
+                log.err("Failed to create new window: {any}", .{e});
+                return;
+            };
+            log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
+                result.window_id,
+                result.debug_pane_id,
+                result.shell1_pane_id,
+                result.shell2_pane_id,
+            });
+
+            // Broadcast updated layout to all clients
+            self.broadcastLayout() catch |e| {
+                log.err("Failed to broadcast layout: {any}", .{e});
             };
         }
     }

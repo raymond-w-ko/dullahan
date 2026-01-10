@@ -225,6 +225,10 @@ export function requestMaster() {
   store.connection?.requestMaster();
 }
 
+export function createWindow() {
+  store.connection?.createWindow();
+}
+
 // Trigger dimension recalculation (for font setting changes)
 export function triggerDimensionRecalc() {
   store.dimensionVersion++;
