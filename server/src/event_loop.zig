@@ -813,6 +813,13 @@ pub const EventLoop = struct {
                 log.err("Failed to write text to PTY: {any}", .{e});
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
+            // Only master can resize
+            const client_id = client.client_id orelse return;
+            if (!self.isMaster(client_id)) {
+                log.debug("Rejecting resize from non-master client {s}", .{client.shortId()});
+                return;
+            }
+
             const resize_msg = std.json.parseFromSlice(ResizeMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
             }) catch return;
@@ -950,6 +957,13 @@ pub const EventLoop = struct {
                 log.err("Failed to write text to PTY: {any}", .{e});
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
+            // Only master can resize
+            const client_id = client.client_id orelse return;
+            if (!self.isMaster(client_id)) {
+                log.debug("Rejecting resize from non-master client {s}", .{client.shortId()});
+                return;
+            }
+
             const cols_payload = (payload.mapGet("cols") catch return) orelse return;
             const rows_payload = (payload.mapGet("rows") catch return) orelse return;
             const cols: u16 = @intCast(cols_payload.getUint() catch return);
