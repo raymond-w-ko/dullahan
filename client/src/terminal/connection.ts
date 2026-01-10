@@ -4,7 +4,26 @@ import { debug } from "../debug";
 // Messages are compressed with Snappy
 
 import { decode } from "@msgpack/msgpack";
-import SnappyJS from "snappyjs";
+import { snappyUncompress } from "hysnappy";
+
+/**
+ * Read varint-encoded uncompressed length from Snappy data.
+ * Snappy format: varint length prefix followed by compressed blocks.
+ */
+function readSnappyLength(data: Uint8Array): number {
+  let result = 0;
+  let shift = 0;
+  const maxBytes = Math.min(data.length, 5);
+  for (let i = 0; i < maxBytes; i++) {
+    const byte = data[i]!;
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      return result;
+    }
+    shift += 7;
+  }
+  throw new Error("Invalid varint in Snappy data");
+}
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell, CellContent, WideValue } from "../../../protocol/schema/cell";
 import { ColorTag, Underline } from "../../../protocol/schema/style";
@@ -270,7 +289,9 @@ export class TerminalConnection {
           const payload = data.slice(1);
           
           // Decompress if needed, then decode msgpack
-          const decompressed = isCompressed ? SnappyJS.uncompress(payload) : payload;
+          const decompressed = isCompressed
+            ? snappyUncompress(payload, readSnappyLength(payload))
+            : payload;
           const msg = decode(decompressed) as BinaryServerMessage;
           // Log raw message keys for debugging
           if (msg && typeof msg === 'object') {
