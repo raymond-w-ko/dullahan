@@ -91,14 +91,14 @@ export function TerminalView({
     [connection, paneId]
   );
 
-  // Attach wheel handler
+  // Attach wheel handler (even for read-only panes - they can still scroll)
   useEffect(() => {
     const el = terminalRef.current;
-    if (!el || isReadOnly) return;
+    if (!el) return;
 
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel, isReadOnly]);
+  }, [handleWheel]);
 
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);

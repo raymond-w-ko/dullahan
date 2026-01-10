@@ -128,7 +128,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
             cursorBlink={cursorBlink}
             isReadOnly={isReadOnly}
             onKeyInput={isReadOnly ? undefined : handleKeyInput}
-            connection={isReadOnly ? null : connection}
+            connection={connection}
           />
         ) : (
           <div class="terminal terminal--empty">
