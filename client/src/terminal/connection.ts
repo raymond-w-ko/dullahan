@@ -213,6 +213,7 @@ export class TerminalConnection {
   private ws: WebSocket | null = null;
   private url: string;
   private reconnectTimer: number | null = null;
+  private reconnectAttempts: number = 0;
 
   // Client identification (persisted per session)
   private _clientId: string;
@@ -348,6 +349,8 @@ export class TerminalConnection {
 
     this.ws.onopen = () => {
       debug.log("WebSocket connected");
+      // Reset reconnect backoff on successful connection
+      this.reconnectAttempts = 0;
       // Send hello message to identify this client
       this.send({ type: "hello", clientId: this._clientId });
       debug.log("Sent hello with client ID:", this._clientId);
@@ -696,10 +699,15 @@ export class TerminalConnection {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
+    // Exponential backoff: 250ms, 500ms, 1s, 2s, 4s (cap at 5s)
+    const baseDelay = 250;
+    const delay = Math.min(baseDelay * Math.pow(2, this.reconnectAttempts), 5000);
+    this.reconnectAttempts++;
+    debug.log(`Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.reconnectTimer = window.setTimeout(() => {
       debug.log("Attempting to reconnect...");
       this.connect();
-    }, 2000);
+    }, delay);
   }
 
   disconnect(): void {
