@@ -133,6 +133,16 @@ html, body {
   opacity: 1;
 }
 
+.bottombar-btn--master {
+  color: var(--c3);  /* yellow - you are master */
+  opacity: 1;
+}
+
+.bottombar-btn--slave {
+  color: var(--c8);  /* gray - someone else is master */
+  opacity: 0.8;
+}
+
 /* ==========================================================================
    Main Content
    ========================================================================== */

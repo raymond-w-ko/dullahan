@@ -31,6 +31,10 @@ export interface Store {
   connected: boolean;
   error: string | null;
 
+  // Master/slave state
+  isMaster: boolean;
+  masterId: string | null;
+
   // Window/pane layout
   windows: Map<number, WindowState>;
   panes: Map<number, PaneState>;
@@ -72,6 +76,9 @@ const store: Store = {
   connection: null,
   connected: false,
   error: null,
+
+  isMaster: false,
+  masterId: null,
 
   windows: new Map([
     [
@@ -208,6 +215,16 @@ export function setFocusedPane(paneId: number) {
   notify();
 }
 
+export function setMasterState(masterId: string | null, isMaster: boolean) {
+  store.masterId = masterId;
+  store.isMaster = isMaster;
+  notify();
+}
+
+export function requestMaster() {
+  store.connection?.requestMaster();
+}
+
 // Trigger dimension recalculation (for font setting changes)
 export function triggerDimensionRecalc() {
   store.dimensionVersion++;
@@ -260,6 +277,10 @@ export function initConnection() {
     if (features.audio) {
       playBellAudio();
     }
+  };
+
+  conn.onMasterChanged = (masterId, isMaster) => {
+    setMasterState(masterId, isMaster);
   };
 
   conn.connect();
