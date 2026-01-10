@@ -213,18 +213,18 @@ pub const WsServer = struct {
 
                     const last_gen = pane_generations[pane_id];
 
-                    // Check for title change on active pane only
-                    if (pane_id == window.active_pane_id) {
-                        if (pane.hasTitleChanged()) {
-                            if (pane.getTitle()) |title| {
-                                self.sendTitle(&ws, title) catch |send_err| {
-                                    log.err("Failed to send title: {any}", .{send_err});
-                                };
-                            }
-                            pane.clearTitleChanged();
+                    // Check for title change on any pane
+                    if (pane.hasTitleChanged()) {
+                        if (pane.getTitle()) |title| {
+                            self.sendTitle(&ws, pane_id, title) catch |send_err| {
+                                log.err("Failed to send title: {any}", .{send_err});
+                            };
                         }
+                        pane.clearTitleChanged();
+                    }
 
-                        // Check for bell on active pane only
+                    // Check for bell on active pane only
+                    if (pane_id == window.active_pane_id) {
                         if (pane.hasBell()) {
                             self.sendBell(&ws) catch |send_err| {
                                 log.err("Failed to send bell: {any}", .{send_err});
@@ -305,8 +305,8 @@ pub const WsServer = struct {
     }
 
     /// Send a title update to a single client
-    fn sendTitle(self: *WsServer, ws: *websocket.Connection, title: []const u8) !void {
-        const msg = try snapshot.generateTitleMessage(self.allocator, title);
+    fn sendTitle(self: *WsServer, ws: *websocket.Connection, pane_id: u16, title: []const u8) !void {
+        const msg = try snapshot.generateTitleMessage(self.allocator, pane_id, title);
         defer self.allocator.free(msg);
         try ws.sendBinary(msg);
     }

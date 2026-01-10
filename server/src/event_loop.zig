@@ -551,19 +551,20 @@ pub const EventLoop = struct {
         const last_gen = client.getGeneration(pane_id);
         if (pane.generation == last_gen) return;
 
-        // Check if this is the active pane by looking at the session's active window
+        // Check for title change on any pane
+        if (pane.hasTitleChanged()) {
+            if (pane.getTitle()) |title| {
+                const msg = try snapshot.generateTitleMessage(pane.allocator, pane_id, title);
+                defer pane.allocator.free(msg);
+                try client.ws.sendBinary(msg);
+            }
+            pane.clearTitleChanged();
+        }
+
+        // Check if this is the active pane for bell notification
         const window = self.session.activeWindow();
         const is_active = window != null and pane_id == window.?.active_pane_id;
         if (is_active) {
-            if (pane.hasTitleChanged()) {
-                if (pane.getTitle()) |title| {
-                    const msg = try snapshot.generateTitleMessage(pane.allocator, title);
-                    defer pane.allocator.free(msg);
-                    try client.ws.sendBinary(msg);
-                }
-                pane.clearTitleChanged();
-            }
-
             if (pane.hasBell()) {
                 const msg = try snapshot.generateBellMessage(pane.allocator);
                 defer pane.allocator.free(msg);

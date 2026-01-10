@@ -120,6 +120,7 @@ interface BinaryDelta {
 /** Title update message from server */
 interface TitleMessage {
   type: "title";
+  paneId: number;
   title: string;
 }
 
@@ -178,7 +179,7 @@ export class TerminalConnection {
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
   public onOutput: ((data: string) => void) | null = null;
-  public onTitle: ((title: string) => void) | null = null;
+  public onTitle: ((paneId: number, title: string) => void) | null = null;
   public onBell: (() => void) | null = null;
   public onFocus: ((paneId: number) => void) | null = null;
   public onConnect: (() => void) | null = null;
@@ -382,8 +383,8 @@ export class TerminalConnection {
         // Extract title from snapshot if present
         const snapshotTitle = (msg as any).title;
         if (snapshotTitle && typeof snapshotTitle === 'string') {
-          debug.log("Snapshot includes title:", snapshotTitle);
-          this.onTitle?.(snapshotTitle);
+          debug.log("Snapshot includes title for pane", paneId, ":", snapshotTitle);
+          this.onTitle?.(paneId, snapshotTitle);
         }
         break;
       }
@@ -426,8 +427,8 @@ export class TerminalConnection {
         this.onOutput?.(msg.data);
         break;
       case "title":
-        debug.log("Received title:", msg.title);
-        this.onTitle?.(msg.title);
+        debug.log("Received title for pane", msg.paneId, ":", msg.title);
+        this.onTitle?.(msg.paneId, msg.title);
         break;
       case "bell":
         debug.log("Received bell");
@@ -913,8 +914,8 @@ export class TerminalConnection {
     // Extract title from delta if present
     const deltaTitle = (delta as any).title;
     if (deltaTitle && typeof deltaTitle === 'string') {
-      debug.log("Delta includes title:", deltaTitle);
-      this.onTitle?.(deltaTitle);
+      debug.log("Delta includes title for pane", paneId, ":", deltaTitle);
+      this.onTitle?.(paneId, deltaTitle);
     }
   }
 

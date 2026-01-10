@@ -243,10 +243,13 @@ export function initConnection() {
     updatePaneSyncStats(delta.paneId, delta.gen);
   };
 
-  conn.onTitle = (title) => {
-    // Update the focused shell pane title
-    setPaneTitle(store.focusedPaneId, title);
-    document.title = `${title} - Dullahan`;
+  conn.onTitle = (paneId, title) => {
+    // Update the specific pane's title
+    setPaneTitle(paneId, title);
+    // Update document title only if this is the focused pane
+    if (paneId === store.focusedPaneId) {
+      document.title = `${title} - Dullahan`;
+    }
   };
 
   conn.onBell = () => {

@@ -513,11 +513,12 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
 
 /// Generate a binary msgpack title message
 /// Sent when only the title changes (more efficient than full delta)
-pub fn generateTitleMessage(allocator: std.mem.Allocator, title: []const u8) ![]u8 {
+pub fn generateTitleMessage(allocator: std.mem.Allocator, pane_id: u16, title: []const u8) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     defer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("title", allocator));
+    try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
     try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
 
     const max_size = 1024;
