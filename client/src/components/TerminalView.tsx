@@ -341,22 +341,25 @@ function renderLine(
 function styleToClasses(style: Style): string {
   const classes: string[] = [];
 
+  // Handle inverse by swapping fg/bg
+  const fgColor = style.flags.inverse ? style.bgColor : style.fgColor;
+  const bgColor = style.flags.inverse ? style.fgColor : style.bgColor;
+
   // Foreground color (palette only - RGB uses inline style)
-  if (style.fgColor.tag === ColorTag.PALETTE) {
-    classes.push(`fg${style.fgColor.index}`);
+  if (fgColor.tag === ColorTag.PALETTE) {
+    classes.push(`fg${fgColor.index}`);
   }
 
   // Background color (palette only)
-  if (style.bgColor.tag === ColorTag.PALETTE) {
-    classes.push(`bg${style.bgColor.index}`);
+  if (bgColor.tag === ColorTag.PALETTE) {
+    classes.push(`bg${bgColor.index}`);
   }
 
-  // Attributes
+  // Attributes (inverse handled above, not as a class)
   if (style.flags.bold) classes.push("bold");
   if (style.flags.italic) classes.push("italic");
   if (style.flags.faint) classes.push("faint");
   if (style.flags.blink) classes.push("blink");
-  if (style.flags.inverse) classes.push("inverse");
   if (style.flags.invisible) classes.push("invisible");
   if (style.flags.strikethrough) classes.push("strikethrough");
   if (style.flags.overline) classes.push("overline");
@@ -383,20 +386,38 @@ function styleToClasses(style: Style): string {
   return classes.join(" ");
 }
 
-/** Convert style to inline CSS (for RGB colors only) */
+/** Convert style to inline CSS (for RGB colors and inverse with defaults) */
 function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
   const css: h.JSX.CSSProperties = {};
   let hasInline = false;
 
-  // RGB foreground
-  if (style.fgColor.tag === ColorTag.RGB) {
-    css.color = `rgb(${style.fgColor.r},${style.fgColor.g},${style.fgColor.b})`;
+  // Handle inverse by swapping fg/bg
+  const fgColor = style.flags.inverse ? style.bgColor : style.fgColor;
+  const bgColor = style.flags.inverse ? style.fgColor : style.bgColor;
+
+  // When inverse is set and original color was NONE, use terminal defaults
+  if (style.flags.inverse) {
+    // If swapped fg (original bg) is NONE, use terminal bg as text color
+    if (fgColor.tag === ColorTag.NONE) {
+      css.color = "var(--term-bg)";
+      hasInline = true;
+    }
+    // If swapped bg (original fg) is NONE, use terminal fg as background
+    if (bgColor.tag === ColorTag.NONE) {
+      css.backgroundColor = "var(--term-fg)";
+      hasInline = true;
+    }
+  }
+
+  // RGB foreground (only if not already set above)
+  if (fgColor.tag === ColorTag.RGB) {
+    css.color = `rgb(${fgColor.r},${fgColor.g},${fgColor.b})`;
     hasInline = true;
   }
 
-  // RGB background
-  if (style.bgColor.tag === ColorTag.RGB) {
-    css.backgroundColor = `rgb(${style.bgColor.r},${style.bgColor.g},${style.bgColor.b})`;
+  // RGB background (only if not already set above)
+  if (bgColor.tag === ColorTag.RGB) {
+    css.backgroundColor = `rgb(${bgColor.r},${bgColor.g},${bgColor.b})`;
     hasInline = true;
   }
 

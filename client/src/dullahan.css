@@ -381,7 +381,7 @@ html, body {
 .underline-dotted { text-decoration: underline dotted; }
 .underline-dashed { text-decoration: underline dashed; }
 .blink { animation: blink 1s step-end infinite; }
-.inverse { filter: invert(1); }
+/* .inverse handled in JS by swapping fg/bg colors */
 .invisible { visibility: hidden; }
 .strikethrough { text-decoration: line-through; }
 .overline { text-decoration: overline; }
