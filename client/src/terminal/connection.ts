@@ -185,8 +185,14 @@ export class TerminalConnection {
   public onDisconnect: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
 
-  constructor(url: string = "ws://localhost:7681") {
-    this.url = url;
+  constructor(url?: string) {
+    if (url) {
+      this.url = url;
+    } else {
+      // Derive WebSocket URL from current page origin
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      this.url = `${protocol}//${window.location.host}`;
+    }
   }
 
   /** Get or create pane state */
