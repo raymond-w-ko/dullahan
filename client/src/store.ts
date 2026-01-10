@@ -2,7 +2,7 @@
 // Provides reactive state management without heavy dependencies
 
 import { TerminalConnection } from "./terminal/connection";
-import type { TerminalSnapshot } from "./terminal/connection";
+import type { TerminalSnapshot, LayoutUpdate } from "./terminal/connection";
 import * as config from "./config";
 
 // Pane IDs (must match server session.zig)
@@ -36,6 +36,7 @@ export interface Store {
   masterId: string | null;
 
   // Window/pane layout
+  activeWindowId: number;
   windows: Map<number, WindowState>;
   panes: Map<number, PaneState>;
   focusedPaneId: number;
@@ -80,6 +81,7 @@ const store: Store = {
   isMaster: false,
   masterId: null,
 
+  activeWindowId: 0,
   windows: new Map([
     [
       0,
@@ -229,6 +231,49 @@ export function createWindow() {
   store.connection?.createWindow();
 }
 
+export function setLayout(layout: LayoutUpdate) {
+  store.activeWindowId = layout.activeWindowId;
+
+  // Update windows map from layout
+  store.windows.clear();
+  for (const win of layout.windows) {
+    store.windows.set(win.id, {
+      id: win.id,
+      paneIds: win.panes,
+      focusedPaneId: win.activePaneId,
+    });
+  }
+
+  // Create pane states for any new panes we haven't seen
+  for (const win of layout.windows) {
+    for (const paneId of win.panes) {
+      if (!store.panes.has(paneId)) {
+        store.panes.set(paneId, {
+          id: paneId,
+          title: `Pane ${paneId}`,
+          snapshot: null,
+          syncStats: { deltas: 0, resyncs: 0, gen: 0 },
+          isReadOnly: false,
+          dimensions: { cols: 80, rows: 24 },
+        });
+      }
+    }
+  }
+
+  notify();
+}
+
+export function switchWindow(windowId: number) {
+  if (store.windows.has(windowId)) {
+    store.activeWindowId = windowId;
+    notify();
+  }
+}
+
+export function getActiveWindow(): WindowState | undefined {
+  return store.windows.get(store.activeWindowId);
+}
+
 // Trigger dimension recalculation (for font setting changes)
 export function triggerDimensionRecalc() {
   store.dimensionVersion++;
@@ -285,6 +330,10 @@ export function initConnection() {
 
   conn.onMasterChanged = (masterId, isMaster) => {
     setMasterState(masterId, isMaster);
+  };
+
+  conn.onLayout = (layout) => {
+    setLayout(layout);
   };
 
   conn.connect();

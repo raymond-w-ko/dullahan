@@ -144,6 +144,54 @@ html, body {
 }
 
 /* ==========================================================================
+   Window Switcher
+   ========================================================================== */
+
+.window-switcher {
+  display: flex;
+  gap: 2px;
+  margin-left: var(--space-2);
+}
+
+.window-tab {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.25rem;
+  color: var(--term-fg);
+  font-size: 0.75rem;
+  font-family: var(--term-font);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.window-tab:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.window-tab--active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--c4);  /* blue accent */
+}
+
+.window-tab--add {
+  color: var(--c2);  /* green */
+  font-weight: bold;
+}
+
+.window-tab--add:hover {
+  background: rgba(0, 255, 0, 0.1);
+}
+
+/* ==========================================================================
    Main Content
    ========================================================================== */
 

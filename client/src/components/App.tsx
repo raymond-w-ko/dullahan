@@ -5,6 +5,7 @@ import { h } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
+import { WindowSwitcher } from "./WindowSwitcher";
 import {
   getStore,
   subscribe,
@@ -31,7 +32,7 @@ export function App() {
   }, []);
 
   const store = getStore();
-  const { connected, error, theme, settingsOpen, isMaster, masterId } = store;
+  const { connected, error, theme, settingsOpen, isMaster, masterId, activeWindowId } = store;
 
   return (
     <div class="app" data-theme={theme}>
@@ -39,6 +40,7 @@ export function App() {
         <div class="bottombar-logo" title="Dullahan">
           D
         </div>
+        <WindowSwitcher />
         <div class="bottombar-spacer" />
         <button
           class={`bottombar-btn ${isMaster ? "bottombar-btn--master" : masterId ? "bottombar-btn--slave" : ""}`}
@@ -64,7 +66,7 @@ export function App() {
 
       <main class="main">
         {error && <div class="error">Error: {error}</div>}
-        <TerminalGrid windowId={0} />
+        <TerminalGrid windowId={activeWindowId} />
       </main>
 
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
