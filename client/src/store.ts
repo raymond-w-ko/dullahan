@@ -84,7 +84,7 @@ const store: Store = {
   ]),
 
   panes: new Map([
-    [DEBUG_PANE_ID, createPaneState(DEBUG_PANE_ID, "Debug Console", true)],
+    [DEBUG_PANE_ID, createPaneState(DEBUG_PANE_ID, "Debug Console", false)],
     [SHELL_PANE_1_ID, createPaneState(SHELL_PANE_1_ID, "Shell 1", false)],
     [SHELL_PANE_2_ID, createPaneState(SHELL_PANE_2_ID, "Shell 2", false)],
   ]),
