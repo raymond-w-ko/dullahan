@@ -135,19 +135,30 @@ export function setError(error: string | null) {
 }
 
 export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
-  const pane = store.panes.get(paneId);
-  if (pane) {
-    pane.snapshot = snapshot;
-    const conn = store.connection;
-    if (conn) {
-      pane.syncStats = {
-        deltas: conn.getDeltaCount(paneId),
-        resyncs: conn.getResyncCount(paneId),
-        gen: snapshot.gen,
-      };
-    }
-    notify();
+  // Create pane if it doesn't exist (snapshots may arrive before layout)
+  let pane = store.panes.get(paneId);
+  if (!pane) {
+    pane = {
+      id: paneId,
+      title: `Pane ${paneId}`,
+      snapshot: null,
+      syncStats: { deltas: 0, resyncs: 0, gen: 0 },
+      isReadOnly: false,
+      dimensions: { cols: 80, rows: 24 },
+    };
+    store.panes.set(paneId, pane);
   }
+
+  pane.snapshot = snapshot;
+  const conn = store.connection;
+  if (conn) {
+    pane.syncStats = {
+      deltas: conn.getDeltaCount(paneId),
+      resyncs: conn.getResyncCount(paneId),
+      gen: snapshot.gen,
+    };
+  }
+  notify();
 }
 
 export function updatePaneSyncStats(paneId: number, gen: number) {
