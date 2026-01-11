@@ -274,7 +274,8 @@ dullahan/
 │   │   │   └── Settings.tsx      # settings panel
 │   │   └── terminal/
 │   │       ├── connection.ts # WebSocket client + master checks
-│   │       ├── keyboard.ts   # Keyboard event handling
+│   │       ├── keyboard.ts   # Keyboard event handling + keybind interception
+│   │       ├── keybinds.ts   # Keybind string parser (Ghostty-style)
 │   │       ├── actions.ts    # Terminal action types and handlers
 │   │       └── ime.ts        # IME composition support
 │   └── dist/                # build output (gitignored)
@@ -291,6 +292,7 @@ dullahan/
 │
 ├── docs/                    # documentation
 │   ├── delta-sync-design.md # Delta sync protocol design (row IDs, generations)
+│   ├── keybindings.md       # Keybinding system design and API
 │   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
 │   ├── terminal-state-sync.md # state sync design doc
 │   ├── 2025-12-29-websocket-sprint.md      # WebSocket implementation notes
@@ -401,6 +403,8 @@ const ctx: ActionContext = {
 await executeAction(actions.scrollUp("page"), ctx);
 await executeAction(actions.copy(), ctx);
 ```
+
+See `docs/keybindings.md` for complete keybinding system documentation.
 
 ### Common Pitfalls
 
