@@ -16,6 +16,7 @@ const http = @import("http.zig");
 const paths = @import("paths.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
+const layout_db = @import("layout_db.zig");
 const Session = @import("session.zig").Session;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
@@ -156,6 +157,9 @@ pub const EventLoop = struct {
     // Master client can perform privileged operations (resize, create panes, etc.)
     master_id: ?[]const u8 = null,
 
+    // Layout database (templates for window creation)
+    layouts: layout_db.LayoutDb,
+
     const IPC_FD_INDEX = 0;
     const HTTP_FD_INDEX = 1;
     const FIXED_FD_COUNT = 2;
@@ -166,12 +170,18 @@ pub const EventLoop = struct {
         http_server: *http.Server,
         session: *Session,
     ) EventLoop {
+        var layouts = layout_db.LayoutDb.init(allocator);
+        layouts.load() catch |e| {
+            log.warn("Failed to load layouts: {}", .{e});
+        };
+
         return .{
             .allocator = allocator,
             .ipc_server = ipc_server,
             .http_server = http_server,
             .session = session,
             .start_time = std.time.timestamp(),
+            .layouts = layouts,
         };
     }
 
@@ -184,6 +194,7 @@ pub const EventLoop = struct {
         if (self.master_id) |id| {
             self.allocator.free(id);
         }
+        self.layouts.deinit();
     }
 
     pub fn uptime(self: *const EventLoop) i64 {
@@ -512,6 +523,27 @@ pub const EventLoop = struct {
 
                 const data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Server console size", data);
+            },
+
+            .layouts => blk: {
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                const writer = buf.writer(alloc);
+
+                // Write JSON array of layout templates
+                try writer.writeAll("[\n");
+                const templates = self.layouts.getAll();
+                for (templates, 0..) |template, i| {
+                    if (i > 0) try writer.writeAll(",\n");
+                    try writer.print("  {{ \"id\": \"{s}\", \"name\": \"{s}\", \"panes\": {d} }}", .{
+                        template.id,
+                        template.name,
+                        template.countPanes(),
+                    });
+                }
+                try writer.writeAll("\n]");
+
+                const data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Available layouts", data);
             },
         };
     }

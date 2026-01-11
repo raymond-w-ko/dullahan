@@ -226,8 +226,11 @@ pub const LayoutDb = struct {
         return .{ .id = id, .name = name, .nodes = nodes };
     }
 
+    /// Error type for parsing (explicit to support recursion)
+    const ParseError = error{InvalidFormat} || std.mem.Allocator.Error;
+
     /// Parse an array of nodes from JSON
-    fn parseNodes(self: *LayoutDb, items: []const std.json.Value) ![]LayoutNode {
+    fn parseNodes(self: *LayoutDb, items: []const std.json.Value) ParseError![]LayoutNode {
         const nodes = try self.allocator.alloc(LayoutNode, items.len);
         errdefer self.allocator.free(nodes);
 
@@ -239,7 +242,7 @@ pub const LayoutDb = struct {
     }
 
     /// Parse a single node from JSON
-    fn parseNode(self: *LayoutDb, val: std.json.Value) !LayoutNode {
+    fn parseNode(self: *LayoutDb, val: std.json.Value) ParseError!LayoutNode {
         if (val != .object) return error.InvalidFormat;
 
         const type_val = val.object.get("type") orelse return error.InvalidFormat;
@@ -272,68 +275,77 @@ pub const LayoutDb = struct {
         };
     }
 
+    /// Writer type for JSON serialization
+    const JsonWriter = std.ArrayListUnmanaged(u8).Writer;
+    const WriteError = std.mem.Allocator.Error;
+
     /// Save layouts to JSON file
     fn saveToFile(self: *LayoutDb) !void {
         try paths.ensureConfigDir();
 
         const path = paths.StaticPaths.layouts();
 
+        // Build JSON in memory
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(self.allocator);
+        var writer = buf.writer(self.allocator);
+        try writeJson(self.templates.items, &writer);
+
+        // Write to file
         const file = try std.fs.createFileAbsolute(path, .{});
         defer file.close();
-
-        const writer = file.writer();
-        try self.writeJson(writer);
+        try file.writeAll(buf.items);
     }
 
-    /// Write layouts as JSON
-    fn writeJson(self: *LayoutDb, writer: anytype) !void {
+    /// Write layouts as JSON to a writer
+    fn writeJson(templates: []const LayoutTemplate, writer: *JsonWriter) WriteError!void {
         try writer.writeAll("{\n  \"templates\": [\n");
 
-        for (self.templates.items, 0..) |template, i| {
+        for (templates, 0..) |template, i| {
             if (i > 0) try writer.writeAll(",\n");
-            try self.writeTemplate(writer, template, 2);
+            try writeTemplate(template, writer, 2);
         }
 
         try writer.writeAll("\n  ]\n}\n");
     }
 
     /// Write a single template as JSON
-    fn writeTemplate(self: *LayoutDb, writer: anytype, template: LayoutTemplate, indent: usize) !void {
-        try self.writeIndent(writer, indent);
+    fn writeTemplate(template: LayoutTemplate, writer: *JsonWriter, indent: usize) WriteError!void {
+        try writeIndent(writer, indent);
         try writer.writeAll("{\n");
 
-        try self.writeIndent(writer, indent + 1);
+        try writeIndent(writer, indent + 1);
         try writer.print("\"id\": \"{s}\",\n", .{template.id});
 
-        try self.writeIndent(writer, indent + 1);
+        try writeIndent(writer, indent + 1);
         try writer.print("\"name\": \"{s}\",\n", .{template.name});
 
-        try self.writeIndent(writer, indent + 1);
+        try writeIndent(writer, indent + 1);
         try writer.writeAll("\"nodes\": ");
-        try self.writeNodes(writer, template.nodes, indent + 1);
+        try writeNodes(template.nodes, writer, indent + 1);
         try writer.writeAll("\n");
 
-        try self.writeIndent(writer, indent);
+        try writeIndent(writer, indent);
         try writer.writeAll("}");
     }
 
     /// Write an array of nodes as JSON
-    fn writeNodes(self: *LayoutDb, writer: anytype, nodes: []const LayoutNode, indent: usize) !void {
+    fn writeNodes(nodes: []const LayoutNode, writer: *JsonWriter, indent: usize) WriteError!void {
         try writer.writeAll("[\n");
 
         for (nodes, 0..) |node, i| {
             if (i > 0) try writer.writeAll(",\n");
-            try self.writeNode(writer, node, indent + 1);
+            try writeNode(node, writer, indent + 1);
         }
 
         try writer.writeAll("\n");
-        try self.writeIndent(writer, indent);
+        try writeIndent(writer, indent);
         try writer.writeAll("]");
     }
 
     /// Write a single node as JSON
-    fn writeNode(self: *LayoutDb, writer: anytype, node: LayoutNode, indent: usize) !void {
-        try self.writeIndent(writer, indent);
+    fn writeNode(node: LayoutNode, writer: *JsonWriter, indent: usize) WriteError!void {
+        try writeIndent(writer, indent);
 
         switch (node) {
             .pane => |p| {
@@ -341,24 +353,23 @@ pub const LayoutDb = struct {
             },
             .container => |c| {
                 try writer.writeAll("{\n");
-                try self.writeIndent(writer, indent + 1);
+                try writeIndent(writer, indent + 1);
                 try writer.writeAll("\"type\": \"container\",\n");
-                try self.writeIndent(writer, indent + 1);
+                try writeIndent(writer, indent + 1);
                 try writer.print("\"width\": {d:.2},\n", .{c.width});
-                try self.writeIndent(writer, indent + 1);
+                try writeIndent(writer, indent + 1);
                 try writer.print("\"height\": {d:.2},\n", .{c.height});
-                try self.writeIndent(writer, indent + 1);
+                try writeIndent(writer, indent + 1);
                 try writer.writeAll("\"children\": ");
-                try self.writeNodes(writer, c.children, indent + 1);
+                try writeNodes(c.children, writer, indent + 1);
                 try writer.writeAll("\n");
-                try self.writeIndent(writer, indent);
+                try writeIndent(writer, indent);
                 try writer.writeAll("}");
             },
         }
     }
 
-    fn writeIndent(self: *LayoutDb, writer: anytype, level: usize) !void {
-        _ = self;
+    fn writeIndent(writer: *JsonWriter, level: usize) WriteError!void {
         for (0..level) |_| {
             try writer.writeAll("  ");
         }

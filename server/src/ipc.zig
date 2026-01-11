@@ -38,6 +38,7 @@ pub const Command = enum {
     @"pty-log-on",
     @"pty-log-off",
     ttysize,
+    layouts,
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -52,6 +53,7 @@ pub const Command = enum {
             .{ "pty-log-on", .@"pty-log-on" },
             .{ "pty-log-off", .@"pty-log-off" },
             .{ "ttysize", .ttysize },
+            .{ "layouts", .layouts },
         });
         return map.get(s);
     }
@@ -69,6 +71,7 @@ pub const Command = enum {
             .@"pty-log-on" => "Enable PTY traffic logging to file",
             .@"pty-log-off" => "Disable PTY traffic logging",
             .ttysize => "Query server's console terminal size via ioctl TIOCGWINSZ",
+            .layouts => "List available layout templates (JSON)",
         };
     }
 };
