@@ -122,7 +122,7 @@ Now when Read 2 arrives with just `m`, the parser knows it's continuing an SGR s
 
 ```bash
 ./zig-out/bin/dullahan debug-capture
-cat /tmp/dullahan-capture.hex
+cat /tmp/dullahan-$(id -u)/dullahan-capture.hex
 ```
 
 Captures raw PTY output as hex dump:

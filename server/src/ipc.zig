@@ -5,14 +5,25 @@
 
 const std = @import("std");
 const posix = std.posix;
+const paths = @import("paths.zig");
 
 pub const Config = struct {
-    /// Socket path (default: /tmp/dullahan.sock)
-    socket_path: []const u8 = "/tmp/dullahan.sock",
-    /// PID file path
-    pid_path: []const u8 = "/tmp/dullahan.pid",
+    /// Socket path (null = use default from paths module)
+    socket_path: ?[]const u8 = null,
+    /// PID file path (null = use default from paths module)
+    pid_path: ?[]const u8 = null,
     /// Command timeout in milliseconds
     timeout_ms: u32 = 5000,
+
+    /// Resolve socket path - returns provided value or default
+    pub fn getSocketPath(self: Config) []const u8 {
+        return self.socket_path orelse paths.StaticPaths.socket();
+    }
+
+    /// Resolve pid path - returns provided value or default
+    pub fn getPidPath(self: Config) []const u8 {
+        return self.pid_path orelse paths.StaticPaths.pid();
+    }
 };
 
 pub const Command = enum {
@@ -47,7 +58,7 @@ pub const Command = enum {
             .help => "Show available commands",
             .dump => "Dump terminal state (compact, human-readable)",
             .@"dump-raw" => "Dump raw terminal cells with escape codes visible",
-            .@"debug-capture" => "Run 'claude', capture PTY output as hex to /tmp/dullahan-capture.hex",
+            .@"debug-capture" => "Run 'claude', capture PTY output as hex to temp dir",
             .ttysize => "Query server's console terminal size via ioctl TIOCGWINSZ",
         };
     }
@@ -115,13 +126,21 @@ pub const Server = struct {
     config: Config,
 
     pub fn init(config: Config) !Server {
+        const socket_path = config.getSocketPath();
+        const pid_path = config.getPidPath();
+
+        // Ensure temp directory exists
+        paths.ensureTempDir() catch |e| {
+            return e;
+        };
+
         // Check if another server is already running via PID file
-        if (isServerRunning(config.pid_path)) {
+        if (isServerRunning(pid_path)) {
             return error.AddressInUse;
         }
-        
+
         // Remove existing socket file if present (stale from crashed server)
-        std.fs.cwd().deleteFile(config.socket_path) catch |e| switch (e) {
+        std.fs.cwd().deleteFile(socket_path) catch |e| switch (e) {
             error.FileNotFound => {},
             else => return e,
         };
@@ -131,8 +150,7 @@ pub const Server = struct {
 
         var addr: posix.sockaddr.un = .{ .path = undefined };
         @memset(&addr.path, 0);
-        const path_bytes: []const u8 = config.socket_path;
-        @memcpy(addr.path[0..path_bytes.len], path_bytes);
+        @memcpy(addr.path[0..socket_path.len], socket_path);
 
         try posix.bind(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
         try posix.listen(socket, 5);
@@ -142,12 +160,12 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) void {
         posix.close(self.socket);
-        std.fs.cwd().deleteFile(self.config.socket_path) catch {};
-        std.fs.cwd().deleteFile(self.config.pid_path) catch {};
+        std.fs.cwd().deleteFile(self.config.getSocketPath()) catch {};
+        std.fs.cwd().deleteFile(self.config.getPidPath()) catch {};
     }
 
     pub fn writePidFile(self: *Server) !void {
-        const file = try std.fs.cwd().createFile(self.config.pid_path, .{});
+        const file = try std.fs.cwd().createFile(self.config.getPidPath(), .{});
         defer file.close();
         const pid = std.c.getpid();
         var buf: [20]u8 = undefined;
@@ -251,7 +269,7 @@ pub const Client = struct {
 
     /// Check if server is running by reading PID file
     pub fn isServerRunning(self: *Client) bool {
-        const file = std.fs.cwd().openFile(self.config.pid_path, .{}) catch return false;
+        const file = std.fs.cwd().openFile(self.config.getPidPath(), .{}) catch return false;
         defer file.close();
 
         var buf: [20]u8 = undefined;
@@ -282,8 +300,8 @@ pub const Client = struct {
 
         var addr: posix.sockaddr.un = .{ .path = undefined };
         @memset(&addr.path, 0);
-        const path_bytes: []const u8 = self.config.socket_path;
-        @memcpy(addr.path[0..path_bytes.len], path_bytes);
+        const socket_path = self.config.getSocketPath();
+        @memcpy(addr.path[0..socket_path.len], socket_path);
 
         posix.connect(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
             return error.ServerNotRunning;

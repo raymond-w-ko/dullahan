@@ -13,6 +13,7 @@ const sys = @cImport({
 });
 const ipc = @import("ipc.zig");
 const http = @import("http.zig");
+const paths = @import("paths.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
 const Session = @import("session.zig").Session;
@@ -436,7 +437,7 @@ pub const EventLoop = struct {
                 const pane = self.session.activePane() orelse
                     break :blk ipc.Response.err("No active pane");
 
-                const capture_path = "/tmp/dullahan-capture.hex";
+                const capture_path = paths.StaticPaths.capture();
 
                 pane.startCapture(capture_path) catch |e| {
                     var errbuf: [256]u8 = undefined;
@@ -448,7 +449,9 @@ pub const EventLoop = struct {
                 std.Thread.sleep(500 * std.time.ns_per_ms);
                 pane.stopCapture();
 
-                break :blk ipc.Response.okWithData("Capture started", "Sent 'claude\\n'. Run 'dump-raw' to see terminal state, check /tmp/dullahan-capture.hex for hex dump.");
+                var msg_buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Sent 'claude\\n'. Run 'dump-raw' to see terminal state, check {s} for hex dump.", .{capture_path}) catch "Capture complete";
+                break :blk ipc.Response.okWithData("Capture started", msg);
             },
 
             .ttysize => blk: {

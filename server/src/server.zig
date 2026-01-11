@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const ipc = @import("ipc.zig");
+const paths = @import("paths.zig");
 const Session = @import("session.zig").Session;
 const PaneRegistry = @import("pane_registry.zig").PaneRegistry;
 const http = @import("http.zig");
@@ -66,7 +67,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     var ipc_server = ipc.Server.init(config.ipc) catch |e| {
         if (e == error.AddressInUse) {
-            log.err("IPC socket {s} is already in use. Another server may be running.", .{config.ipc.socket_path});
+            log.err("IPC socket {s} is already in use. Another server may be running.", .{config.ipc.getSocketPath()});
             std.debug.print("Error: IPC socket already in use. Is another dullahan running?\n", .{});
         } else {
             log.err("Failed to start IPC server: {any}", .{e});
@@ -99,8 +100,8 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     // Note: Shells are already spawned by createWindowWithPanes() -> createShellPane()
 
-    log.info("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]", .{ config.ipc.socket_path, config.ws_port });
-    std.debug.print("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]\n", .{ config.ipc.socket_path, config.ws_port });
+    log.info("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]", .{ config.ipc.getSocketPath(), config.ws_port });
+    std.debug.print("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]\n", .{ config.ipc.getSocketPath(), config.ws_port });
     if (static_dir) |dir| {
         std.debug.print("Serving static files from: {s}\n", .{dir});
     }

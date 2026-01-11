@@ -36,6 +36,9 @@ pub const signal = @import("signal.zig");
 // Unified logging (file + console + stderr)
 pub const dlog = @import("dlog.zig");
 
+// Path utilities (UID-specific temp directory)
+pub const paths = @import("paths.zig");
+
 // Test runners (integrated test commands)
 pub const test_runners = @import("test_runners.zig");
 

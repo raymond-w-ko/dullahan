@@ -5,10 +5,10 @@ const dullahan = @import("dullahan");
 const cli = dullahan.cli;
 const server = dullahan.server;
 const ipc = dullahan.ipc;
+const paths = dullahan.paths;
 const test_runners = dullahan.test_runners;
 
-// Custom logging to file
-const log_file_path = "/tmp/dullahan.log";
+// Custom logging to file (path determined at runtime from paths module)
 var log_file: ?std.fs.File = null;
 
 pub const std_options: std.Options = .{
@@ -24,7 +24,11 @@ fn fileLog(
 ) void {
     // Lazy init log file
     if (log_file == null) {
-        log_file = std.fs.createFileAbsolute(log_file_path, .{
+        // Ensure temp directory exists
+        paths.ensureTempDir() catch return;
+
+        const log_path = paths.StaticPaths.log();
+        log_file = std.fs.createFileAbsolute(log_path, .{
             .truncate = false,
         }) catch return;
         // Seek to end for append
@@ -71,7 +75,7 @@ pub fn main() !void {
             std.process.exit(1);
         };
     } else if (args.serve) {
-        // Run as server
+        // Run as server - ipc.Config handles path defaults and temp dir creation
         const config = server.RunConfig{
             .ipc = .{
                 .socket_path = args.socket_path,

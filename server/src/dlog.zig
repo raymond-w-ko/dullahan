@@ -1,7 +1,7 @@
 //! Dullahan unified logging system
 //!
 //! Provides logging to three channels:
-//! 1. Log file (/tmp/dullahan.log) - always
+//! 1. Log file (/tmp/dullahan-<uid>/dullahan-dlog.log) - always
 //! 2. Debug console (pane 0) - when session is set
 //! 3. Stderr - for errors and unimplemented features
 //!
@@ -13,9 +13,7 @@
 
 const std = @import("std");
 const Pane = @import("pane.zig").Pane;
-
-/// Log file path (separate from main.zig's log to avoid conflicts)
-const log_file_path = "/tmp/dullahan-dlog.log";
+const paths = @import("paths.zig");
 
 /// Global state for logging
 var log_file: ?std.fs.File = null;
@@ -25,7 +23,12 @@ var debug_pane_mutex: std.Thread.Mutex = .{};
 /// Initialize the log file (called automatically on first log)
 fn initLogFile() void {
     if (log_file != null) return;
+
+    // Ensure temp directory exists
+    paths.ensureTempDir() catch return;
+
     // Open with append mode via posix
+    const log_file_path = paths.StaticPaths.dlog();
     const fd = std.posix.open(
         log_file_path,
         .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },

@@ -74,11 +74,11 @@ fmt:
 # =============================================================================
 
 dev: client server
-	rm -f /tmp/dullahan*.log
+	rm -rf /tmp/dullahan-$(shell id -u)/*.log
 	pkill -9 -x dullahan || true
 	./server/zig-out/bin/dullahan serve --port=7682
 
 prod: dist
-	rm -f /tmp/dullahan*.log
+	rm -rf /tmp/dullahan-$(shell id -u)/*.log
 	pkill -9 -x dullahan || true
 	./dist/dullahan serve --port=7681

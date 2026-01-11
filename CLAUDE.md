@@ -46,7 +46,7 @@ If that audit trail is missing, then you must act as if the operation never happ
 - Runs as a daemon on Linux/macOS (Windows support planned)
 - **Single binary**: `zig-out/bin/dullahan` — all functionality in one executable
 - **Two communication channels:**
-  - **IPC socket** (`/tmp/dullahan.sock`) — CLI control (ping, status, quit)
+  - **IPC socket** (`/tmp/dullahan-<uid>/dullahan.sock`) — CLI control (ping, status, quit)
   - **WebSocket** (port `7681`) — Client connections for terminal data
 
 ### Client (Web)
@@ -142,7 +142,7 @@ Integrated test commands for debugging (run in a real terminal like Ghostty):
 **keytest-kitty** — Tests Kitty keyboard protocol with full event reporting:
 - Shows press (↓), repeat (⟳), release (↑) events
 - Displays modifiers and raw bytes
-- Logs to `/tmp/keytest-kitty.log`
+- Logs to `/tmp/dullahan-<uid>/keytest-kitty.log`
 - Press Escape twice to exit
 
 **keytest-bytes** — Verifies all 256 bytes can be input:
@@ -160,12 +160,16 @@ Integrated test commands for debugging (run in a real terminal like Ghostty):
 
 ### Ports & Paths
 
+All temp files are stored in `/tmp/dullahan-<uid>/` where `<uid>` is the user's UID.
+This provides isolation between users on shared systems.
+
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| IPC Socket | `/tmp/dullahan.sock` | CLI ↔ Server communication |
-| PID File | `/tmp/dullahan.pid` | Server process tracking |
+| Temp Dir | `/tmp/dullahan-<uid>/` | All server temp files |
+| IPC Socket | `/tmp/dullahan-<uid>/dullahan.sock` | CLI ↔ Server communication |
+| PID File | `/tmp/dullahan-<uid>/dullahan.pid` | Server process tracking |
 | WebSocket | `ws://localhost:7681` | Client ↔ Server terminal data |
-| Log File | `/tmp/dullahan.log` | Server debug logging |
+| Log File | `/tmp/dullahan-<uid>/dullahan.log` | Server debug logging |
 
 **Port 7681** is also used by ttyd/libwebsockets — if you run both, one will fail to bind.
 

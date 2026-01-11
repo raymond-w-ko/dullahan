@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 // Import dullahan modules for delta tests
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
+const paths = @import("paths.zig");
 const snapshot = @import("snapshot.zig");
 
 const log = std.log.scoped(.test_runners);
@@ -101,8 +102,10 @@ fn runKeytestKitty() !void {
     kitty_running = true;
     kitty_escape_count = 0;
 
-    // Open log file
-    kitty_log_file = std.fs.cwd().createFile("/tmp/keytest-kitty.log", .{ .truncate = true }) catch null;
+    // Ensure temp directory exists and open log file
+    paths.ensureTempDir() catch {};
+    const log_path = paths.StaticPaths.keytestLog();
+    kitty_log_file = std.fs.createFileAbsolute(log_path, .{ .truncate = true }) catch null;
     defer if (kitty_log_file) |f| f.close();
 
     // Set raw mode

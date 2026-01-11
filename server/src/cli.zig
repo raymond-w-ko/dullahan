@@ -4,13 +4,14 @@
 
 const std = @import("std");
 const ipc = @import("ipc.zig");
+const paths = @import("paths.zig");
 const test_runners = @import("test_runners.zig");
 
 pub const CliArgs = struct {
     command: ?ipc.Command = null,
     timeout_ms: u32 = 5000,
-    socket_path: []const u8 = "/tmp/dullahan.sock",
-    pid_path: []const u8 = "/tmp/dullahan.pid",
+    socket_path: ?[]const u8 = null, // null means use default from paths module
+    pid_path: ?[]const u8 = null, // null means use default from paths module
     static_dir: ?[]const u8 = null,
     ws_port: u16 = 7681,
     help: bool = false,
@@ -49,7 +50,7 @@ pub const CliArgs = struct {
                 const val = arg["--timeout=".len..];
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch 5000;
             } else if (std.mem.startsWith(u8, arg, "--socket=")) {
-                args.socket_path = arg["--socket=".len..];
+                args.socket_path = @as(?[]const u8, arg["--socket=".len..]);
             } else if (std.mem.startsWith(u8, arg, "--static-dir=")) {
                 args.static_dir = arg["--static-dir=".len..];
             } else if (std.mem.startsWith(u8, arg, "--port=")) {
@@ -79,7 +80,7 @@ pub fn printUsage() void {
         \\Options:
         \\  -h, --help           Show this help
         \\  --timeout=MS         Command timeout in milliseconds (default: 5000)
-        \\  --socket=PATH        Socket path (default: /tmp/dullahan.sock)
+        \\  --socket=PATH        Socket path (default: /tmp/dullahan-<uid>/dullahan.sock)
         \\  --static-dir=PATH    Serve static files from directory
         \\  --port=PORT          WebSocket/HTTP port (default: 7681)
         \\  --no-spawn           Don't auto-spawn server if not running
@@ -99,6 +100,12 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
     const command = args.command orelse {
         std.debug.print("Error: No command specified. Use --help for usage.\n", .{});
         return error.NoCommand;
+    };
+
+    // Ensure temp directory exists
+    paths.ensureTempDir() catch |e| {
+        std.debug.print("Error: Could not create temp directory: {}\n", .{e});
+        return e;
     };
 
     const config = ipc.Config{
@@ -150,12 +157,15 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
 }
 
 fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {
+    _ = args; // Server will compute its own paths from UID
+
     // Get path to self
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path = try std.fs.selfExePath(&self_path_buf);
 
+    // Server will use the same paths module, computing paths from UID
     var child = std.process.Child.init(
-        &.{ self_path, "serve", args.socket_path, args.pid_path },
+        &.{ self_path, "serve" },
         allocator,
     );
 
