@@ -20,6 +20,7 @@ export interface TerminalViewProps {
   cursorText: string;
   cursorBlink: "" | "true" | "false";
   isReadOnly: boolean;
+  isActive: boolean;
   onKeyInput?: () => void;
   connection: TerminalConnection | null;
 }
@@ -32,6 +33,7 @@ export function TerminalView({
   cursorText,
   cursorBlink,
   isReadOnly,
+  isActive,
   onKeyInput,
   connection,
 }: TerminalViewProps) {
@@ -127,7 +129,8 @@ export function TerminalView({
             cursorStyle,
             cursorColor,
             cursorText,
-            cursorBlink
+            cursorBlink,
+            isActive
           )}
         </div>
       ))}
@@ -207,10 +210,11 @@ function renderLine(
   cursorStyle: "block" | "bar" | "underline" | "block_hollow",
   cursorColor: string,
   cursorText: string,
-  cursorBlink: "" | "true" | "false"
+  cursorBlink: "" | "true" | "false",
+  isActive: boolean
 ): preact.JSX.Element {
-  // If cursor is not on this line, render runs directly
-  if (!cursor.visible || cursor.y !== y) {
+  // Only show cursor on active pane, and only if cursor is visible and on this line
+  if (!isActive || !cursor.visible || cursor.y !== y) {
     return (
       <>
         {runs.map((run, i) => (

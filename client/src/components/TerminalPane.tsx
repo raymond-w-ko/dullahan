@@ -127,6 +127,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
             cursorText={cursorText}
             cursorBlink={cursorBlink}
             isReadOnly={isReadOnly}
+            isActive={focusedPaneId === paneId}
             onKeyInput={isReadOnly ? undefined : handleKeyInput}
             connection={connection}
           />
