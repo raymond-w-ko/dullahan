@@ -70,6 +70,10 @@ pub const StaticPaths = struct {
     var keytest_log_len: usize = 0;
     var keytest_log_initialized: bool = false;
 
+    var pty_traffic_buf: [80]u8 = undefined;
+    var pty_traffic_len: usize = 0;
+    var pty_traffic_initialized: bool = false;
+
     /// Socket path: /tmp/dullahan-<uid>/dullahan.sock
     pub fn socket() []const u8 {
         if (!socket_initialized) {
@@ -134,6 +138,17 @@ pub const StaticPaths = struct {
             keytest_log_initialized = true;
         }
         return keytest_log_buf[0..keytest_log_len];
+    }
+
+    /// PTY traffic log file path: /tmp/dullahan-<uid>/pty-traffic.log
+    pub fn ptyTraffic() []const u8 {
+        if (!pty_traffic_initialized) {
+            const dir = getTempDir();
+            pty_traffic_len = (std.fmt.bufPrint(&pty_traffic_buf, "{s}/pty-traffic.log", .{dir}) catch
+                return "/tmp/pty-traffic.log").len;
+            pty_traffic_initialized = true;
+        }
+        return pty_traffic_buf[0..pty_traffic_len];
     }
 };
 

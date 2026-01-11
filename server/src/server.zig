@@ -58,9 +58,8 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         dlog.setDebugPane(debug_pane);
 
         try debug_pane.feedDirect("\x1b[1;36m=== Dullahan Debug Console ===\x1b[0m\r\n");
-        try debug_pane.feedDirect("PTY I/O traffic will be logged here.\r\n");
-        try debug_pane.feedDirect("\x1b[31m> pane N: bytes sent TO pty (red)\x1b[0m\r\n");
-        try debug_pane.feedDirect("\x1b[34m< pane N: bytes recv FROM pty (blue)\x1b[0m\r\n\r\n");
+        try debug_pane.feedDirect("Server logs and messages appear here.\r\n");
+        try debug_pane.feedDirect("PTY traffic logging: use 'dullahan pty-log-on' to enable\r\n\r\n");
 
         dlog.info("Debug console initialized", .{});
     }

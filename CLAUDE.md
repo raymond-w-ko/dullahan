@@ -170,6 +170,9 @@ This provides isolation between users on shared systems.
 | PID File | `/tmp/dullahan-<uid>/dullahan.pid` | Server process tracking |
 | WebSocket | `ws://localhost:7681` | Client ↔ Server terminal data |
 | Log File | `/tmp/dullahan-<uid>/dullahan.log` | Server debug logging |
+| PTY Traffic | `/tmp/dullahan-<uid>/pty-traffic.log` | PTY I/O hex dump (when enabled) |
+
+**PTY traffic logging** is disabled by default. Enable with `dullahan pty-log-on`.
 
 **Port 7681** is also used by ttyd/libwebsockets — if you run both, one will fail to bind.
 

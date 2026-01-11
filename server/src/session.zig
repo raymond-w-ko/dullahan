@@ -4,15 +4,19 @@
 //! Windows track layout, while panes are owned by the global PaneRegistry.
 //!
 //! Pane layout:
-//!   - Pane 0: Debug pane (virtual, no PTY) - shows PTY I/O traffic
+//!   - Pane 0: Debug pane (virtual, no PTY) - shows server logs
 //!   - Pane 1: Shell terminal 1
 //!   - Pane 2: Shell terminal 2
+//!
+//! PTY traffic logging can be enabled via 'dullahan pty-log-on'
+//! and writes to /tmp/dullahan-<uid>/pty-traffic.log
 
 const std = @import("std");
 const posix = std.posix;
 const Window = @import("window.zig").Window;
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
+const pty_log = @import("pty_log.zig");
 const pane_registry_mod = @import("pane_registry.zig");
 const PaneRegistry = pane_registry_mod.PaneRegistry;
 
@@ -39,8 +43,9 @@ pub const Session = struct {
     /// Allocator
     allocator: std.mem.Allocator,
 
-    /// Whether to log PTY traffic (hex + ASCII) to the debug pane
-    debug_pty_logging: bool = true,
+    /// Whether to log PTY traffic (hex + ASCII) to file
+    /// Use setPtyLogging() to change this at runtime
+    pty_logging_enabled: bool = false,
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -206,64 +211,36 @@ pub const Session = struct {
         return self.pane_registry.getDebugPane();
     }
 
-    /// Log bytes sent TO a pane's PTY (shown in red)
-    /// Format: "> pane N: xx xx xx | ASCII"
+    /// Enable or disable PTY traffic logging to file
+    pub fn setPtyLogging(self: *Session, enabled: bool) void {
+        self.pty_logging_enabled = enabled;
+        pty_log.setEnabled(enabled);
+    }
+
+    /// Check if PTY logging is enabled
+    pub fn isPtyLoggingEnabled(self: *const Session) bool {
+        _ = self;
+        return pty_log.isEnabled();
+    }
+
+    /// Get the PTY log file path
+    pub fn getPtyLogPath(self: *const Session) []const u8 {
+        _ = self;
+        return pty_log.getLogPath();
+    }
+
+    /// Log bytes sent TO a pane's PTY
+    /// Format: "[HH:MM:SS.mmm] > pane N: xx xx xx | ASCII"
     pub fn logPtySend(self: *Session, pane_id: u16, data: []const u8) void {
-        if (!self.debug_pty_logging) return;
-        const debug_pane = self.getDebugPane() orelse return;
-        self.logPtyTraffic(debug_pane, ">", pane_id, data, "\x1b[31m"); // red
+        _ = self;
+        pty_log.logSend(pane_id, data);
     }
 
-    /// Log bytes received FROM a pane's PTY (shown in blue)
-    /// Format: "< pane N: xx xx xx | ASCII"
+    /// Log bytes received FROM a pane's PTY
+    /// Format: "[HH:MM:SS.mmm] < pane N: xx xx xx | ASCII"
     pub fn logPtyRecv(self: *Session, pane_id: u16, data: []const u8) void {
-        if (!self.debug_pty_logging) return;
-        const debug_pane = self.getDebugPane() orelse return;
-        self.logPtyTraffic(debug_pane, "<", pane_id, data, "\x1b[34m"); // blue
-    }
-
-    /// Internal helper to format and log PTY traffic
-    fn logPtyTraffic(self: *Session, debug_pane: *Pane, direction: []const u8, pane_id: u16, data: []const u8, color: []const u8) void {
-        // Format: "[HH:MM:SS.mmm] COLOR> pane N: RESET hex bytes | ascii\r\n"
-        // Use dynamic allocation to handle any size
-
-        // Calculate buffer size: timestamp(14) + header(~20) + hex(3*len) + separator(3) + ascii(len) + newline(2)
-        const buf_size = 50 + data.len * 4;
-        const buf = self.allocator.alloc(u8, buf_size) catch return;
-        defer self.allocator.free(buf);
-
-        var fbs = std.io.fixedBufferStream(buf);
-        const w = fbs.writer();
-
-        // Write timestamp [HH:MM:SS.mmm]
-        const ts_ms = std.time.milliTimestamp();
-        const ts_s: u64 = @intCast(@divTrunc(ts_ms, 1000));
-        const ms: u64 = @intCast(@mod(ts_ms, 1000));
-        const day_s = @mod(ts_s, 86400); // seconds since midnight
-        const hours = @divTrunc(day_s, 3600);
-        const mins = @divTrunc(@mod(day_s, 3600), 60);
-        const secs = @mod(day_s, 60);
-        w.print("\x1b[90m[{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}]\x1b[0m ", .{ hours, mins, secs, ms }) catch return;
-
-        // Write color and direction
-        w.writeAll(color) catch return;
-        w.print("{s} pane {d}:\x1b[0m ", .{ direction, pane_id }) catch return;
-
-        // Write ALL hex bytes
-        for (data) |byte| {
-            w.print("{x:0>2} ", .{byte}) catch return;
-        }
-
-        // Write ASCII representation
-        w.writeAll("| ") catch return;
-        for (data) |byte| {
-            const c: u8 = if (byte >= 32 and byte < 127) byte else '.';
-            w.print("{c}", .{c}) catch return;
-        }
-        w.writeAll("\r\n") catch return;
-
-        // Feed to debug pane
-        debug_pane.feedDirect(fbs.getWritten()) catch {};
+        _ = self;
+        pty_log.logRecv(pane_id, data);
     }
 
     /// Get window count

@@ -454,6 +454,28 @@ pub const EventLoop = struct {
                 break :blk ipc.Response.okWithData("Capture started", msg);
             },
 
+            .@"pty-log" => blk: {
+                const enabled = self.session.isPtyLoggingEnabled();
+                const path = self.session.getPtyLogPath();
+                const msg = try std.fmt.allocPrint(alloc, "PTY logging: {s}\nLog file: {s}", .{
+                    if (enabled) "enabled" else "disabled",
+                    path,
+                });
+                break :blk ipc.Response.okWithData(if (enabled) "PTY logging enabled" else "PTY logging disabled", msg);
+            },
+
+            .@"pty-log-on" => blk: {
+                self.session.setPtyLogging(true);
+                const path = self.session.getPtyLogPath();
+                const msg = try std.fmt.allocPrint(alloc, "PTY traffic logging enabled.\nLog file: {s}", .{path});
+                break :blk ipc.Response.okWithData("PTY logging enabled", msg);
+            },
+
+            .@"pty-log-off" => blk: {
+                self.session.setPtyLogging(false);
+                break :blk ipc.Response.ok("PTY logging disabled");
+            },
+
             .ttysize => blk: {
                 var buf: std.ArrayListUnmanaged(u8) = .{};
                 const writer = buf.writer(alloc);

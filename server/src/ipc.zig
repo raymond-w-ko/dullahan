@@ -34,6 +34,9 @@ pub const Command = enum {
     dump,
     @"dump-raw",
     @"debug-capture",
+    @"pty-log",
+    @"pty-log-on",
+    @"pty-log-off",
     ttysize,
 
     pub fn fromString(s: []const u8) ?Command {
@@ -45,6 +48,9 @@ pub const Command = enum {
             .{ "dump", .dump },
             .{ "dump-raw", .@"dump-raw" },
             .{ "debug-capture", .@"debug-capture" },
+            .{ "pty-log", .@"pty-log" },
+            .{ "pty-log-on", .@"pty-log-on" },
+            .{ "pty-log-off", .@"pty-log-off" },
             .{ "ttysize", .ttysize },
         });
         return map.get(s);
@@ -59,6 +65,9 @@ pub const Command = enum {
             .dump => "Dump terminal state (compact, human-readable)",
             .@"dump-raw" => "Dump raw terminal cells with escape codes visible",
             .@"debug-capture" => "Run 'claude', capture PTY output as hex to temp dir",
+            .@"pty-log" => "Show PTY traffic logging status and file path",
+            .@"pty-log-on" => "Enable PTY traffic logging to file",
+            .@"pty-log-off" => "Disable PTY traffic logging",
             .ttysize => "Query server's console terminal size via ioctl TIOCGWINSZ",
         };
     }

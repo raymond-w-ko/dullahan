@@ -39,6 +39,9 @@ pub const dlog = @import("dlog.zig");
 // Path utilities (UID-specific temp directory)
 pub const paths = @import("paths.zig");
 
+// PTY traffic logging
+pub const pty_log = @import("pty_log.zig");
+
 // Test runners (integrated test commands)
 pub const test_runners = @import("test_runners.zig");
 
