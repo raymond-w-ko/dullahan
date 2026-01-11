@@ -143,10 +143,16 @@ interface MasterChangedMessage {
 }
 
 /** Window layout from server */
+export interface WindowLayout {
+  templateId: string;
+  nodes: import("../../../protocol/schema/layout").LayoutNode[];
+}
+
 export interface WindowInfo {
   id: number;
   activePaneId: number;
   panes: number[];
+  layout?: WindowLayout;
 }
 
 /** Layout update event */
@@ -531,9 +537,16 @@ export class TerminalConnection {
         break;
       }
       case "layout": {
+        // Extract layout info from windows
+        const windows: WindowInfo[] = msg.windows.map((w: WindowInfo) => ({
+          id: w.id,
+          activePaneId: w.activePaneId,
+          panes: w.panes,
+          layout: w.layout,
+        }));
         this._layout = {
           activeWindowId: msg.activeWindowId,
-          windows: msg.windows,
+          windows,
         };
         debug.log("Layout received:", msg.windows.length, "windows, active:", msg.activeWindowId);
         this.onLayout?.(this._layout);

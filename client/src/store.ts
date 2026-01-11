@@ -2,13 +2,14 @@
 // Provides reactive state management without heavy dependencies
 
 import { TerminalConnection } from "./terminal/connection";
-import type { TerminalSnapshot, LayoutUpdate } from "./terminal/connection";
+import type { TerminalSnapshot, LayoutUpdate, WindowLayout } from "./terminal/connection";
 import * as config from "./config";
 
 export interface WindowState {
   id: number;
   paneIds: number[];
   focusedPaneId: number;
+  layout?: WindowLayout;
 }
 
 export interface PaneState {
@@ -233,6 +234,7 @@ export function setLayout(layout: LayoutUpdate) {
       id: win.id,
       paneIds: win.panes,
       focusedPaneId: win.activePaneId,
+      layout: win.layout,
     });
   }
 
