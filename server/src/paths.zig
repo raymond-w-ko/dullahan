@@ -3,7 +3,9 @@
 //! Provides runtime directory and file paths that include the user's UID
 //! to prevent conflicts between users on shared systems.
 //!
-//! All temp files are placed in /tmp/dullahan-<uid>/ directory.
+//! Paths:
+//!   - Temp files: /tmp/dullahan-<uid>/
+//!   - Config files: ~/.config/dullahan/
 
 const std = @import("std");
 const posix = std.posix;
@@ -32,6 +34,64 @@ pub fn ensureTempDir() !void {
     const dir_path = getTempDir();
     std.fs.makeDirAbsolute(dir_path) catch |e| switch (e) {
         error.PathAlreadyExists => {},
+        else => return e,
+    };
+}
+
+/// Get the config directory path: ~/.config/dullahan
+/// Returns a static buffer that is valid for the lifetime of the program.
+pub fn getConfigDir() []const u8 {
+    const S = struct {
+        var buf: [256]u8 = undefined;
+        var len: usize = 0;
+        var initialized: bool = false;
+    };
+
+    if (!S.initialized) {
+        // Try HOME environment variable
+        if (std.posix.getenv("HOME")) |home| {
+            S.len = (std.fmt.bufPrint(&S.buf, "{s}/.config/dullahan", .{home}) catch {
+                // Fallback to /tmp
+                S.len = (std.fmt.bufPrint(&S.buf, "/tmp/dullahan-config", .{}) catch return "/tmp/dullahan-config").len;
+                S.initialized = true;
+                return S.buf[0..S.len];
+            }).len;
+        } else {
+            // No HOME, use /tmp fallback
+            S.len = (std.fmt.bufPrint(&S.buf, "/tmp/dullahan-config", .{}) catch return "/tmp/dullahan-config").len;
+        }
+        S.initialized = true;
+    }
+
+    return S.buf[0..S.len];
+}
+
+/// Ensure the config directory exists, creating it if necessary.
+/// Creates parent directories as needed (~/.config/).
+pub fn ensureConfigDir() !void {
+    const dir_path = getConfigDir();
+
+    // Try to create the directory (and parents if needed)
+    std.fs.makeDirAbsolute(dir_path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        error.FileNotFound => {
+            // Parent doesn't exist, try creating ~/.config first
+            if (std.posix.getenv("HOME")) |home| {
+                var parent_buf: [256]u8 = undefined;
+                const parent = std.fmt.bufPrint(&parent_buf, "{s}/.config", .{home}) catch return e;
+                std.fs.makeDirAbsolute(parent) catch |e2| switch (e2) {
+                    error.PathAlreadyExists => {},
+                    else => return e2,
+                };
+                // Now try the config dir again
+                std.fs.makeDirAbsolute(dir_path) catch |e3| switch (e3) {
+                    error.PathAlreadyExists => {},
+                    else => return e3,
+                };
+            } else {
+                return e;
+            }
+        },
         else => return e,
     };
 }
@@ -73,6 +133,10 @@ pub const StaticPaths = struct {
     var pty_traffic_buf: [80]u8 = undefined;
     var pty_traffic_len: usize = 0;
     var pty_traffic_initialized: bool = false;
+
+    var layouts_buf: [280]u8 = undefined;
+    var layouts_len: usize = 0;
+    var layouts_initialized: bool = false;
 
     /// Socket path: /tmp/dullahan-<uid>/dullahan.sock
     pub fn socket() []const u8 {
@@ -149,6 +213,17 @@ pub const StaticPaths = struct {
             pty_traffic_initialized = true;
         }
         return pty_traffic_buf[0..pty_traffic_len];
+    }
+
+    /// Layouts config file path: ~/.config/dullahan/layouts.json
+    pub fn layouts() []const u8 {
+        if (!layouts_initialized) {
+            const dir = getConfigDir();
+            layouts_len = (std.fmt.bufPrint(&layouts_buf, "{s}/layouts.json", .{dir}) catch
+                return "/tmp/dullahan-layouts.json").len;
+            layouts_initialized = true;
+        }
+        return layouts_buf[0..layouts_len];
     }
 };
 

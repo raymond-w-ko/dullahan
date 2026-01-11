@@ -42,6 +42,9 @@ pub const paths = @import("paths.zig");
 // PTY traffic logging
 pub const pty_log = @import("pty_log.zig");
 
+// Layout database (config file)
+pub const layout_db = @import("layout_db.zig");
+
 // Test runners (integrated test commands)
 pub const test_runners = @import("test_runners.zig");
 
