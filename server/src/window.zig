@@ -2,10 +2,11 @@
 //!
 //! A window tracks which panes are visible and their layout positions.
 //! Panes themselves are owned by the global PaneRegistry.
-//! For now, we only support a single active pane.
-//! TODO: Implement pane layouts (splits, etc.)
+//! Layout is a tree structure defining pane sizes and arrangement.
 
 const std = @import("std");
+const layout_db = @import("layout_db.zig");
+pub const LayoutNode = layout_db.LayoutNode;
 
 pub const Window = struct {
     /// The currently active/focused pane ID
@@ -20,6 +21,13 @@ pub const Window = struct {
 
     /// Pane IDs belonging to this window (order matters for layout)
     pane_ids: std.ArrayListUnmanaged(u16) = .{},
+
+    /// Layout template ID (e.g., "3-col", "2x2")
+    template_id: ?[]const u8 = null,
+
+    /// Layout tree (with pane IDs assigned)
+    /// Null until a layout is set
+    layout_nodes: ?[]LayoutNode = null,
 
     /// Allocator
     allocator: std.mem.Allocator,
@@ -53,6 +61,24 @@ pub const Window = struct {
 
     pub fn deinit(self: *Window) void {
         self.pane_ids.deinit(self.allocator);
+        // Free template_id if allocated
+        if (self.template_id) |id| {
+            self.allocator.free(id);
+        }
+        // Free layout nodes if allocated
+        if (self.layout_nodes) |nodes| {
+            freeLayoutNodes(self.allocator, nodes);
+        }
+    }
+
+    /// Free layout nodes recursively
+    fn freeLayoutNodes(allocator: std.mem.Allocator, nodes: []LayoutNode) void {
+        for (nodes) |*node| {
+            if (node.* == .container) {
+                freeLayoutNodes(allocator, node.container.children);
+            }
+        }
+        allocator.free(nodes);
     }
 
     /// Add a pane to this window
@@ -98,6 +124,80 @@ pub const Window = struct {
     pub fn resize(self: *Window, cols: u16, rows: u16) void {
         self.cols = cols;
         self.rows = rows;
+    }
+
+    /// Set layout from a template, assigning pane IDs from pane_ids list
+    /// Clones the template nodes and assigns pane IDs in order
+    pub fn setLayoutFromTemplate(self: *Window, template: *const layout_db.LayoutTemplate) !void {
+        // Free existing layout if any
+        if (self.template_id) |id| {
+            self.allocator.free(id);
+        }
+        if (self.layout_nodes) |nodes| {
+            freeLayoutNodes(self.allocator, nodes);
+        }
+
+        // Clone template nodes
+        const cloned = try cloneNodes(self.allocator, template.nodes);
+        errdefer freeLayoutNodes(self.allocator, cloned);
+
+        // Assign pane IDs
+        var pane_idx: usize = 0;
+        assignPaneIds(cloned, self.pane_ids.items, &pane_idx);
+
+        // Store
+        self.template_id = try self.allocator.dupe(u8, template.id);
+        self.layout_nodes = cloned;
+    }
+
+    /// Clone layout nodes recursively
+    fn cloneNodes(allocator: std.mem.Allocator, nodes: []const LayoutNode) ![]LayoutNode {
+        var result = try allocator.alloc(LayoutNode, nodes.len);
+        errdefer allocator.free(result);
+
+        for (nodes, 0..) |node, i| {
+            result[i] = switch (node) {
+                .container => |c| blk: {
+                    const children = try cloneNodes(allocator, c.children);
+                    break :blk LayoutNode{ .container = .{
+                        .width = c.width,
+                        .height = c.height,
+                        .children = children,
+                    } };
+                },
+                .pane => |p| LayoutNode{ .pane = .{
+                    .width = p.width,
+                    .height = p.height,
+                    .pane_id = null,
+                } },
+            };
+        }
+        return result;
+    }
+
+    /// Assign pane IDs to pane nodes in order
+    fn assignPaneIds(nodes: []LayoutNode, pane_ids: []const u16, idx: *usize) void {
+        for (nodes) |*node| {
+            switch (node.*) {
+                .container => |*c| assignPaneIds(c.children, pane_ids, idx),
+                .pane => |*p| {
+                    if (idx.* < pane_ids.len) {
+                        p.pane_id = pane_ids[idx.*];
+                        idx.* += 1;
+                    }
+                },
+            }
+        }
+    }
+
+    /// Get layout info for serialization
+    pub fn getLayout(self: *const Window) ?struct { template_id: []const u8, nodes: []const LayoutNode } {
+        if (self.template_id) |tid| {
+            if (self.layout_nodes) |nodes| {
+                return .{ .template_id = tid, .nodes = nodes };
+            }
+        }
+        return null;
     }
 
     /// Dump window state in compact human-readable format

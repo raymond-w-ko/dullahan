@@ -201,6 +201,34 @@ pub const EventLoop = struct {
         return std.time.timestamp() - self.start_time;
     }
 
+    /// Assign layouts to existing windows that don't have layouts yet.
+    /// Called after init to set up layouts for windows created before EventLoop.
+    pub fn assignLayoutsToExistingWindows(self: *EventLoop) void {
+        var it = self.session.windows.iterator();
+        while (it.next()) |entry| {
+            var window = entry.value_ptr;
+
+            // Skip windows that already have layouts
+            if (window.template_id != null) continue;
+
+            // Choose template based on pane count
+            const pane_count = window.paneCount();
+            const template_id: []const u8 = switch (pane_count) {
+                1 => "single",
+                2 => "2-col",
+                3 => "3-col",
+                4 => "2x2",
+                else => "single", // Fallback
+            };
+
+            if (self.layouts.get(template_id)) |template| {
+                window.setLayoutFromTemplate(template) catch |e| {
+                    log.warn("Failed to set layout for window {d}: {}", .{ window.id, e });
+                };
+            }
+        }
+    }
+
     /// Main event loop
     pub fn run(self: *EventLoop) !void {
         log.info("Event loop starting (single-threaded)", .{});
@@ -971,6 +999,15 @@ pub const EventLoop = struct {
                 result.shell3_pane_id,
             });
 
+            // Assign layout to the new window (use 3-col for 3 panes)
+            if (self.session.getWindow(result.window_id)) |window| {
+                if (self.layouts.get("3-col")) |template| {
+                    window.setLayoutFromTemplate(template) catch |e| {
+                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                    };
+                }
+            }
+
             // Broadcast updated layout to all clients
             self.broadcastLayout() catch |e| {
                 log.err("Failed to broadcast layout: {any}", .{e});
@@ -1139,6 +1176,15 @@ pub const EventLoop = struct {
                 result.shell2_pane_id,
                 result.shell3_pane_id,
             });
+
+            // Assign layout to the new window (use 3-col for 3 panes)
+            if (self.session.getWindow(result.window_id)) |window| {
+                if (self.layouts.get("3-col")) |template| {
+                    window.setLayoutFromTemplate(template) catch |e| {
+                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                    };
+                }
+            }
 
             // Broadcast updated layout to all clients
             self.broadcastLayout() catch |e| {

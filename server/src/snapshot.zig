@@ -9,6 +9,9 @@ const msgpack = @import("msgpack");
 const snappy = @import("snappy");
 const Pane = @import("pane.zig").Pane;
 const Session = @import("session.zig").Session;
+const window_mod = @import("window.zig");
+const Window = window_mod.Window;
+const LayoutNode = window_mod.LayoutNode;
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
 const Cell = ghostty.page.Cell;
@@ -959,8 +962,38 @@ pub fn generateMasterChangedMessage(allocator: std.mem.Allocator, master_id: ?[]
     return result;
 }
 
+/// Convert layout nodes to msgpack payload recursively
+fn layoutNodesToPayload(allocator: std.mem.Allocator, nodes: []const LayoutNode) !msgpack.Payload {
+    var array = try msgpack.Payload.arrPayload(nodes.len, allocator);
+
+    for (nodes, 0..) |node, i| {
+        var node_map = msgpack.Payload.mapPayload(allocator);
+
+        switch (node) {
+            .container => |c| {
+                try node_map.mapPut("type", try msgpack.Payload.strToPayload("container", allocator));
+                try node_map.mapPut("width", msgpack.Payload{ .float = c.width });
+                try node_map.mapPut("height", msgpack.Payload{ .float = c.height });
+                try node_map.mapPut("children", try layoutNodesToPayload(allocator, c.children));
+            },
+            .pane => |p| {
+                try node_map.mapPut("type", try msgpack.Payload.strToPayload("pane", allocator));
+                try node_map.mapPut("width", msgpack.Payload{ .float = p.width });
+                try node_map.mapPut("height", msgpack.Payload{ .float = p.height });
+                if (p.pane_id) |pid| {
+                    try node_map.mapPut("paneId", msgpack.Payload{ .uint = pid });
+                }
+            },
+        }
+
+        try array.setArrElement(i, node_map);
+    }
+
+    return array;
+}
+
 /// Generate a binary msgpack layout message
-/// Contains window→pane mappings for client UI
+/// Contains window→pane mappings and layout tree for client UI
 pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     errdefer payload.free(allocator);
@@ -982,7 +1015,7 @@ pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![
         try window_map.mapPut("id", msgpack.Payload{ .uint = window_id });
         try window_map.mapPut("activePaneId", msgpack.Payload{ .uint = window.active_pane_id });
 
-        // Build panes array for this window
+        // Build panes array for this window (for backwards compat)
         const pane_count = window.paneCount();
         var panes_array = try msgpack.Payload.arrPayload(pane_count, allocator);
 
@@ -991,6 +1024,15 @@ pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![
         }
 
         try window_map.mapPut("panes", panes_array);
+
+        // Include layout if present
+        if (window.getLayout()) |layout| {
+            var layout_map = msgpack.Payload.mapPayload(allocator);
+            try layout_map.mapPut("templateId", try msgpack.Payload.strToPayload(layout.template_id, allocator));
+            try layout_map.mapPut("nodes", try layoutNodesToPayload(allocator, layout.nodes));
+            try window_map.mapPut("layout", layout_map);
+        }
+
         try windows_array.setArrElement(window_idx, window_map);
         window_idx += 1;
     }
@@ -998,7 +1040,7 @@ pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![
     try payload.mapPut("windows", windows_array);
 
     // Encode to msgpack
-    const max_size = 16 * 1024; // 16KB should be plenty for layout
+    const max_size = 64 * 1024; // 64KB for layouts with nested structure
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 

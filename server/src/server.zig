@@ -97,6 +97,9 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session);
     defer event_loop.deinit();
 
+    // Assign layouts to windows created before event loop
+    event_loop.assignLayoutsToExistingWindows();
+
     // Note: Shells are already spawned by createWindowWithPanes() -> createShellPane()
 
     log.info("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]", .{ config.ipc.getSocketPath(), config.ws_port });
