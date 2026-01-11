@@ -85,7 +85,44 @@ Windows and panes are **dynamic** — windows can have variable numbers of panes
 - **Window 0** (initial): Debug pane + 2 shell panes (created by `session.createInitialLayout()`)
 - **New windows**: 3 shell panes (created by `session.createShellWindow()`)
 - **Pane IDs**: Only `DEBUG_PANE_ID` (0) is special; all others are dynamically allocated
-- **Grid layout**: Uses CSS `grid-template-columns: repeat(N, 1fr)` where N = pane count
+- **Layout system**: Uses recursive `LayoutRenderer` with inline-block CSS
+
+### Layout System
+
+Windows use a template-based layout system stored in `~/.config/dullahan/layouts.json`.
+
+**Key concepts:**
+- **LayoutNode**: Either a `container` (has children) or `pane` (terminal placeholder)
+- **Split direction**: Implicit from nesting level (level 0=horizontal, 1=vertical, alternating)
+- **Templates**: Named layouts (e.g., "single", "2-col", "3-col", "2x2", "main-side")
+
+**Default templates (8 built-in):**
+| ID | Name | Description |
+|----|------|-------------|
+| `single` | Single Pane | One full-size pane |
+| `2-col` | Two Columns | Side by side |
+| `2-row` | Two Rows | Stacked vertically |
+| `3-col` | Three Columns | Three side by side |
+| `2x2` | 2×2 Grid | Four panes in grid |
+| `main-side` | Main + Sidebar | 70/30 split |
+| `main-2side` | Main + 2 Sidebars | Main left, two stacked right |
+
+**Key files:**
+- `server/src/layout_db.zig` — Layout database, JSON persistence, default templates
+- `protocol/schema/layout.ts` — Shared TypeScript types and helpers
+- `client/src/components/LayoutRenderer.tsx` — Recursive layout renderer
+- `client/src/components/LayoutPickerModal.tsx` — Template selection UI
+
+**Wire format (in layout message):**
+```typescript
+interface LayoutNode {
+  type: "container" | "pane";
+  width: number;   // Percentage (0-100)
+  height: number;  // Percentage (0-100)
+  children?: LayoutNode[];  // For containers
+  paneId?: number;          // For panes (assigned at runtime)
+}
+```
 
 **Client state starts empty** — the server populates windows/panes via layout messages:
 ```typescript
@@ -165,6 +202,8 @@ This provides isolation between users on shared systems.
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
+| Config Dir | `~/.config/dullahan/` | User configuration files |
+| Layouts | `~/.config/dullahan/layouts.json` | Layout templates (auto-created) |
 | Temp Dir | `/tmp/dullahan-<uid>/` | All server temp files |
 | IPC Socket | `/tmp/dullahan-<uid>/dullahan.sock` | CLI ↔ Server communication |
 | PID File | `/tmp/dullahan-<uid>/dullahan.pid` | Server process tracking |
@@ -202,9 +241,10 @@ dullahan/
 │       ├── snapshot.zig     # Terminal state → msgpack + delta generation
 │       ├── embedded_assets.zig # Embedded client for single-binary dist
 │       ├── session.zig      # Session (creates windows, initial layout)
-│       ├── window.zig       # Window (contains panes)
+│       ├── window.zig       # Window (contains panes, layout tree)
 │       ├── pane.zig         # Pane (terminal + PTY + generation tracking)
 │       ├── pane_registry.zig # Pane ID allocation (only DEBUG_PANE_ID=0 is special)
+│       ├── layout_db.zig    # Layout templates, JSON persistence
 │       ├── terminal.zig     # ghostty-vt wrapper
 │       ├── pty.zig          # PTY allocation (Linux/macOS)
 │       └── test_runners.zig # Integrated test utilities (keytest, delta tests)
@@ -227,17 +267,23 @@ dullahan/
 │   │   │   ├── App.tsx           # root component
 │   │   │   ├── TerminalGrid.tsx  # dynamic pane grid layout
 │   │   │   ├── TerminalPane.tsx  # individual terminal pane
+│   │   │   ├── LayoutRenderer.tsx # recursive layout tree renderer
+│   │   │   ├── LayoutPickerModal.tsx # template selection modal
 │   │   │   ├── WindowSwitcher.tsx # tab bar for window switching
 │   │   │   ├── MasterIndicator.tsx # master/slave status UI
 │   │   │   └── Settings.tsx      # settings panel
 │   │   └── terminal/
-│   │       └── connection.ts # WebSocket client + master checks
+│   │       ├── connection.ts # WebSocket client + master checks
+│   │       ├── keyboard.ts   # Keyboard event handling
+│   │       ├── actions.ts    # Terminal action types and handlers
+│   │       └── ime.ts        # IME composition support
 │   └── dist/                # build output (gitignored)
 │
 ├── protocol/                # shared definitions
 │   ├── messages.md          # wire format documentation
 │   └── schema/
 │       ├── types.ts         # TypeScript type definitions
+│       ├── layout.ts        # Layout node types + helpers
 │       ├── cell.ts          # Cell encode/decode (matches ghostty packed struct)
 │       ├── cell.test.ts     # Cell tests (bun test)
 │       ├── style.ts         # Style encode/decode (colors, attributes)
@@ -317,6 +363,44 @@ _rowCache: Map<bigint, Cell[]>;     // Cached row data
 ```
 
 **Debug UI:** Titlebar shows `Δ{deltas} ⟳{resyncs}` for sync statistics.
+
+### Terminal Actions
+
+The action system handles client-side operations triggered by keybinds, separate from sending input to the server.
+
+**Key file:** `client/src/terminal/actions.ts`
+
+**Action types:**
+| Action | Description |
+|--------|-------------|
+| `copy_to_clipboard` | Copy selection to clipboard |
+| `paste_from_clipboard` | Paste from clipboard |
+| `scroll` | Viewport scrolling (line/page/half_page/top/bottom) |
+| `send_text` | Send literal text to terminal |
+| `clear_screen` | Clear screen (sends Ctrl+L) |
+| `reset_terminal` | Reset to initial state (sends ESC c) |
+| `new_window` | Create new window |
+| `switch_window` | Switch to window by index (1-based) |
+| `cycle_window` | Cycle next/prev window |
+| `focus_pane` | Focus pane (next/prev/directional) |
+| `open_settings` | Open settings modal |
+
+**Usage:**
+```typescript
+import { executeAction, actions, ActionContext } from "./terminal/actions";
+
+// Create context with dependencies
+const ctx: ActionContext = {
+  paneId: 1,
+  sendText: (text) => connection.sendText(text),
+  sendScroll: (paneId, lines) => connection.sendScroll(paneId, lines),
+  // ... other context methods
+};
+
+// Execute an action
+await executeAction(actions.scrollUp("page"), ctx);
+await executeAction(actions.copy(), ctx);
+```
 
 ### Common Pitfalls
 
