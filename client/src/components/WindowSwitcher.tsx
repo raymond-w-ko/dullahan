@@ -1,8 +1,8 @@
 // Window switcher component - tab bar for switching between windows
-// Master clients can also create new windows
+// Master clients can also create new windows via layout picker
 
 import { h } from "preact";
-import { getStore, switchWindow, createWindow } from "../store";
+import { getStore, switchWindow, setLayoutPickerOpen } from "../store";
 
 export function WindowSwitcher() {
   const store = getStore();
@@ -33,7 +33,7 @@ export function WindowSwitcher() {
       {isMaster && (
         <button
           class="window-tab window-tab--add"
-          onClick={() => createWindow()}
+          onClick={() => setLayoutPickerOpen(true)}
           title="Create new window"
         >
           +

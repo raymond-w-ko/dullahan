@@ -599,9 +599,9 @@ pub const EventLoop = struct {
             client.setGeneration(pane.id, pane.generation);
         }
 
-        // Send layout message (window→pane mappings)
+        // Send layout message (window→pane mappings + available templates)
         {
-            const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session) catch |e| {
+            const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
                 log.err("Failed to generate layout message: {any}", .{e});
                 client.deinit();
                 return;
@@ -787,7 +787,7 @@ pub const EventLoop = struct {
 
     /// Broadcast layout message to all connected clients
     fn broadcastLayout(self: *EventLoop) !void {
-        const msg = try snapshot.generateLayoutMessage(self.allocator, self.session);
+        const msg = try snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts);
         defer self.allocator.free(msg);
 
         for (self.clients.items) |*client| {

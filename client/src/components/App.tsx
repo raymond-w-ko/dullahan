@@ -6,6 +6,7 @@ import { useState, useEffect } from "preact/hooks";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
 import { WindowSwitcher } from "./WindowSwitcher";
+import { LayoutPickerModal } from "./LayoutPickerModal";
 import {
   getStore,
   subscribe,
@@ -70,6 +71,7 @@ export function App() {
       </main>
 
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <LayoutPickerModal />
     </div>
   );
 }

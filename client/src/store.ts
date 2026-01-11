@@ -2,7 +2,7 @@
 // Provides reactive state management without heavy dependencies
 
 import { TerminalConnection } from "./terminal/connection";
-import type { TerminalSnapshot, LayoutUpdate, WindowLayout } from "./terminal/connection";
+import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
 
 export interface WindowState {
@@ -36,6 +36,10 @@ export interface Store {
   windows: Map<number, WindowState>;
   panes: Map<number, PaneState>;
   focusedPaneId: number;
+
+  // Layout templates (from server)
+  layoutTemplates: LayoutTemplate[];
+  layoutPickerOpen: boolean;
 
   // UI state
   bellActive: boolean;
@@ -82,6 +86,9 @@ const store: Store = {
   panes: new Map(),    // Populated by server layout message
 
   focusedPaneId: 0,
+
+  layoutTemplates: [],
+  layoutPickerOpen: false,
 
   bellActive: false,
   settingsOpen: false,
@@ -224,8 +231,29 @@ export function createWindow() {
   store.connection?.createWindow();
 }
 
+export function setLayoutPickerOpen(open: boolean) {
+  store.layoutPickerOpen = open;
+  notify();
+}
+
+export function getLayoutTemplates(): LayoutTemplate[] {
+  return store.layoutTemplates;
+}
+
+export function createWindowWithTemplate(templateId: string) {
+  // For now, just create a window (server uses default template)
+  // TODO: Pass templateId to server when protocol supports it
+  store.connection?.createWindow();
+  setLayoutPickerOpen(false);
+}
+
 export function setLayout(layout: LayoutUpdate) {
   store.activeWindowId = layout.activeWindowId;
+
+  // Update templates if provided
+  if (layout.templates) {
+    store.layoutTemplates = layout.templates;
+  }
 
   // Update windows map from layout
   store.windows.clear();

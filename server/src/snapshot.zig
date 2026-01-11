@@ -12,6 +12,7 @@ const Session = @import("session.zig").Session;
 const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const LayoutNode = window_mod.LayoutNode;
+const layout_db = @import("layout_db.zig");
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
 const Cell = ghostty.page.Cell;
@@ -993,13 +994,29 @@ fn layoutNodesToPayload(allocator: std.mem.Allocator, nodes: []const LayoutNode)
 }
 
 /// Generate a binary msgpack layout message
-/// Contains window→pane mappings and layout tree for client UI
-pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session) ![]u8 {
+/// Contains window→pane mappings, layout tree, and available templates for client UI
+pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session, layouts: ?*layout_db.LayoutDb) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("layout", allocator));
     try payload.mapPut("activeWindowId", msgpack.Payload{ .uint = session.active_window_id });
+
+    // Include available templates if layout db provided
+    if (layouts) |db| {
+        const templates = db.getAll();
+        var templates_array = try msgpack.Payload.arrPayload(templates.len, allocator);
+
+        for (templates, 0..) |template, i| {
+            var template_map = msgpack.Payload.mapPayload(allocator);
+            try template_map.mapPut("id", try msgpack.Payload.strToPayload(template.id, allocator));
+            try template_map.mapPut("name", try msgpack.Payload.strToPayload(template.name, allocator));
+            try template_map.mapPut("nodes", try layoutNodesToPayload(allocator, template.nodes));
+            try templates_array.setArrElement(i, template_map);
+        }
+
+        try payload.mapPut("templates", templates_array);
+    }
 
     // Build windows array
     const window_count = session.windowCount();

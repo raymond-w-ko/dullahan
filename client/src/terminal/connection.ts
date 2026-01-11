@@ -155,16 +155,25 @@ export interface WindowInfo {
   layout?: WindowLayout;
 }
 
+/** Layout template from server */
+export interface LayoutTemplate {
+  id: string;
+  name: string;
+  nodes: import("../../../protocol/schema/layout").LayoutNode[];
+}
+
 /** Layout update event */
 export interface LayoutUpdate {
   activeWindowId: number;
   windows: WindowInfo[];
+  templates?: LayoutTemplate[];
 }
 
 interface LayoutMessage {
   type: "layout";
   activeWindowId: number;
   windows: WindowInfo[];
+  templates?: LayoutTemplate[];
 }
 
 export type BinaryServerMessage =
@@ -547,8 +556,9 @@ export class TerminalConnection {
         this._layout = {
           activeWindowId: msg.activeWindowId,
           windows,
+          templates: msg.templates,
         };
-        debug.log("Layout received:", msg.windows.length, "windows, active:", msg.activeWindowId);
+        debug.log("Layout received:", msg.windows.length, "windows,", msg.templates?.length ?? 0, "templates, active:", msg.activeWindowId);
         this.onLayout?.(this._layout);
         break;
       }
