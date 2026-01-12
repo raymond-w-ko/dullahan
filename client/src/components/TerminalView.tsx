@@ -186,9 +186,14 @@ export function TerminalView({
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
-  // Focus IME textarea when terminal is clicked
+  // Focus IME textarea when terminal is clicked (but not when selecting text)
   // The keyboard handler is attached to the IME textarea, not the terminal element
   const handleTerminalClick = useCallback(() => {
+    // Don't steal focus if user is selecting text - this would clear the selection
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) {
+      return;
+    }
     imeRef.current?.focus();
   }, []);
 
