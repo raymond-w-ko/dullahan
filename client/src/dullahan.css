@@ -399,6 +399,27 @@ html, body {
   outline: none;
 }
 
+/* Hidden textarea for IME input (CJK, emoji, mobile keyboards) */
+.terminal-ime-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  opacity: 0;
+  /* NOT display: none - IME won't attach to hidden elements */
+  background: transparent;
+  color: transparent;
+  font-size: inherit;
+  font-family: inherit;
+  z-index: -1;
+}
+
 /* Scrollback indicator */
 .scrollback-indicator {
   position: absolute;

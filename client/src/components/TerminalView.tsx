@@ -58,7 +58,7 @@ export function TerminalView({
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
 
-  // Setup keyboard handler with keybinds
+  // Setup keyboard and IME handlers
   useEffect(() => {
     if (!terminalRef.current || isReadOnly) return;
 
@@ -66,6 +66,18 @@ export function TerminalView({
     const ime = createIMEHandler();
     keyboardRef.current = keyboard;
     imeRef.current = ime;
+
+    // Attach IME first - creates hidden textarea for composition input
+    ime.attach(terminalRef.current);
+    ime.setPaneId(paneId);
+
+    // Get the textarea element created by IME for keyboard attachment
+    // KeyboardHandler must attach to the same element for focus to work
+    const inputElement = ime.getElement();
+    if (!inputElement) {
+      console.error("IME failed to create input element");
+      return;
+    }
 
     // Create action context for keybind execution
     const actionContext: ActionContext = {
@@ -120,7 +132,8 @@ export function TerminalView({
       keyboard.setKeybinds(keybinds);
     });
 
-    keyboard.attach(terminalRef.current, (msg) => {
+    // Attach keyboard to IME's textarea element
+    keyboard.attach(inputElement, (msg) => {
       if (connection?.isConnected) {
         connection.sendKey(msg);
       }
@@ -140,12 +153,12 @@ export function TerminalView({
       onKeyInput?.();
     });
 
-    // Auto-focus terminal on mount
-    keyboard.focus();
+    // Auto-focus terminal on mount (focus IME's textarea)
+    ime.focus();
 
     return () => {
       keyboard.detach();
-      ime.clearCallback();
+      ime.detach();
       unsubscribeKeybinds();
     };
   }, [connection, isReadOnly, onKeyInput, paneId]);

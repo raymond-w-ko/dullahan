@@ -1,6 +1,6 @@
 # IME Support (CJK Input)
 
-Future implementation notes for Input Method Editor support.
+Implementation notes for Input Method Editor support (implemented in du-aud).
 
 ## Problem
 

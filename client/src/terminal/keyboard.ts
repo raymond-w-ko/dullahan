@@ -182,6 +182,11 @@ export class KeyboardHandler {
   }
 
   private handleKeyDown(e: KeyboardEvent): void {
+    // Skip events during IME composition - let IME handle them
+    if (e.isComposing) {
+      return;
+    }
+
     // Modifier-only keys always pass through to server
     // This maintains accurate modifier state for Kitty protocol
     if (isModifierKey(e.code)) {
@@ -229,6 +234,11 @@ export class KeyboardHandler {
   }
 
   private handleKeyUp(e: KeyboardEvent): void {
+    // Skip events during IME composition - let IME handle them
+    if (e.isComposing) {
+      return;
+    }
+
     // Modifier-only keys always pass through
     if (isModifierKey(e.code)) {
       e.preventDefault();
