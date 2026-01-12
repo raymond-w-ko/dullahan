@@ -1,0 +1,131 @@
+/**
+ * Liquid Glass Effect
+ *
+ * Glass morphism styles for containers and buttons.
+ * Uses SVG filters for advanced blur effects.
+ */
+
+/* ==========================================================================
+   Glass Container
+   ========================================================================== */
+
+.glassContainer {
+  position: fixed;
+  display: -webkit-box;
+  display: -ms-flexbox;
+  display: flex;
+  -webkit-box-align: center;
+      -ms-flex-align: center;
+          align-items: center;
+  -webkit-box-pack: center;
+      -ms-flex-pack: center;
+          justify-content: center;
+  width: 300px;
+  height: 200px;
+  border-radius: 30px;
+}
+
+.glassContainer::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    border-radius: 30px;
+    -webkit-box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
+            box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
+}
+
+.glassContainer::after {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    border-radius: 30px;
+    -webkit-backdrop-filter: blur(0px);
+            backdrop-filter: blur(0px);
+    -webkit-filter: url(#container-glass);
+            filter: url(#container-glass);
+    overflow: hidden;
+    isolation: isolate;
+}
+
+/* ==========================================================================
+   Glass Button
+   ========================================================================== */
+
+.glassBtn {
+  position: relative;
+  display: -webkit-box;
+  display: -ms-flexbox;
+  display: flex;
+  -webkit-box-align: center;
+      -ms-flex-align: center;
+          align-items: center;
+  -webkit-box-pack: center;
+      -ms-flex-pack: center;
+          justify-content: center;
+  cursor: pointer;
+  width: 70px;
+  height: 70px;
+  padding: 15px;
+  background: transparent;
+  border-radius: 9999px;
+  outline: none;
+  border: none;
+  z-index: 0;
+}
+
+.glassBtn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    border-radius: 9999px;
+    -webkit-box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
+            box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
+    background-color: rgb(255 255 255 / 10%);
+}
+
+.glassBtn::after {
+    content: '';
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    border-radius: 9999px;
+    -webkit-backdrop-filter: blur(0px);
+            backdrop-filter: blur(0px);
+    -webkit-filter: url(#btn-glass);
+            filter: url(#btn-glass);
+    overflow: hidden;
+    isolation: isolate;
+}
+
+.glassBtn svg {
+  width: 100%;
+  height: 100%;
+  stroke: #fff;
+}
+
+/* ==========================================================================
+   Animations
+   ========================================================================== */
+
+@-webkit-keyframes moveBackground {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 0% -1000%;
+  }
+}
+
+@keyframes moveBackground {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 0% -1000%;
+  }
+}

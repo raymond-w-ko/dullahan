@@ -446,6 +446,22 @@ sendKey(message: KeyMessage): void {
 }
 ```
 
+**Update embedded assets when adding client files:**
+
+When creating new CSS, JS, or static files in `client/`, you must update `scripts/generate-embedded-assets.ts`:
+1. Add new CSS files to the CSS list (line ~91)
+2. Add the `<link>` or `<script>` tag to the index.html template (line ~68-83)
+3. For other static files, add a `copyAsset()` call
+
+```typescript
+// ❌ BAD - created client/src/new-styles.css but forgot embedded assets
+// Distribution builds will be missing the file!
+
+// ✅ GOOD - update generate-embedded-assets.ts
+for (const css of ["palette.css", "liquid-glass.css", "dullahan.css", "themes.css"]) {
+//                               ^^^^^^^^^^^^^^^^^ add new CSS here
+```
+
 ---
 
 ## Theming & CSS Guidelines

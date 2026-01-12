@@ -196,7 +196,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   return (
     <div 
       ref={modalRef}
-      class={`settings-modal glass ${isDragging ? 'settings-modal--dragging' : ''}`}
+      class={`settings-modal glassContainer ${isDragging ? 'settings-modal--dragging' : ''}`}
       style={modalStyle}
       onClick={(e) => e.stopPropagation()}
     >

@@ -72,6 +72,7 @@ function prepareAssets(): Asset[] {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="/palette.css">
+  <link rel="stylesheet" href="/liquid-glass.css">
   <link rel="stylesheet" href="/dullahan.css">
   <link rel="stylesheet" href="/themes.css">
   <title>Dullahan</title>
@@ -87,7 +88,7 @@ function prepareAssets(): Asset[] {
   assets.push({ urlPath: "/index.html", embedPath: "assets/index.html", mimeType: "text/html", etag: indexEtag });
 
   // CSS files
-  for (const css of ["palette.css", "dullahan.css", "themes.css"]) {
+  for (const css of ["palette.css", "liquid-glass.css", "dullahan.css", "themes.css"]) {
     if (copyAsset(`client/src/${css}`, `${ASSETS_DIR}/${css}`)) {
       const content = readFileSync(`${ASSETS_DIR}/${css}`);
       assets.push({ urlPath: `/${css}`, embedPath: `assets/${css}`, mimeType: "text/css", etag: computeEtag(content) });

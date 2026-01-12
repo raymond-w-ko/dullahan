@@ -90,7 +90,7 @@ export function LayoutPickerModal() {
 
   return (
     <div class="layout-picker-backdrop" onClick={handleBackdropClick}>
-      <div class="layout-picker-modal glass">
+      <div class="layout-picker-modal glassContainer">
         <div class="layout-picker-header">
           <h2>New Window</h2>
           <button
