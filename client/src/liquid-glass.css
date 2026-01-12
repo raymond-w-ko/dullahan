@@ -1,131 +1,148 @@
 /**
  * Liquid Glass Effect
  *
- * Glass morphism styles for containers and buttons.
- * Uses SVG filters for advanced blur effects.
+ * Theme-adaptive glassmorphism that works on both light and dark themes.
+ * Uses CSS variables from the theme system for automatic adaptation.
+ *
+ * References:
+ * - https://css-tricks.com/getting-clarity-on-apples-liquid-glass/
+ * - https://ui.glass/generator/
+ * - https://medium.com/@developer_89726/dark-glassmorphism-the-aesthetic-that-will-define-ui-in-2026
  */
 
 /* ==========================================================================
    Glass Container
+
+   A utility class for glassmorphism effect. Does NOT set dimensions -
+   those should come from the component using this class.
    ========================================================================== */
 
 .glassContainer {
-  position: fixed;
-  display: -webkit-box;
-  display: -ms-flexbox;
-  display: flex;
-  -webkit-box-align: center;
-      -ms-flex-align: center;
-          align-items: center;
-  -webkit-box-pack: center;
-      -ms-flex-pack: center;
-          justify-content: center;
-  width: 300px;
-  height: 200px;
-  border-radius: 30px;
+  position: relative;
+
+  /* Semi-transparent background using theme colors
+     Uses selection-bg which themes define appropriately for light/dark */
+  background: color-mix(in srgb, var(--term-selection-bg) 40%, transparent);
+
+  /* Fallback for browsers without color-mix */
+  @supports not (background: color-mix(in srgb, red 50%, blue)) {
+    background: rgba(128, 128, 128, 0.2);
+  }
+
+  /* The core glass effect */
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+
+  /* Subtle border using bright-black from palette */
+  border: 1px solid color-mix(in srgb, var(--c8) 30%, transparent);
+  border-radius: 8px;
+
+  /* Depth shadow - dark for all themes */
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+
+  /* Ensure content is above any pseudo-elements */
+  isolation: isolate;
 }
 
-.glassContainer::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    overflow: hidden;
-    border-radius: 30px;
-    -webkit-box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
-            box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
-}
-
-.glassContainer::after {
-    content: '';
-    position: absolute;
-    z-index: -1;
-    inset: 0;
-    border-radius: 30px;
-    -webkit-backdrop-filter: blur(0px);
-            backdrop-filter: blur(0px);
-    -webkit-filter: url(#container-glass);
-            filter: url(#container-glass);
-    overflow: hidden;
-    isolation: isolate;
+/* Fallback border for browsers without color-mix */
+@supports not (border-color: color-mix(in srgb, red 50%, blue)) {
+  .glassContainer {
+    border-color: rgba(128, 128, 128, 0.3);
+  }
 }
 
 /* ==========================================================================
    Glass Button
+
+   Circular glass button with hover effects.
    ========================================================================== */
 
 .glassBtn {
   position: relative;
-  display: -webkit-box;
-  display: -ms-flexbox;
   display: flex;
-  -webkit-box-align: center;
-      -ms-flex-align: center;
-          align-items: center;
-  -webkit-box-pack: center;
-      -ms-flex-pack: center;
-          justify-content: center;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  width: 70px;
-  height: 70px;
-  padding: 15px;
-  background: transparent;
+  padding: 12px;
+  background: color-mix(in srgb, var(--term-selection-bg) 30%, transparent);
   border-radius: 9999px;
   outline: none;
-  border: none;
-  z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--c8) 25%, transparent);
+
+  backdrop-filter: blur(8px) saturate(140%);
+  -webkit-backdrop-filter: blur(8px) saturate(140%);
+
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+
+  transition: all 0.2s ease;
+  color: var(--term-fg);
 }
 
-.glassBtn::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: 0;
-    overflow: hidden;
-    border-radius: 9999px;
-    -webkit-box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
-            box-shadow: inset 2px 2px 0px -2px rgba(255, 255, 255, 0.7), inset 0 0 3px 1px rgba(255, 255, 255, 0.7);
-    background-color: rgb(255 255 255 / 10%);
+.glassBtn:hover {
+  background: color-mix(in srgb, var(--term-selection-bg) 50%, transparent);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
-.glassBtn::after {
-    content: '';
-    position: absolute;
-    z-index: -1;
-    inset: 0;
-    border-radius: 9999px;
-    -webkit-backdrop-filter: blur(0px);
-            backdrop-filter: blur(0px);
-    -webkit-filter: url(#btn-glass);
-            filter: url(#btn-glass);
-    overflow: hidden;
-    isolation: isolate;
+.glassBtn:active {
+  transform: scale(0.97);
 }
 
 .glassBtn svg {
   width: 100%;
   height: 100%;
-  stroke: #fff;
+  stroke: currentColor;
+}
+
+/* Fallback for browsers without color-mix */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .glassBtn {
+    background: rgba(128, 128, 128, 0.15);
+    border-color: rgba(128, 128, 128, 0.25);
+  }
+  .glassBtn:hover {
+    background: rgba(128, 128, 128, 0.25);
+  }
 }
 
 /* ==========================================================================
-   Animations
+   Glass Panel Variant
+
+   Lighter glass effect for inline panels (not modals).
    ========================================================================== */
 
-@-webkit-keyframes moveBackground {
-  from {
-    background-position: 0% 0%;
-  }
-  to {
-    background-position: 0% -1000%;
+.glassPanel {
+  background: color-mix(in srgb, var(--term-bg) 80%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid color-mix(in srgb, var(--c8) 20%, transparent);
+  border-radius: 6px;
+}
+
+/* ==========================================================================
+   Firefox Fallback
+
+   Firefox has backdrop-filter disabled by default. Provide solid fallback.
+   ========================================================================== */
+
+@supports not (backdrop-filter: blur(1px)) {
+  .glassContainer,
+  .glassBtn,
+  .glassPanel {
+    /* More opaque background when blur isn't available */
+    background: color-mix(in srgb, var(--term-bg) 95%, var(--term-fg) 5%);
   }
 }
 
-@keyframes moveBackground {
-  from {
-    background-position: 0% 0%;
-  }
-  to {
-    background-position: 0% -1000%;
+@-moz-document url-prefix() {
+  .glassContainer,
+  .glassBtn,
+  .glassPanel {
+    background: color-mix(in srgb, var(--term-bg) 95%, var(--term-fg) 5%);
   }
 }
