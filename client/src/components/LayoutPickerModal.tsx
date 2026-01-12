@@ -13,16 +13,17 @@ import type { LayoutTemplate } from "../terminal/connection";
 import type { LayoutNode } from "../../../protocol/schema/layout";
 
 /** Render a mini preview of a layout node */
-function renderPreviewNode(node: LayoutNode, level: number): h.JSX.Element {
+function renderPreviewNode(node: LayoutNode, level: number, key: number): h.JSX.Element {
   const isHorizontal = level % 2 === 0;
 
-  // Use flex-basis for sizing
+  // Use flex for sizing - parent direction determines which dimension matters
   const size = isHorizontal ? node.width : node.height;
-  const style = { flex: `0 0 ${size}%` };
+  const style = { flex: `${size} 0 0%` };
 
   if (node.type === "pane") {
     return (
       <div
+        key={key}
         class="layout-preview-pane"
         style={style}
       />
@@ -37,29 +38,20 @@ function renderPreviewNode(node: LayoutNode, level: number): h.JSX.Element {
       : "layout-preview-container layout-preview-vertical";
 
     return (
-      <div class={containerClass} style={style}>
-        {node.children.map((child, i) => (
-          <span key={i}>{renderPreviewNode(child, childLevel)}</span>
-        ))}
+      <div key={key} class={containerClass} style={style}>
+        {node.children.map((child, i) => renderPreviewNode(child, childLevel, i))}
       </div>
     );
   }
 
-  return <span />;
+  return <div key={key} />;
 }
 
 /** Render a mini preview of a layout template */
 function LayoutPreview({ template }: { template: LayoutTemplate }) {
-  const isHorizontal = true; // Root level is always horizontal
-  const rootClass = isHorizontal
-    ? "layout-preview-root layout-preview-horizontal"
-    : "layout-preview-root layout-preview-vertical";
-
   return (
-    <div class={rootClass}>
-      {template.nodes.map((node, i) => (
-        <span key={i}>{renderPreviewNode(node, 0)}</span>
-      ))}
+    <div class="layout-preview-root">
+      {template.nodes.map((node, i) => renderPreviewNode(node, 0, i))}
     </div>
   );
 }
@@ -78,43 +70,49 @@ export function LayoutPickerModal() {
     return null;
   }
 
-  const handleBackdropClick = (e: MouseEvent) => {
-    if ((e.target as HTMLElement).classList.contains("layout-picker-backdrop")) {
-      setLayoutPickerOpen(false);
-    }
-  };
-
   const handleSelect = (templateId: string) => {
     createWindowWithTemplate(templateId);
   };
 
+  // Close on escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setLayoutPickerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   return (
-    <div class="layout-picker-backdrop" onClick={handleBackdropClick}>
-      <div class="layout-picker-modal glassContainer">
-        <div class="layout-picker-header">
-          <h2>New Window</h2>
-          <button
-            class="layout-picker-close"
-            onClick={() => setLayoutPickerOpen(false)}
-          >
-            &times;
-          </button>
-        </div>
-        <div class="layout-picker-content">
-          <p class="layout-picker-hint">Choose a layout for the new window:</p>
-          <div class="layout-picker-grid">
-            {layoutTemplates.map((template) => (
-              <button
-                key={template.id}
-                class="layout-picker-item"
-                onClick={() => handleSelect(template.id)}
-                title={template.name}
-              >
-                <LayoutPreview template={template} />
-                <span class="layout-picker-name">{template.name}</span>
-              </button>
-            ))}
-          </div>
+    <div
+      class="layout-picker-modal glassContainer"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div class="layout-picker-header">
+        <h2>New Window</h2>
+        <button
+          class="layout-picker-close"
+          onClick={() => setLayoutPickerOpen(false)}
+        >
+          &times;
+        </button>
+      </div>
+      <div class="layout-picker-content">
+        <p class="layout-picker-hint">Choose a layout:</p>
+        <div class="layout-picker-grid">
+          {layoutTemplates.map((template) => (
+            <button
+              key={template.id}
+              class="layout-picker-item"
+              onClick={() => handleSelect(template.id)}
+              title={template.name}
+            >
+              <LayoutPreview template={template} />
+              <span class="layout-picker-name">{template.name}</span>
+            </button>
+          ))}
         </div>
       </div>
     </div>

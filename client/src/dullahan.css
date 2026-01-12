@@ -694,23 +694,15 @@ html, body {
    Layout Picker Modal
    ========================================================================== */
 
-.layout-picker-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .layout-picker-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   width: 90%;
-  max-width: 600px;
+  max-width: 500px;
   max-height: 80vh;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   animation: slideIn 0.2s ease-out;
@@ -721,12 +713,12 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: var(--space-2);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid color-mix(in srgb, var(--c8) 30%, transparent);
 }
 
 .layout-picker-header h2 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.85rem;
   font-weight: 600;
 }
 
@@ -749,7 +741,7 @@ html, body {
 
 .layout-picker-close:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--c8) 30%, transparent);
 }
 
 .layout-picker-content {
@@ -765,7 +757,7 @@ html, body {
 
 .layout-picker-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
   gap: var(--space-2);
 }
 
@@ -775,38 +767,41 @@ html, body {
   align-items: center;
   gap: var(--space-1);
   padding: var(--space-2);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--term-bg) 50%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c8) 20%, transparent);
   border-radius: 0.5rem;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 
 .layout-picker-item:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--term-selection-bg) 60%, transparent);
   border-color: var(--c4);
 }
 
 .layout-picker-name {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--term-fg);
   text-align: center;
 }
 
 /* Layout preview mini-view */
 .layout-preview-root {
-  width: 80px;
-  height: 50px;
+  width: 72px;
+  height: 48px;
   background: var(--term-bg);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid color-mix(in srgb, var(--c8) 40%, transparent);
   border-radius: 0.25rem;
   overflow: hidden;
   display: flex;
+  flex-direction: row;
 }
 
 .layout-preview-container {
   display: flex;
   box-sizing: border-box;
+  width: 100%;
+  height: 100%;
 }
 
 .layout-preview-horizontal {
@@ -820,7 +815,9 @@ html, body {
 .layout-preview-pane {
   box-sizing: border-box;
   background: var(--c8);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--term-bg) 50%, transparent);
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Settings Trigger Button */
