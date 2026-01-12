@@ -376,7 +376,7 @@ pub const EventLoop = struct {
             defer arena.deinit();
             const arena_alloc = arena.allocator();
 
-            const response = self.handleCommand(cmd_result.command, arena_alloc) catch |e| blk: {
+            const response = self.handleCommand(cmd_result.parsed.command, cmd_result.parsed.data, arena_alloc) catch |e| blk: {
                 log.err("Command error: {any}", .{e});
                 break :blk ipc.Response.err("Internal error");
             };
@@ -387,7 +387,7 @@ pub const EventLoop = struct {
         }
     }
 
-    fn handleCommand(self: *EventLoop, command: ipc.Command, alloc: std.mem.Allocator) !ipc.Response {
+    fn handleCommand(self: *EventLoop, command: ipc.Command, data: ?[]const u8, alloc: std.mem.Allocator) !ipc.Response {
         return switch (command) {
             .ping => ipc.Response.ok("pong"),
 
@@ -427,8 +427,8 @@ pub const EventLoop = struct {
                     }
                 }
 
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Server status", data);
+                const status_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Server status", status_data);
             },
 
             .quit => blk: {
@@ -444,8 +444,8 @@ pub const EventLoop = struct {
                     const cmd: ipc.Command = @enumFromInt(field.value);
                     try writer.print("  {s:<10} - {s}\n", .{ field.name, cmd.description() });
                 }
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Help", data);
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Help", result_data);
             },
 
             .dump => blk: {
@@ -456,8 +456,8 @@ pub const EventLoop = struct {
                 try writer.print("Server: up={d}s cmds={d}\n", .{ up, self.commands_processed });
                 try self.session.dump(writer);
 
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("State dump", data);
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("State dump", result_data);
             },
 
             .@"dump-raw" => blk: {
@@ -468,8 +468,8 @@ pub const EventLoop = struct {
                 const writer = buf.writer(alloc);
                 try pane.dumpRaw(writer);
 
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Raw cell dump", data);
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Raw cell dump", result_data);
             },
 
             .@"debug-capture" => blk: {
@@ -549,8 +549,8 @@ pub const EventLoop = struct {
                     try writer.print("  pane {d}: {d}x{d}\n", .{ pane.id, pane.cols, pane.rows });
                 }
 
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Server console size", data);
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Server console size", result_data);
             },
 
             .layouts => blk: {
@@ -570,8 +570,95 @@ pub const EventLoop = struct {
                 }
                 try writer.writeAll("\n]");
 
-                const data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Available layouts", data);
+                const json_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Available layouts", json_data);
+            },
+
+            .panes => blk: {
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                const writer = buf.writer(alloc);
+
+                // List all pane IDs from registry
+                var pane_it = self.session.pane_registry.iterator();
+                var first = true;
+                while (pane_it.next()) |pane_ptr| {
+                    const pane = pane_ptr.*;
+                    if (!first) try writer.writeAll(" ");
+                    try writer.print("{d}", .{pane.id});
+                    first = false;
+                }
+                if (first) {
+                    try writer.writeAll("(no panes)");
+                }
+
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Pane IDs", result_data);
+            },
+
+            .windows => blk: {
+                var buf: std.ArrayListUnmanaged(u8) = .{};
+                const writer = buf.writer(alloc);
+
+                // JSON array of windows with pane IDs
+                try writer.writeAll("[\n");
+                var win_it = self.session.windows.iterator();
+                var first_win = true;
+                while (win_it.next()) |entry| {
+                    if (!first_win) try writer.writeAll(",\n");
+                    first_win = false;
+
+                    const window = entry.value_ptr;
+                    try writer.print("  {{ \"id\": {d}, \"panes\": [", .{window.id});
+
+                    for (window.pane_ids.items, 0..) |pane_id, i| {
+                        if (i > 0) try writer.writeAll(", ");
+                        try writer.print("{d}", .{pane_id});
+                    }
+                    try writer.writeAll("]");
+
+                    // Include template if set
+                    if (window.template_id) |template| {
+                        try writer.print(", \"template\": \"{s}\"", .{template});
+                    }
+                    try writer.writeAll(" }");
+                }
+                try writer.writeAll("\n]");
+
+                const result_data = try buf.toOwnedSlice(alloc);
+                break :blk ipc.Response.okWithData("Windows", result_data);
+            },
+
+            .send => blk: {
+                const args = data orelse
+                    break :blk ipc.Response.err("Usage: send <pane_id> [text]\nReads from stdin if no text provided");
+
+                // Parse pane ID from first argument
+                const space_idx = std.mem.indexOf(u8, args, " ");
+                const pane_id_str = if (space_idx) |idx| args[0..idx] else args;
+                const text = if (space_idx) |idx| std.mem.trim(u8, args[idx + 1 ..], &std.ascii.whitespace) else null;
+
+                const pane_id = std.fmt.parseInt(u16, pane_id_str, 10) catch
+                    break :blk ipc.Response.err("Invalid pane ID. Usage: send <pane_id> [text]");
+
+                const pane = self.session.pane_registry.get(pane_id) orelse
+                    break :blk ipc.Response.err("Pane not found");
+
+                // If no text provided, that's handled by CLI reading stdin
+                const send_text = text orelse
+                    break :blk ipc.Response.err("No text provided. Use stdin: echo 'text' | dullahan send <pane_id>");
+
+                if (send_text.len == 0)
+                    break :blk ipc.Response.err("Empty text. Use stdin: echo 'text' | dullahan send <pane_id>");
+
+                pane.writeInput(send_text) catch |e| {
+                    var errbuf: [256]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&errbuf, "Failed to send: {any}", .{e}) catch "Failed to send";
+                    break :blk ipc.Response.err(msg);
+                };
+
+                var msg_buf: [64]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Sent {d} bytes to pane {d}", .{ send_text.len, pane.id }) catch "Sent";
+                break :blk ipc.Response.ok(msg);
             },
         };
     }

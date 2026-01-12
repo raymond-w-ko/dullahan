@@ -9,6 +9,7 @@ const test_runners = @import("test_runners.zig");
 
 pub const CliArgs = struct {
     command: ?ipc.Command = null,
+    send_data: ?[]const u8 = null, // Data payload for send command (pane_id + text)
     timeout_ms: u32 = 5000,
     socket_path: ?[]const u8 = null, // null means use default from paths module
     pid_path: ?[]const u8 = null, // null means use default from paths module
@@ -20,7 +21,6 @@ pub const CliArgs = struct {
     test_command: ?test_runners.TestCommand = null,
 
     pub fn parse(allocator: std.mem.Allocator) !CliArgs {
-        _ = allocator;
         var args = CliArgs{};
 
         var arg_iter = std.process.args();
@@ -46,6 +46,20 @@ pub const CliArgs = struct {
                     // No subcommand given, show help
                     args.test_command = .help;
                 }
+            } else if (std.mem.eql(u8, arg, "send")) {
+                // send <pane_id> [text...] - if no text, will read from stdin
+                args.command = .send;
+                // Collect remaining args (pane_id + optional text)
+                var data_parts: std.ArrayListUnmanaged([]const u8) = .{};
+                defer data_parts.deinit(allocator);
+                while (arg_iter.next()) |data_arg| {
+                    data_parts.append(allocator, data_arg) catch {};
+                }
+                if (data_parts.items.len > 0) {
+                    // Join with spaces: "pane_id text..."
+                    args.send_data = std.mem.join(allocator, " ", data_parts.items) catch null;
+                }
+                // If only pane_id provided (no text), we'll read from stdin in runClient
             } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
                 const val = arg["--timeout=".len..];
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch 5000;
@@ -70,12 +84,15 @@ pub fn printUsage() void {
         \\Usage: dullahan [OPTIONS] <COMMAND>
         \\
         \\Commands:
-        \\  serve         Run as server (foreground)
-        \\  status        Show server status
-        \\  ping          Check if server is responsive
-        \\  quit          Shutdown the server
-        \\  help          Show available commands
-        \\  test          Run test utilities (see 'dullahan test help')
+        \\  serve                      Run as server (foreground)
+        \\  status                     Show server status
+        \\  ping                       Check if server is responsive
+        \\  quit                       Shutdown the server
+        \\  help                       Show available commands
+        \\  panes                      List all pane IDs
+        \\  windows                    List windows with pane IDs (JSON)
+        \\  send <pane_id> [text]      Send text to pane (reads stdin if no text)
+        \\  test                       Run test utilities (see 'dullahan test help')
         \\
         \\Options:
         \\  -h, --help           Show this help
@@ -87,9 +104,10 @@ pub fn printUsage() void {
         \\
         \\Examples:
         \\  dullahan serve                          # Start server
-        \\  dullahan serve --static-dir=./client    # Serve client files
-        \\  dullahan status                         # Get server status
-        \\  dullahan --timeout=1000 ping            # Ping with 1s timeout
+        \\  dullahan panes                          # List pane IDs: "0 1 2"
+        \\  dullahan windows                        # List windows with panes (JSON)
+        \\  dullahan send 1 "echo hello"            # Send to pane 1
+        \\  echo "ls -la" | dullahan send 1         # Send from stdin to pane 1
         \\  dullahan test keytest-kitty             # Run keyboard tester
         \\
     ;
@@ -142,8 +160,43 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
         }
     }
 
+    // Prepare command data
+    var send_data = args.send_data;
+    var stdin_buf: ?[]u8 = null;
+    defer if (stdin_buf) |buf| allocator.free(buf);
+
+    // For send command: if only pane_id provided (no text), read from stdin
+    if (command == .send) {
+        if (send_data) |data| {
+            // Check if data contains text (has a space after pane_id)
+            const has_text = std.mem.indexOf(u8, data, " ") != null;
+            if (!has_text) {
+                // Only pane_id provided, read text from stdin
+                const stdin_text = readStdin(allocator) catch |e| {
+                    std.debug.print("Error reading stdin: {}\n", .{e});
+                    return e;
+                };
+                if (stdin_text.len > 0) {
+                    // Combine: "pane_id stdin_text"
+                    stdin_buf = std.fmt.allocPrint(allocator, "{s} {s}", .{ data, stdin_text }) catch null;
+                    allocator.free(stdin_text);
+                    if (stdin_buf) |buf| {
+                        send_data = buf;
+                    }
+                } else {
+                    allocator.free(stdin_text);
+                    std.debug.print("Error: No text provided. Usage: send <pane_id> [text]\n", .{});
+                    return error.NoData;
+                }
+            }
+        } else {
+            std.debug.print("Error: send requires pane_id. Usage: send <pane_id> [text]\n", .{});
+            return error.NoData;
+        }
+    }
+
     // Send command
-    const response = client.sendCommand(command, allocator) catch |e| {
+    const response = client.sendCommandWithData(command, send_data, allocator) catch |e| {
         switch (e) {
             error.Timeout => std.debug.print("Error: Command timed out\n", .{}),
             error.ServerNotRunning => std.debug.print("Error: Cannot connect to server\n", .{}),
@@ -154,6 +207,33 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
     defer allocator.free(response);
 
     std.debug.print("{s}", .{response});
+}
+
+/// Read all available data from stdin (for piped input)
+fn readStdin(allocator: std.mem.Allocator) ![]u8 {
+    const posix = std.posix;
+    const stdin_fd = posix.STDIN_FILENO;
+
+    // Read all stdin into buffer
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+
+    var read_buf: [4096]u8 = undefined;
+    while (true) {
+        const n = posix.read(stdin_fd, &read_buf) catch |e| {
+            if (e == error.WouldBlock) break;
+            return e;
+        };
+        if (n == 0) break;
+        try buf.appendSlice(allocator, read_buf[0..n]);
+    }
+
+    // Trim trailing newlines before converting to owned slice
+    while (buf.items.len > 0 and (buf.items[buf.items.len - 1] == '\n' or buf.items[buf.items.len - 1] == '\r')) {
+        _ = buf.pop();
+    }
+
+    return buf.toOwnedSlice(allocator);
 }
 
 fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {

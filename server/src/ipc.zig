@@ -39,6 +39,9 @@ pub const Command = enum {
     @"pty-log-off",
     ttysize,
     layouts,
+    panes,
+    windows,
+    send,
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -54,6 +57,9 @@ pub const Command = enum {
             .{ "pty-log-off", .@"pty-log-off" },
             .{ "ttysize", .ttysize },
             .{ "layouts", .layouts },
+            .{ "panes", .panes },
+            .{ "windows", .windows },
+            .{ "send", .send },
         });
         return map.get(s);
     }
@@ -72,7 +78,38 @@ pub const Command = enum {
             .@"pty-log-off" => "Disable PTY traffic logging",
             .ttysize => "Query server's console terminal size via ioctl TIOCGWINSZ",
             .layouts => "List available layout templates (JSON)",
+            .panes => "List all pane IDs",
+            .windows => "List windows with their pane IDs (JSON)",
+            .send => "Send text to pane: send <pane_id> [text] (reads stdin if no text)",
         };
+    }
+};
+
+/// Parsed command with optional data payload
+pub const ParsedCommand = struct {
+    command: Command,
+    data: ?[]const u8 = null,
+
+    /// Parse a command string, extracting command and optional data.
+    /// Format: "command" or "command data..."
+    pub fn parse(input: []const u8) ?ParsedCommand {
+        const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
+        if (trimmed.len == 0) return null;
+
+        // Split on first space
+        if (std.mem.indexOf(u8, trimmed, " ")) |space_idx| {
+            const cmd_str = trimmed[0..space_idx];
+            const data = std.mem.trim(u8, trimmed[space_idx + 1 ..], &std.ascii.whitespace);
+            const command = Command.fromString(cmd_str) orelse return null;
+            return .{
+                .command = command,
+                .data = if (data.len > 0) data else null,
+            };
+        }
+
+        // No space - just command
+        const command = Command.fromString(trimmed) orelse return null;
+        return .{ .command = command };
     }
 };
 
@@ -186,18 +223,15 @@ pub const Server = struct {
     }
 
     /// Accept a connection and read command (blocking)
-    pub fn acceptCommand(self: *Server, allocator: std.mem.Allocator) !struct { conn: posix.socket_t, command: Command } {
+    pub fn acceptCommand(self: *Server, allocator: std.mem.Allocator) !struct { conn: posix.socket_t, parsed: ParsedCommand } {
         const conn = try posix.accept(self.socket, null, null, 0);
         errdefer posix.close(conn);
 
-        var buf: [256]u8 = undefined;
+        var buf: [4096]u8 = undefined; // Larger buffer for send data
         const n = try posix.read(conn, &buf);
         if (n == 0) return error.ConnectionClosed;
 
-        // Trim whitespace
-        const cmd_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
-
-        const command = Command.fromString(cmd_str) orelse {
+        const parsed = ParsedCommand.parse(buf[0..n]) orelse {
             // Send error response for unknown command
             const resp = Response.err("Unknown command. Use 'help' for available commands.");
             const formatted = try resp.format(allocator);
@@ -207,13 +241,13 @@ pub const Server = struct {
             return error.UnknownCommand;
         };
 
-        return .{ .conn = conn, .command = command };
+        return .{ .conn = conn, .parsed = parsed };
     }
 
     /// Accept a connection with timeout (non-blocking with poll)
-    /// Returns null if timeout expires, otherwise returns the command
+    /// Returns null if timeout expires, otherwise returns the parsed command
     /// timeout_ms: timeout in milliseconds (-1 for infinite)
-    pub fn acceptCommandTimeout(self: *Server, allocator: std.mem.Allocator, timeout_ms: i32) !?struct { conn: posix.socket_t, command: Command } {
+    pub fn acceptCommandTimeout(self: *Server, allocator: std.mem.Allocator, timeout_ms: i32) !?struct { conn: posix.socket_t, parsed: ParsedCommand } {
         // Poll the socket with timeout
         var poll_fds = [_]posix.pollfd{
             .{ .fd = self.socket, .events = posix.POLL.IN, .revents = 0 },
@@ -238,14 +272,11 @@ pub const Server = struct {
             const conn = try posix.accept(self.socket, null, null, 0);
             errdefer posix.close(conn);
 
-            var buf: [256]u8 = undefined;
+            var buf: [4096]u8 = undefined; // Larger buffer for send data
             const n = try posix.read(conn, &buf);
             if (n == 0) return error.ConnectionClosed;
 
-            // Trim whitespace
-            const cmd_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
-
-            const command = Command.fromString(cmd_str) orelse {
+            const parsed = ParsedCommand.parse(buf[0..n]) orelse {
                 // Send error response for unknown command
                 const resp = Response.err("Unknown command. Use 'help' for available commands.");
                 const formatted = try resp.format(allocator);
@@ -255,7 +286,7 @@ pub const Server = struct {
                 return error.UnknownCommand;
             };
 
-            return .{ .conn = conn, .command = command };
+            return .{ .conn = conn, .parsed = parsed };
         }
 
         return null;
@@ -300,6 +331,11 @@ pub const Client = struct {
 
     /// Send command and receive response
     pub fn sendCommand(self: *Client, command: Command, allocator: std.mem.Allocator) ![]u8 {
+        return self.sendCommandWithData(command, null, allocator);
+    }
+
+    /// Send command with optional data payload and receive response
+    pub fn sendCommandWithData(self: *Client, command: Command, data: ?[]const u8, allocator: std.mem.Allocator) ![]u8 {
         const socket = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
         defer posix.close(socket);
 
@@ -319,9 +355,13 @@ pub const Client = struct {
             return error.ServerNotRunning;
         };
 
-        // Send command
+        // Send command (with optional data)
         const cmd_name = @tagName(command);
         _ = try posix.write(socket, cmd_name);
+        if (data) |d| {
+            _ = try posix.write(socket, " ");
+            _ = try posix.write(socket, d);
+        }
 
         // Read response
         var response: std.ArrayListUnmanaged(u8) = .{};

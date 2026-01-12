@@ -388,6 +388,7 @@ pub fn generateSnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
                 .y = cursor.y,
                 .visible = pane.terminal.modes.get(.cursor_visible),
                 .style = cursor_style_str,
+                .blink = pane.terminal.modes.get(.cursor_blinking),
             },
             .altScreen = pane.terminal.screens.active_key == .alternate,
             .scrollback = .{
