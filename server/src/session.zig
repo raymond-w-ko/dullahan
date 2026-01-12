@@ -178,6 +178,53 @@ pub const Session = struct {
         };
     }
 
+    /// Create a new window with a specified number of shell panes.
+    /// Returns the window ID and a list of pane IDs (caller must free).
+    pub fn createWindowWithPaneCount(self: *Session, pane_count: usize) !struct { window_id: u16, pane_ids: []u16 } {
+        if (pane_count == 0) return error.InvalidPaneCount;
+
+        // Create window
+        const window_id = self.next_window_id;
+        self.next_window_id += 1;
+
+        var window = try Window.init(self.allocator, .{
+            .cols = self.default_cols,
+            .rows = self.default_rows,
+            .id = window_id,
+        });
+        errdefer window.deinit();
+
+        // Create the requested number of shell panes
+        var pane_ids = try self.allocator.alloc(u16, pane_count);
+        errdefer self.allocator.free(pane_ids);
+
+        var created_count: usize = 0;
+        errdefer {
+            // Clean up any panes we created if we fail
+            for (pane_ids[0..created_count]) |pid| {
+                self.pane_registry.destroy(pid);
+            }
+        }
+
+        for (0..pane_count) |i| {
+            const pane_id = try self.pane_registry.createShellPane();
+            pane_ids[i] = pane_id;
+            created_count += 1;
+            try window.addPane(pane_id);
+        }
+
+        // Set active pane to first shell
+        window.active_pane_id = pane_ids[0];
+
+        try self.windows.put(window_id, window);
+        self.active_window_id = window_id;
+
+        return .{
+            .window_id = window_id,
+            .pane_ids = pane_ids,
+        };
+    }
+
     /// Get a window by ID
     pub fn getWindow(self: *Session, window_id: u16) ?*Window {
         return self.windows.getPtr(window_id);

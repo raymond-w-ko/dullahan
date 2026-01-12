@@ -241,9 +241,7 @@ export function getLayoutTemplates(): LayoutTemplate[] {
 }
 
 export function createWindowWithTemplate(templateId: string) {
-  // For now, just create a window (server uses default template)
-  // TODO: Pass templateId to server when protocol supports it
-  store.connection?.createWindow();
+  store.connection?.createWindow(templateId);
   setLayoutPickerOpen(false);
 }
 

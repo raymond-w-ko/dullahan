@@ -75,6 +75,11 @@ const HelloMessage = struct {
     clientId: []const u8,
 };
 
+const NewWindowMessage = struct {
+    type: []const u8,
+    templateId: ?[]const u8 = null,
+};
+
 const MessageType = struct {
     type: []const u8,
 };
@@ -1080,25 +1085,45 @@ pub const EventLoop = struct {
                 return;
             }
 
-            // Create new window with 3 shell panes (no debug pane)
-            const result = self.session.createShellWindow() catch |e| {
+            // Parse the message to get templateId
+            const new_window_msg = std.json.parseFromSlice(NewWindowMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.err("Failed to parse new_window message: {any}", .{e});
+                return;
+            };
+            defer new_window_msg.deinit();
+
+            // Get template ID (default to 3-col if not specified)
+            const template_id = new_window_msg.value.templateId orelse "3-col";
+
+            // Look up the template
+            const template = self.layouts.get(template_id) orelse blk: {
+                log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
+                break :blk self.layouts.get("3-col") orelse {
+                    log.err("Fallback template '3-col' not found", .{});
+                    return;
+                };
+            };
+
+            // Count panes needed for this template
+            const pane_count = template.countPanes();
+            log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+
+            // Create new window with the required number of panes
+            const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
                 log.err("Failed to create new window: {any}", .{e});
                 return;
             };
-            log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
-                result.window_id,
-                result.shell1_pane_id,
-                result.shell2_pane_id,
-                result.shell3_pane_id,
-            });
+            defer self.allocator.free(result.pane_ids);
 
-            // Assign layout to the new window (use 3-col for 3 panes)
+            log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+
+            // Assign layout to the new window
             if (self.session.getWindow(result.window_id)) |window| {
-                if (self.layouts.get("3-col")) |template| {
-                    window.setLayoutFromTemplate(template) catch |e| {
-                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
-                    };
-                }
+                window.setLayoutFromTemplate(template) catch |e| {
+                    log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                };
             }
 
             // Broadcast updated layout to all clients
@@ -1107,8 +1132,7 @@ pub const EventLoop = struct {
             };
 
             // Send initial snapshots for new panes to all clients
-            const new_pane_ids = [_]u16{ result.shell1_pane_id, result.shell2_pane_id, result.shell3_pane_id };
-            for (new_pane_ids) |pane_id| {
+            for (result.pane_ids) |pane_id| {
                 if (self.session.pane_registry.get(pane_id)) |pane| {
                     for (self.clients.items) |*c| {
                         self.sendSnapshot(&c.ws, pane) catch |e| {
@@ -1258,25 +1282,45 @@ pub const EventLoop = struct {
                 return;
             }
 
-            // Create new window with 3 shell panes (no debug pane)
-            const result = self.session.createShellWindow() catch |e| {
+            // Parse the message to get templateId
+            const new_window_msg = std.json.parseFromSlice(NewWindowMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.err("Failed to parse new_window message: {any}", .{e});
+                return;
+            };
+            defer new_window_msg.deinit();
+
+            // Get template ID (default to 3-col if not specified)
+            const template_id = new_window_msg.value.templateId orelse "3-col";
+
+            // Look up the template
+            const template = self.layouts.get(template_id) orelse blk: {
+                log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
+                break :blk self.layouts.get("3-col") orelse {
+                    log.err("Fallback template '3-col' not found", .{});
+                    return;
+                };
+            };
+
+            // Count panes needed for this template
+            const pane_count = template.countPanes();
+            log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+
+            // Create new window with the required number of panes
+            const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
                 log.err("Failed to create new window: {any}", .{e});
                 return;
             };
-            log.info("Created new window {d} with panes [{d}, {d}, {d}]", .{
-                result.window_id,
-                result.shell1_pane_id,
-                result.shell2_pane_id,
-                result.shell3_pane_id,
-            });
+            defer self.allocator.free(result.pane_ids);
 
-            // Assign layout to the new window (use 3-col for 3 panes)
+            log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+
+            // Assign layout to the new window
             if (self.session.getWindow(result.window_id)) |window| {
-                if (self.layouts.get("3-col")) |template| {
-                    window.setLayoutFromTemplate(template) catch |e| {
-                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
-                    };
-                }
+                window.setLayoutFromTemplate(template) catch |e| {
+                    log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                };
             }
 
             // Broadcast updated layout to all clients
@@ -1285,8 +1329,7 @@ pub const EventLoop = struct {
             };
 
             // Send initial snapshots for new panes to all clients
-            const new_pane_ids = [_]u16{ result.shell1_pane_id, result.shell2_pane_id, result.shell3_pane_id };
-            for (new_pane_ids) |pane_id| {
+            for (result.pane_ids) |pane_id| {
                 if (self.session.pane_registry.get(pane_id)) |pane| {
                     for (self.clients.items) |*c| {
                         self.sendSnapshot(&c.ws, pane) catch |e| {

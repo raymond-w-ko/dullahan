@@ -201,7 +201,7 @@ export type ClientMessage =
   | { type: "focus"; paneId: number }  // Request focus on pane
   | { type: "hello"; clientId: string }  // Client identification on connect
   | { type: "request_master" }  // Request to become master
-  | { type: "new_window" };  // Create a new window (master only)
+  | { type: "new_window"; templateId?: string };  // Create a new window (master only)
 
 /** Delta update event with applied changes */
 export interface DeltaUpdate {
@@ -913,10 +913,11 @@ export class TerminalConnection {
    * Create a new window with default panes.
    * Only the master client can create windows. Non-masters will have
    * their requests silently ignored by the server.
+   * @param templateId Optional layout template ID (e.g., "2-col", "2x2", "single")
    */
-  createWindow(): void {
-    debug.log("Requesting new window creation");
-    this.send({ type: "new_window" });
+  createWindow(templateId?: string): void {
+    debug.log("Requesting new window creation", templateId ? `with template: ${templateId}` : "");
+    this.send({ type: "new_window", templateId });
   }
 
   sendPing(): void {
