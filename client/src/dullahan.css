@@ -670,6 +670,15 @@ html, body {
   accent-color: var(--c4);
 }
 
+.settings-field--checkbox {
+  justify-content: flex-start;
+}
+
+.settings-field--checkbox .settings-label {
+  width: auto;
+  text-align: left;
+}
+
 .settings-field select {
   cursor: pointer;
 }

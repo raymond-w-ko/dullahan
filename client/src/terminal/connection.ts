@@ -47,6 +47,7 @@ export interface TerminalSnapshot {
     y: number;
     visible: boolean;
     style: "block" | "underline" | "bar";
+    blink: boolean; // DEC Mode 12 (AT&T cursor blink) state from server
   };
   altScreen: boolean;
   scrollback: ScrollbackInfo;
@@ -80,6 +81,7 @@ interface BinarySnapshot {
     y: number;
     visible: boolean;
     style: string;
+    blink?: boolean;   // DEC Mode 12 state (optional for backwards compat)
   };
   altScreen: boolean;
   scrollback: {
@@ -104,6 +106,7 @@ interface BinaryDelta {
     y: number;
     visible: boolean;
     style: string;
+    blink?: boolean;   // DEC Mode 12 state (optional for backwards compat)
   };
   altScreen: boolean;
   vp: {
@@ -438,6 +441,7 @@ export class TerminalConnection {
             y: msg.cursor.y,
             visible: msg.cursor.visible,
             style: msg.cursor.style as "block" | "underline" | "bar",
+            blink: msg.cursor.blink ?? true, // Default to true (blinking) if not sent
           },
           altScreen: msg.altScreen,
           scrollback: msg.scrollback,
@@ -1053,6 +1057,7 @@ export class TerminalConnection {
         y: delta.cursor.y,
         visible: delta.cursor.visible,
         style: delta.cursor.style as "block" | "underline" | "bar",
+        blink: delta.cursor.blink ?? true, // Default to true (blinking) if not sent
       },
       altScreen: delta.altScreen,
       scrollback: {

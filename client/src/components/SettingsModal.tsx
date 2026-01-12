@@ -22,6 +22,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [cursorOpacity, setCursorOpacity] = useState(() => config.get('cursorOpacity'));
   const [cursorBlink, setCursorBlink] = useState(() => config.get('cursorBlink'));
   const [bellFeatures, setBellFeatures] = useState(() => config.get('bellFeatures'));
+  const [selectionClearOnCopy, setSelectionClearOnCopy] = useState(() => config.get('selectionClearOnCopy'));
 
   // Drag state
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -180,6 +181,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     const value = (e.target as HTMLInputElement).value;
     setBellFeatures(value);
     config.set('bellFeatures', value);
+  };
+
+  const handleSelectionClearOnCopyChange = (e: Event) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    setSelectionClearOnCopy(checked);
+    config.set('selectionClearOnCopy', checked);
   };
 
   const modalStyle = {
@@ -360,6 +367,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 onChange={handleBellFeaturesChange}
                 placeholder="audio,attention,title"
               />
+            </label>
+          </div>
+
+          {/* Selection */}
+          <div class="settings-section">
+            <h3>Selection</h3>
+
+            <label class="settings-field settings-field--checkbox">
+              <input
+                type="checkbox"
+                checked={selectionClearOnCopy}
+                onChange={handleSelectionClearOnCopyChange}
+              />
+              <span class="settings-label">Clear selection on copy</span>
             </label>
           </div>
         </div>

@@ -117,6 +117,7 @@ const CursorInfo = struct {
     y: usize,
     visible: bool,
     style: []const u8,
+    blink: bool, // DEC Mode 12 (AT&T cursor blink) state
 };
 
 /// Scrollback info for client-side scrolling
@@ -452,6 +453,7 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     try cursor_map.mapPut("y", msgpack.Payload{ .uint = cursor.y });
     try cursor_map.mapPut("visible", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_visible) });
     try cursor_map.mapPut("style", try msgpack.Payload.strToPayload(cursor_style_str, allocator));
+    try cursor_map.mapPut("blink", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_blinking) });
     try payload.mapPut("cursor", cursor_map);
 
     // Alt screen flag
@@ -715,6 +717,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     try cursor_map.mapPut("y", msgpack.Payload{ .uint = cursor.y });
     try cursor_map.mapPut("visible", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_visible) });
     try cursor_map.mapPut("style", try msgpack.Payload.strToPayload(cursor_style_str, allocator));
+    try cursor_map.mapPut("blink", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_blinking) });
     try payload.mapPut("cursor", cursor_map);
 
     // Alt screen flag

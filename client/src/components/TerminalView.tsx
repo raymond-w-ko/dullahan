@@ -303,8 +303,12 @@ function renderLine(
   // Cursor is on this line - need to split at cursor position
   const elements: preact.JSX.Element[] = [];
   let x = 0;
-  // '' (auto) = blink by default, 'true' = blink, 'false' = no blink
-  const shouldBlink = cursorBlink !== "false";
+  // Determine if cursor should blink:
+  // - '' (auto): use server's DEC Mode 12 state (cursor.blink)
+  // - 'true': always blink (override server)
+  // - 'false': never blink (override server)
+  const shouldBlink =
+    cursorBlink === "" ? cursor.blink : cursorBlink === "true";
   const cursorClass = `cursor-${cursorStyle}${shouldBlink ? " cursor-blink" : ""}`;
   // For non-block cursors, preserve original text styling
   const preserveStyle = cursorStyle !== "block";
