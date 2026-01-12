@@ -11,6 +11,7 @@ const Pty = @import("pty.zig").Pty;
 const snapshot = @import("snapshot.zig");
 const process = @import("process.zig");
 const dlog = @import("dlog.zig");
+const shell = @import("shell.zig");
 
 const log = std.log.scoped(.pane);
 
@@ -158,12 +159,12 @@ pub const Pane = struct {
         }) catch return error.PtyOpenFailed;
         errdefer pty.deinit();
 
-        // Get user's shell from environment, fallback to /bin/sh
-        const shell = std.posix.getenv("SHELL") orelse "/bin/sh";
-        
+        // Detect user's shell
+        const shell_info = shell.detectShell();
+
         // Create null-terminated shell path
         var shell_buf: [256:0]u8 = undefined;
-        const shell_z = std.fmt.bufPrintZ(&shell_buf, "{s}", .{shell}) catch "/bin/sh";
+        const shell_z = std.fmt.bufPrintZ(&shell_buf, "{s}", .{shell_info.path}) catch "/bin/sh";
 
         // Spawn shell
         const pid = pty.spawn(&.{shell_z}, null) catch return error.SpawnFailed;
@@ -171,7 +172,12 @@ pub const Pane = struct {
         self.pty = pty;
         self.child_pid = pid;
 
-        log.info("Spawned shell (pid={d}) in pane {d}", .{ pid, self.id });
+        log.info("Spawned shell '{s}' (pid={d}) in pane {d} (source: {s})", .{
+            shell_info.path,
+            pid,
+            self.id,
+            shell_info.sourceDescription(),
+        });
     }
 
     /// Write input to the PTY (stdin to child process)

@@ -89,6 +89,7 @@ pub fn printUsage() void {
         \\  ping                       Check if server is responsive
         \\  quit                       Shutdown the server
         \\  help                       Show available commands
+        \\  shell                      Show detected shell and detection steps
         \\  panes                      List all pane IDs
         \\  windows                    List windows with pane IDs (JSON)
         \\  send <pane_id> [text]      Send text to pane (reads stdin if no text)

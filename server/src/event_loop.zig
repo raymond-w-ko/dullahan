@@ -14,6 +14,7 @@ const sys = @cImport({
 const ipc = @import("ipc.zig");
 const http = @import("http.zig");
 const paths = @import("paths.zig");
+const shell = @import("shell.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
 const layout_db = @import("layout_db.zig");
@@ -446,6 +447,11 @@ pub const EventLoop = struct {
                 }
                 const result_data = try buf.toOwnedSlice(alloc);
                 break :blk ipc.Response.okWithData("Help", result_data);
+            },
+
+            .shell => blk: {
+                const steps = try shell.getDetectionSteps(alloc);
+                break :blk ipc.Response.okWithData("Shell detection", steps);
             },
 
             .dump => blk: {
