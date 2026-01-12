@@ -6,6 +6,22 @@ import { useRef, useEffect, useCallback } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
 import { IMEHandler, createIMEHandler } from "../terminal/ime";
+import { getActiveKeybinds, onKeybindsChange } from "../terminal/keybindConfig";
+import {
+  getSelection,
+  copyToClipboard,
+  pasteFromClipboard,
+  clearSelection,
+} from "../terminal/clipboard";
+import type { ActionContext } from "../terminal/actions";
+import * as config from "../config";
+import {
+  getStore,
+  setSettingsOpen,
+  switchWindow,
+  createWindow,
+  setFocusedPane,
+} from "../store";
 import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag, Underline } from "../../../protocol/schema/style";
 import type { TerminalSnapshot } from "../terminal/connection";
@@ -42,7 +58,7 @@ export function TerminalView({
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
 
-  // Setup keyboard handler
+  // Setup keyboard handler with keybinds
   useEffect(() => {
     if (!terminalRef.current || isReadOnly) return;
 
@@ -50,6 +66,59 @@ export function TerminalView({
     const ime = createIMEHandler();
     keyboardRef.current = keyboard;
     imeRef.current = ime;
+
+    // Create action context for keybind execution
+    const actionContext: ActionContext = {
+      paneId,
+      sendText: (text: string) => {
+        if (connection?.isConnected) {
+          connection.sendText({
+            type: "text",
+            paneId,
+            data: text,
+            timestamp: performance.now(),
+          });
+        }
+      },
+      sendScroll: (targetPaneId: number, lines: number) => {
+        if (connection?.isConnected) {
+          connection.sendScroll(targetPaneId, lines);
+        }
+      },
+      getSelection: () => getSelection(),
+      readClipboard: () => pasteFromClipboard(),
+      writeClipboard: async (text: string) => {
+        await copyToClipboard(text);
+        // Clear selection after copy if configured
+        if (config.get("selectionClearOnCopy")) {
+          clearSelection();
+        }
+      },
+      switchWindow: (windowId: number) => switchWindow(windowId),
+      getWindowIds: () => {
+        const store = getStore();
+        return Array.from(store.windows.keys()).sort((a, b) => a - b);
+      },
+      getActiveWindowId: () => getStore().activeWindowId,
+      createWindow: () => createWindow(),
+      openSettings: () => setSettingsOpen(true),
+      setFocusedPane: (targetPaneId: number) => setFocusedPane(targetPaneId),
+      getPaneIds: () => {
+        const store = getStore();
+        const activeWindow = store.windows.get(store.activeWindowId);
+        return activeWindow?.paneIds ?? [];
+      },
+      getFocusedPaneId: () => getStore().focusedPaneId,
+    };
+
+    // Set up keybinds
+    keyboard.setKeybinds(getActiveKeybinds());
+    keyboard.setActionContext(actionContext);
+
+    // Listen for keybind config changes
+    const unsubscribeKeybinds = onKeybindsChange((keybinds) => {
+      keyboard.setKeybinds(keybinds);
+    });
 
     keyboard.attach(terminalRef.current, (msg) => {
       if (connection?.isConnected) {
@@ -77,8 +146,9 @@ export function TerminalView({
     return () => {
       keyboard.detach();
       ime.clearCallback();
+      unsubscribeKeybinds();
     };
-  }, [connection, isReadOnly, onKeyInput]);
+  }, [connection, isReadOnly, onKeyInput, paneId]);
 
   // Handle wheel events for scrollback
   const handleWheel = useCallback(
