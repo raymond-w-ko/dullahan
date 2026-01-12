@@ -16,11 +16,11 @@ import type { LayoutNode } from "../../../protocol/schema/layout";
 function renderPreviewNode(node: LayoutNode, level: number): h.JSX.Element {
   const isHorizontal = level % 2 === 0;
 
-  if (node.type === "pane") {
-    const style = isHorizontal
-      ? { width: `${node.width}%`, height: "100%" }
-      : { width: "100%", height: `${node.height}%` };
+  // Use flex-basis for sizing
+  const size = isHorizontal ? node.width : node.height;
+  const style = { flex: `0 0 ${size}%` };
 
+  if (node.type === "pane") {
     return (
       <div
         class="layout-preview-pane"
@@ -30,10 +30,6 @@ function renderPreviewNode(node: LayoutNode, level: number): h.JSX.Element {
   }
 
   if (node.type === "container") {
-    const style = isHorizontal
-      ? { width: `${node.width}%`, height: "100%" }
-      : { width: "100%", height: `${node.height}%` };
-
     const childLevel = level + 1;
     const childIsHorizontal = childLevel % 2 === 0;
     const containerClass = childIsHorizontal

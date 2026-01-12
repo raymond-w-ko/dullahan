@@ -70,6 +70,7 @@ export function TerminalView({
     // Attach IME first - creates hidden textarea for composition input
     ime.attach(terminalRef.current);
     ime.setPaneId(paneId);
+    keyboard.setPaneId(paneId);
 
     // Get the textarea element created by IME for keyboard attachment
     // KeyboardHandler must attach to the same element for focus to work
@@ -185,6 +186,12 @@ export function TerminalView({
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
+  // Focus IME textarea when terminal is clicked
+  // The keyboard handler is attached to the IME textarea, not the terminal element
+  const handleTerminalClick = useCallback(() => {
+    imeRef.current?.focus();
+  }, []);
+
   // Convert cells to styled runs
   const lines = cellsToRuns(cells, styles, cols, rows);
 
@@ -196,7 +203,7 @@ export function TerminalView({
     <pre
       class="terminal"
       ref={terminalRef}
-      tabIndex={0}
+      onClick={handleTerminalClick}
     >
       {isScrolledUp && (
         <div class="scrollback-indicator">

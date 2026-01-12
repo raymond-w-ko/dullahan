@@ -18,12 +18,12 @@ function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Eleme
   // Even levels = horizontal, odd levels = vertical
   const isHorizontal = level % 2 === 0;
 
+  // Use flex-basis for sizing: in horizontal layout it controls width, in vertical it controls height
+  const size = isHorizontal ? node.width : node.height;
+  const style = { flex: `0 0 ${size}%` };
+
   if (isPane(node)) {
     // Pane node - render terminal
-    const style = isHorizontal
-      ? { width: `${node.width}%`, height: "100%" }
-      : { width: "100%", height: `${node.height}%` };
-
     return (
       <div
         key={`pane-${node.paneId ?? index}`}
@@ -43,10 +43,6 @@ function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Eleme
 
   if (isContainer(node)) {
     // Container node - recurse into children
-    const style = isHorizontal
-      ? { width: `${node.width}%`, height: "100%" }
-      : { width: "100%", height: `${node.height}%` };
-
     // Children are at next level (alternating direction)
     const childLevel = level + 1;
     const childIsHorizontal = childLevel % 2 === 0;
