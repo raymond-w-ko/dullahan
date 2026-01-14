@@ -24,6 +24,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
   private boundMouseUp: (e: MouseEvent) => void;
   private boundMouseMove: (e: MouseEvent) => void;
   private boundMouseLeave: (e: MouseEvent) => void;
+  private boundWheel: (e: WheelEvent) => void;
 
   // Cell dimensions (cached, updated on attach and resize)
   private cellWidth: number = 0;
@@ -43,6 +44,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     this.boundMouseUp = this.handleMouseUp.bind(this);
     this.boundMouseMove = this.handleMouseMove.bind(this);
     this.boundMouseLeave = this.handleMouseLeave.bind(this);
+    this.boundWheel = this.handleWheel.bind(this);
   }
 
   /**
@@ -76,6 +78,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     element.addEventListener("mouseup", this.boundMouseUp);
     element.addEventListener("mousemove", this.boundMouseMove);
     element.addEventListener("mouseleave", this.boundMouseLeave);
+    element.addEventListener("wheel", this.boundWheel, { passive: false });
   }
 
   /**
@@ -87,6 +90,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       this.element.removeEventListener("mouseup", this.boundMouseUp);
       this.element.removeEventListener("mousemove", this.boundMouseMove);
       this.element.removeEventListener("mouseleave", this.boundMouseLeave);
+      this.element.removeEventListener("wheel", this.boundWheel);
       this.element = null;
     }
     this.callback = null;
@@ -322,6 +326,79 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     this.lastMotionY = -1;
     // Note: We don't clear buttonsPressed here because the button might
     // still be held down when re-entering the terminal
+  }
+
+  private handleWheel(e: WheelEvent): void {
+    const coords = this.getTerminalCoords(e);
+    if (!coords) return;
+
+    // Prevent default scrolling behavior - the terminal handles scroll
+    e.preventDefault();
+
+    // Wheel button codes (same as X10/SGR mouse protocol):
+    // 64 = scroll up, 65 = scroll down, 66 = scroll left, 67 = scroll right
+    // deltaY: positive = scroll down, negative = scroll up
+    // deltaX: positive = scroll right, negative = scroll left
+
+    // Handle vertical scroll
+    if (e.deltaY !== 0) {
+      const button = e.deltaY < 0 ? 64 : 65; // up : down
+      const message: MouseMessage = {
+        type: "mouse",
+        paneId: this._paneId,
+        button,
+        x: coords.x,
+        y: coords.y,
+        px: coords.px,
+        py: coords.py,
+        state: "down",
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+        meta: e.metaKey,
+        timestamp: performance.now(),
+      };
+
+      debug.log(
+        `[mouse] pane=${this._paneId} wheel ${e.deltaY < 0 ? "up" : "down"} at (${coords.x}, ${coords.y})` +
+          (e.ctrlKey ? " +ctrl" : "") +
+          (e.altKey ? " +alt" : "") +
+          (e.shiftKey ? " +shift" : "") +
+          (e.metaKey ? " +meta" : "")
+      );
+
+      this.callback?.(message);
+    }
+
+    // Handle horizontal scroll
+    if (e.deltaX !== 0) {
+      const button = e.deltaX < 0 ? 66 : 67; // left : right
+      const message: MouseMessage = {
+        type: "mouse",
+        paneId: this._paneId,
+        button,
+        x: coords.x,
+        y: coords.y,
+        px: coords.px,
+        py: coords.py,
+        state: "down",
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+        meta: e.metaKey,
+        timestamp: performance.now(),
+      };
+
+      debug.log(
+        `[mouse] pane=${this._paneId} wheel ${e.deltaX < 0 ? "left" : "right"} at (${coords.x}, ${coords.y})` +
+          (e.ctrlKey ? " +ctrl" : "") +
+          (e.altKey ? " +alt" : "") +
+          (e.shiftKey ? " +shift" : "") +
+          (e.metaKey ? " +meta" : "")
+      );
+
+      this.callback?.(message);
+    }
   }
 }
 
