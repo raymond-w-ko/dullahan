@@ -27,7 +27,7 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "super+v=paste_from_clipboard",
 
   // Clipboard (performable - only copy if selection, otherwise pass through)
-  "ctrl+c=performable:copy_to_clipboard",
+  "performable:ctrl+c=copy_to_clipboard",
   "ctrl+v=paste_from_clipboard",
 
   // Scrolling
@@ -196,29 +196,31 @@ export function parseAction(actionStr: string): TerminalAction | null {
  * Parse a keybind config string like "ctrl+shift+c=copy_to_clipboard"
  * into a KeybindEntry.
  *
- * Supports the `performable:` prefix on actions:
- * - "ctrl+c=performable:copy_to_clipboard" - only consume if action can perform
+ * Supports the `performable:` prefix (Ghostty-compatible):
+ * - "performable:ctrl+c=copy_to_clipboard" - only consume if action can perform
  */
 export function parseKeybindConfig(configStr: string): KeybindEntry | null {
-  const eqIdx = configStr.indexOf("=");
+  let str = configStr;
+
+  // Check for performable: prefix (comes before keybind, Ghostty-style)
+  let performable = false;
+  if (str.startsWith("performable:")) {
+    performable = true;
+    str = str.slice("performable:".length);
+  }
+
+  const eqIdx = str.indexOf("=");
   if (eqIdx < 0) {
     console.warn(`Invalid keybind config (no '='): ${configStr}`);
     return null;
   }
 
-  const keybindStr = configStr.slice(0, eqIdx).trim();
-  let actionStr = configStr.slice(eqIdx + 1).trim();
+  const keybindStr = str.slice(0, eqIdx).trim();
+  const actionStr = str.slice(eqIdx + 1).trim();
 
   if (!keybindStr || !actionStr) {
     console.warn(`Invalid keybind config (empty parts): ${configStr}`);
     return null;
-  }
-
-  // Check for performable: prefix
-  let performable = false;
-  if (actionStr.startsWith("performable:")) {
-    performable = true;
-    actionStr = actionStr.slice("performable:".length);
   }
 
   try {

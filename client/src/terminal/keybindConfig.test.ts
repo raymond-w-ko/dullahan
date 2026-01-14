@@ -274,10 +274,12 @@ describe("parseKeybindConfig", () => {
   });
 
   describe("performable: prefix", () => {
-    test("parses performable: prefix", () => {
-      const result = parseKeybindConfig("ctrl+c=performable:copy_to_clipboard");
+    test("parses performable: prefix (Ghostty-style)", () => {
+      const result = parseKeybindConfig("performable:ctrl+c=copy_to_clipboard");
       expect(result).not.toBe(null);
       expect(result?.performable).toBe(true);
+      expect(result?.keybind.ctrl).toBe(true);
+      expect(result?.keybind.key).toBe("c");
       expect(result?.action.type).toBe("copy_to_clipboard");
     });
 
@@ -288,14 +290,16 @@ describe("parseKeybindConfig", () => {
     });
 
     test("parses performable: with parameterized action", () => {
-      const result = parseKeybindConfig("alt+1=performable:switch_window:1");
+      const result = parseKeybindConfig("performable:alt+1=switch_window:1");
       expect(result).not.toBe(null);
       expect(result?.performable).toBe(true);
+      expect(result?.keybind.alt).toBe(true);
+      expect(result?.keybind.key).toBe("1");
       expect(result?.action).toEqual({ type: "switch_window", windowIndex: 1 });
     });
 
     test("parses performable: with text action", () => {
-      const result = parseKeybindConfig("ctrl+u=performable:text:\\x15");
+      const result = parseKeybindConfig("performable:ctrl+u=text:\\x15");
       expect(result).not.toBe(null);
       expect(result?.performable).toBe(true);
       expect(result?.action).toEqual({ type: "send_text", text: "\x15" });

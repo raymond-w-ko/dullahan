@@ -285,7 +285,7 @@ alt+f=esc:f                # Move word right (ESC f)
 The `performable:` prefix makes a keybind conditional. The key is only consumed if the action can actually be performed; otherwise, it passes through to the terminal.
 
 ```
-ctrl+c=performable:copy_to_clipboard
+performable:ctrl+c=copy_to_clipboard
 ```
 
 **Behavior:**
@@ -305,13 +305,13 @@ This is useful for actions that depend on state:
 
 ```
 # Copy only when there's a selection, otherwise send interrupt
-ctrl+c=performable:copy_to_clipboard
+performable:ctrl+c=copy_to_clipboard
 
 # Only cycle windows if there are multiple
-ctrl+tab=performable:cycle_window:next
+performable:ctrl+tab=next_window
 
 # Combined with other actions
-alt+1=performable:switch_window:1
+performable:alt+1=switch_window:1
 ```
 
 ## Default Keybinds
