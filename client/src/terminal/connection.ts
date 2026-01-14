@@ -31,6 +31,7 @@ import { ColorTag, Underline } from "../../../protocol/schema/style";
 import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
+import type { MouseMessage } from "./mouse";
 
 export interface ScrollbackInfo {
   totalRows: number;    // Total rows including scrollback
@@ -194,6 +195,7 @@ export type BinaryServerMessage =
 export type ClientMessage =
   | KeyMessage
   | TextMessage
+  | MouseMessage
   | { type: "resize"; paneId: number; cols: number; rows: number }
   | { type: "scroll"; paneId: number; delta: number }  // Scroll viewport by delta rows (negative = up)
   | { type: "ping" }
@@ -768,6 +770,15 @@ export class TerminalConnection {
    * Only master can send input.
    */
   sendText(message: TextMessage): void {
+    if (!this.isMaster) return;
+    this.send(message);
+  }
+
+  /**
+   * Send mouse event (for terminal mouse reporting protocols)
+   * Only master can send input.
+   */
+  sendMouse(message: MouseMessage): void {
     if (!this.isMaster) return;
     this.send(message);
   }

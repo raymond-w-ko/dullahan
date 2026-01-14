@@ -203,9 +203,10 @@ export function TerminalView({
     mouse.setPaneId(paneId);
 
     // Attach to terminal element
-    mouse.attach(el, (_msg) => {
-      // Currently just debug output in mouse.ts
-      // Future: send to server for terminal mouse support
+    mouse.attach(el, (msg) => {
+      if (connection?.isConnected) {
+        connection.sendMouse(msg);
+      }
     });
 
     // Update cell dimensions when fonts load
@@ -216,7 +217,7 @@ export function TerminalView({
     return () => {
       mouse.detach();
     };
-  }, [paneId]);
+  }, [paneId, connection]);
 
   // Focus IME textarea when terminal is clicked (but not when selecting text)
   // The keyboard handler is attached to the IME textarea, not the terminal element
