@@ -196,6 +196,9 @@ Actions are client-side operations that keybinds can trigger.
 | `paste_from_clipboard` | Paste from clipboard |
 | `scroll` | Scroll viewport (line/page/half_page/top/bottom) |
 | `send_text` | Send literal text to terminal |
+| `text:` | Send text with escape sequence parsing |
+| `csi:` | Send CSI sequence (ESC [ + text) |
+| `esc:` | Send ESC sequence (ESC + text) |
 | `clear_screen` | Clear screen (sends Ctrl+L) |
 | `reset_terminal` | Reset terminal (sends ESC c) |
 | `new_window` | Create new window |
@@ -225,6 +228,90 @@ Actions are client-side operations that keybinds can trigger.
 
 // Send text
 { type: "send_text", text: "\x1b[A" }  // Send Up arrow escape
+```
+
+## Sending Raw Sequences
+
+Three action types allow sending raw terminal sequences, matching Ghostty's syntax:
+
+### `text:` Action
+
+Send literal text with Zig-style escape sequence parsing.
+
+```
+ctrl+u=text:\x15           # Send Ctrl+U (0x15)
+f12=text:echo hello\n      # Type "echo hello" + Enter
+ctrl+l=text:\x0c           # Send form feed (clear)
+```
+
+**Supported escape sequences:**
+
+| Escape | Result | Description |
+|--------|--------|-------------|
+| `\\` | `\` | Backslash |
+| `\n` | LF | Newline |
+| `\r` | CR | Carriage return |
+| `\t` | TAB | Tab |
+| `\0` | NUL | Null byte |
+| `\x??` | byte | Hex byte (2 digits) |
+| `\u{...}` | char | Unicode codepoint |
+
+### `csi:` Action
+
+Send a CSI (Control Sequence Introducer) sequence. Automatically prepends `ESC [`.
+
+```
+alt+up=csi:A               # Cursor up (ESC [ A)
+alt+down=csi:B             # Cursor down (ESC [ B)
+ctrl+alt+up=csi:1;5A       # Ctrl+Up modified sequence
+ctrl+l=csi:2J              # Clear screen (ESC [ 2 J)
+```
+
+### `esc:` Action
+
+Send an ESC-prefixed sequence. Automatically prepends `ESC`.
+
+```
+ctrl+shift+r=esc:c         # Reset terminal (ESC c)
+alt+d=esc:d                # Delete word right (ESC d)
+alt+b=esc:b                # Move word left (ESC b)
+alt+f=esc:f                # Move word right (ESC f)
+```
+
+## Conditional Keybinds
+
+### `performable:` Prefix
+
+The `performable:` prefix makes a keybind conditional. The key is only consumed if the action can actually be performed; otherwise, it passes through to the terminal.
+
+```
+ctrl+c=performable:copy_to_clipboard
+```
+
+**Behavior:**
+- **With selection:** Copies text and consumes Ctrl+C
+- **No selection:** Ctrl+C passes through to terminal (sends SIGINT)
+
+This is useful for actions that depend on state:
+
+| Action | Performable When |
+|--------|------------------|
+| `copy_to_clipboard` | Text is selected |
+| `switch_window:N` | Window N exists |
+| `cycle_window` | Multiple windows open |
+| `focus_pane:*` | Multiple panes exist |
+
+**Example configuration:**
+
+```
+# Copy only when there's a selection, otherwise send interrupt
+ctrl+c=performable:copy_to_clipboard
+
+# Only cycle windows if there are multiple
+ctrl+tab=performable:cycle_window:next
+
+# Combined with other actions
+alt+1=performable:switch_window:1
 ```
 
 ## Default Keybinds
@@ -330,9 +417,12 @@ Run keybind tests:
 
 ```bash
 cd client
-bun test src/terminal/keybinds.test.ts   # Parser tests (39 tests)
-bun test src/terminal/keyboard.test.ts   # Handler tests (14 tests)
-bun test src/terminal/                   # All terminal tests
+bun test src/terminal/keybinds.test.ts      # Parser tests
+bun test src/terminal/keyboard.test.ts      # Handler tests
+bun test src/terminal/keybindConfig.test.ts # Config parser tests
+bun test src/terminal/stringLiteral.test.ts # Escape sequence tests
+bun test src/terminal/actions.test.ts       # Action tests
+bun test src/terminal/                      # All terminal tests (147 tests)
 ```
 
 ## Related Files
@@ -342,11 +432,15 @@ bun test src/terminal/                   # All terminal tests
 - `client/src/terminal/keyboard.ts` - Keyboard handler with interception
 - `client/src/terminal/keyboard.test.ts` - Handler tests
 - `client/src/terminal/actions.ts` - Action definitions and handlers
+- `client/src/terminal/actions.test.ts` - Action tests (canPerformAction)
+- `client/src/terminal/keybindConfig.ts` - Keybind configuration parsing
+- `client/src/terminal/keybindConfig.test.ts` - Config parser tests
+- `client/src/terminal/stringLiteral.ts` - Zig-style escape sequence parser
+- `client/src/terminal/stringLiteral.test.ts` - String literal tests
 
 ## Future Work
 
 - **Keybind configuration file**: Parse `keybind = ctrl+c=copy_to_clipboard` from config
 - **Keybind conflict detection**: Warn when two keybinds overlap
-- **Conditional keybinds**: `performable:` prefix (only intercept if action can execute)
 - **Unconsumed keybinds**: `unconsumed:` prefix (execute action AND send to server)
 - **Key sequences**: Leader key support (`ctrl+a` then `c` for copy)
