@@ -54,6 +54,8 @@ export interface MouseMessage {
   button: number; // 0=left, 1=middle, 2=right
   x: number; // Column (0-indexed)
   y: number; // Row (0-indexed)
+  px?: number; // Pixel X coordinate (for SGR-Pixels mode 1016)
+  py?: number; // Pixel Y coordinate (for SGR-Pixels mode 1016)
   state: "down" | "up" | "move";
   ctrl: boolean;
   alt: boolean;

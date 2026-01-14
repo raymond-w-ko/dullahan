@@ -79,6 +79,8 @@ const MouseMessage = struct {
     button: u8,
     x: u16,
     y: u16,
+    px: ?u32 = null, // Pixel X coordinate (for SGR-Pixels mode 1016)
+    py: ?u32 = null, // Pixel Y coordinate (for SGR-Pixels mode 1016)
     state: []const u8,
     ctrl: bool = false,
     alt: bool = false,
@@ -1170,12 +1172,14 @@ pub const EventLoop = struct {
             defer mouse_msg.deinit();
 
             const msg = mouse_msg.value;
-            log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) mods={s}{s}{s}{s} ts={d:.3}", .{
+            log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) px=({?},{?}) mods={s}{s}{s}{s} ts={d:.3}", .{
                 msg.state,
                 msg.paneId,
                 msg.button,
                 msg.x,
                 msg.y,
+                msg.px,
+                msg.py,
                 if (msg.ctrl) "C" else "",
                 if (msg.alt) "A" else "",
                 if (msg.shift) "S" else "",
@@ -1220,7 +1224,7 @@ pub const EventLoop = struct {
 
             // Encode and send mouse event based on format
             switch (mouse_format) {
-                .sgr, .sgr_pixels => {
+                .sgr => {
                     // SGR format: ESC [ < button ; x ; y M/m
                     // Button code: base + modifiers + motion flag
                     var button_code: u8 = msg.button; // 0=left, 1=middle, 2=right
@@ -1229,7 +1233,7 @@ pub const EventLoop = struct {
                     if (msg.ctrl) button_code += 16;
                     if (is_motion) button_code += 32;
 
-                    // Coordinates are 1-indexed in SGR
+                    // Coordinates are 1-indexed in SGR (cell coordinates)
                     const x = msg.x + 1;
                     const y = msg.y + 1;
 
@@ -1254,6 +1258,42 @@ pub const EventLoop = struct {
                         return;
                     };
                     log.debug("Sent SGR mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
+                },
+                .sgr_pixels => {
+                    // SGR-Pixels format (mode 1016): ESC [ < button ; px ; py M/m
+                    // Same as SGR but uses pixel coordinates instead of cell coordinates
+                    var button_code: u8 = msg.button; // 0=left, 1=middle, 2=right
+                    if (msg.shift) button_code += 4;
+                    if (msg.alt) button_code += 8;
+                    if (msg.ctrl) button_code += 16;
+                    if (is_motion) button_code += 32;
+
+                    // Use pixel coordinates if available, otherwise fall back to cell coords
+                    // Note: Unlike SGR which is 1-indexed, SGR-Pixels is 0-indexed
+                    const px = msg.px orelse msg.x;
+                    const py = msg.py orelse msg.y;
+
+                    // Terminator: 'M' for press/motion, 'm' for release
+                    const terminator: u8 = if (is_release) 'm' else 'M';
+
+                    // Format the sequence
+                    var buf: [48]u8 = undefined;
+                    const seq = std.fmt.bufPrint(&buf, "\x1b[<{d};{d};{d}{c}", .{
+                        button_code,
+                        px,
+                        py,
+                        terminator,
+                    }) catch {
+                        log.warn("Failed to format SGR-Pixels mouse sequence", .{});
+                        return;
+                    };
+
+                    // Write to PTY
+                    pane.writeInput(seq) catch |e| {
+                        log.warn("Failed to send mouse event: {any}", .{e});
+                        return;
+                    };
+                    log.debug("Sent SGR-Pixels mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
                 },
                 .x10 => {
                     // X10 format: ESC [ M <button+32> <x+32+1> <y+32+1>

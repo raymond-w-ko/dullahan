@@ -126,9 +126,11 @@ export class MouseHandler implements InputHandler<MouseCallback> {
   }
 
   /**
-   * Convert mouse event coordinates to terminal cell coordinates
+   * Convert mouse event coordinates to terminal cell and pixel coordinates
    */
-  private getTerminalCoords(e: MouseEvent): { x: number; y: number } | null {
+  private getTerminalCoords(
+    e: MouseEvent
+  ): { x: number; y: number; px: number; py: number } | null {
     if (!this.element) return null;
 
     // Lazy update if dimensions not yet known
@@ -149,10 +151,18 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     const x = Math.floor(relX / this.cellWidth);
     const y = Math.floor(relY / this.cellHeight);
 
-    // Clamp to non-negative (clicks in padding return 0,0)
+    // Pixel coordinates (0-indexed, clamped to non-negative)
+    // SGR-Pixels (mode 1016) uses pixel coordinates without the +1 offset
+    // that cell-based modes use
+    const px = Math.max(0, Math.floor(relX));
+    const py = Math.max(0, Math.floor(relY));
+
+    // Clamp cell coordinates to non-negative (clicks in padding return 0,0)
     return {
       x: Math.max(0, x),
       y: Math.max(0, y),
+      px,
+      py,
     };
   }
 
@@ -169,6 +179,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       button: e.button,
       x: coords.x,
       y: coords.y,
+      px: coords.px,
+      py: coords.py,
       state: "down",
       ctrl: e.ctrlKey,
       alt: e.altKey,
@@ -180,7 +192,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     // Debug output
     const buttonName = ["left", "middle", "right"][e.button] ?? `button${e.button}`;
     debug.log(
-      `[mouse] pane=${this._paneId} ${buttonName} down at (${coords.x}, ${coords.y})` +
+      `[mouse] pane=${this._paneId} ${buttonName} down at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
         (e.shiftKey ? " +shift" : "") +
@@ -203,6 +215,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       button: e.button,
       x: coords.x,
       y: coords.y,
+      px: coords.px,
+      py: coords.py,
       state: "up",
       ctrl: e.ctrlKey,
       alt: e.altKey,
@@ -214,7 +228,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     // Debug output
     const buttonName = ["left", "middle", "right"][e.button] ?? `button${e.button}`;
     debug.log(
-      `[mouse] pane=${this._paneId} ${buttonName} up at (${coords.x}, ${coords.y})` +
+      `[mouse] pane=${this._paneId} ${buttonName} up at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
         (e.shiftKey ? " +shift" : "") +
@@ -280,6 +294,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       button,
       x: coords.x,
       y: coords.y,
+      px: coords.px,
+      py: coords.py,
       state: "move",
       ctrl: e.ctrlKey,
       alt: e.altKey,
@@ -289,7 +305,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     };
 
     debug.log(
-      `[mouse] pane=${this._paneId} move at (${coords.x}, ${coords.y})` +
+      `[mouse] pane=${this._paneId} move at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (this.buttonsPressed ? ` buttons=${this.buttonsPressed}` : "") +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
