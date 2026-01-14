@@ -116,7 +116,7 @@ export function parseStringLiteral(input: string): string {
           );
       }
     } else {
-      result.push(input[i]);
+      result.push(input[i]!);
       i++;
     }
   }

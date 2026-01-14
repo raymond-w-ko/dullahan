@@ -23,6 +23,19 @@ import { matchesKeybind } from "./keybinds";
 import type { TerminalAction, ActionContext } from "./actions";
 import { executeAction, canPerformAction } from "./actions";
 
+/**
+ * Check if a selection exists within a given element.
+ */
+function isSelectionInElement(element: HTMLElement): boolean {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return false;
+
+  const anchorNode = selection.anchorNode;
+  if (!anchorNode) return false;
+
+  return element.contains(anchorNode);
+}
+
 export interface KeyMessage {
   type: "key";
   paneId: number; // Target pane ID
@@ -79,6 +92,10 @@ export class KeyboardHandler {
   private actionContext: ActionContext | null = null;
   private consumedKeys: Set<string> = new Set(); // Track consumed key codes
 
+  // Global copy handler state (for when element doesn't have focus)
+  private globalCopyCleanup: (() => void) | null = null;
+  private terminalElement: HTMLElement | null = null;
+
   constructor() {
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundKeyUp = this.handleKeyUp.bind(this);
@@ -122,6 +139,72 @@ export class KeyboardHandler {
   }
 
   /**
+   * Attach a document-level listener for copy operations when this handler
+   * doesn't have focus but there's a selection in the terminal.
+   *
+   * This solves the problem where selecting text in the terminal causes
+   * the IME textarea to lose focus, preventing keyboard events from reaching
+   * our handler. With this global listener, copy keybinds work even when
+   * the selection is active.
+   *
+   * @param terminalElement - The terminal element to check for selections
+   */
+  attachGlobalCopyHandler(terminalElement: HTMLElement): void {
+    // Clean up any existing handler
+    this.detachGlobalCopyHandler();
+
+    this.terminalElement = terminalElement;
+
+    const handler = (e: KeyboardEvent) => {
+      // Skip if already focused (normal handler works)
+      if (this.isFocused()) return;
+
+      // Only handle if there's a selection in the terminal
+      if (!this.terminalElement || !isSelectionInElement(this.terminalElement)) {
+        return;
+      }
+
+      // Check for matching keybind
+      const entry = this.findMatchingKeybind(e);
+      if (!entry || !this.actionContext) return;
+
+      // Only handle copy action from global handler
+      if (entry.action.type !== "copy_to_clipboard") return;
+
+      // Handle performable check
+      if (entry.performable) {
+        if (!canPerformAction(entry.action, this.actionContext)) return;
+      }
+
+      // Execute copy
+      e.preventDefault();
+      e.stopPropagation();
+
+      void executeAction(entry.action, this.actionContext).then(() => {
+        // Focus element so subsequent keys (paste, etc.) work
+        this.focus();
+      });
+    };
+
+    // Use capture phase to intercept before other handlers
+    document.addEventListener("keydown", handler, true);
+    this.globalCopyCleanup = () => {
+      document.removeEventListener("keydown", handler, true);
+    };
+  }
+
+  /**
+   * Remove the document-level copy handler.
+   */
+  detachGlobalCopyHandler(): void {
+    if (this.globalCopyCleanup) {
+      this.globalCopyCleanup();
+      this.globalCopyCleanup = null;
+    }
+    this.terminalElement = null;
+  }
+
+  /**
    * Attach keyboard handler to an element
    * Element should have tabIndex set for focus
    */
@@ -147,6 +230,9 @@ export class KeyboardHandler {
    * Detach keyboard handler
    */
   detach(): void {
+    // Clean up global copy handler
+    this.detachGlobalCopyHandler();
+
     if (this.element) {
       this.element.removeEventListener("keydown", this.boundKeyDown);
       this.element.removeEventListener("keyup", this.boundKeyUp);

@@ -147,6 +147,11 @@ export function TerminalView({
       }
     });
 
+    // Attach global copy handler for when terminal has selection but IME isn't focused
+    if (terminalRef.current) {
+      keyboard.attachGlobalCopyHandler(terminalRef.current);
+    }
+
     ime.setCallback((msg) => {
       if (connection?.isConnected) {
         connection.sendText(msg);
