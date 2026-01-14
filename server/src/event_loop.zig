@@ -1255,8 +1255,45 @@ pub const EventLoop = struct {
                     };
                     log.debug("Sent SGR mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
                 },
+                .x10 => {
+                    // X10 format: ESC [ M <button+32> <x+32+1> <y+32+1>
+                    // Coordinate limit: max 222 (222 + 32 + 1 = 255)
+                    if (msg.x > 222 or msg.y > 222) {
+                        log.debug("X10 mouse: coordinates ({d},{d}) exceed limit 222", .{ msg.x, msg.y });
+                        return;
+                    }
+
+                    // Button code calculation
+                    var button_code: u8 = if (is_release)
+                        3 // Release is always 3 in X10 format
+                    else
+                        msg.button; // 0=left, 1=middle, 2=right
+
+                    // X10 mode (DECSET 9) doesn't have modifiers, but normal mode (1000) does
+                    if (mouse_events != .x10) {
+                        if (msg.shift) button_code += 4;
+                        if (msg.alt) button_code += 8;
+                        if (msg.ctrl) button_code += 16;
+                    }
+                    if (is_motion) button_code += 32;
+
+                    // Encode: ESC [ M <button+32> <x+33> <y+33>
+                    const seq = [6]u8{
+                        0x1b, // ESC
+                        '[',
+                        'M',
+                        32 + button_code,
+                        32 + @as(u8, @intCast(msg.x)) + 1,
+                        32 + @as(u8, @intCast(msg.y)) + 1,
+                    };
+
+                    pane.writeInput(&seq) catch |e| {
+                        log.warn("Failed to send X10 mouse event: {any}", .{e});
+                        return;
+                    };
+                    log.debug("Sent X10 mouse: button={d} pos=({d},{d})", .{ button_code, msg.x, msg.y });
+                },
                 else => {
-                    // TODO(du-2xd): X10 format
                     // TODO(du-94n): UTF-8 format
                     // TODO(du-1sc): URXVT format
                     log.debug("Mouse format {s} not yet implemented", .{@tagName(mouse_format)});
