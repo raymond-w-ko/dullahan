@@ -27,7 +27,7 @@ function readSnappyLength(data: Uint8Array): number {
 }
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell, CellContent, WideValue } from "../../../protocol/schema/cell";
-import { ColorTag, Underline } from "../../../protocol/schema/style";
+import { ColorTag, Underline, decodeColor } from "../../../protocol/schema/style";
 import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
@@ -640,26 +640,6 @@ export class TerminalConnection {
     return cells;
   }
 
-  /** Decode a color from 4 bytes */
-  private decodeColor(data: Uint8Array, offset: number): Color {
-    const tag = data[offset] ?? 0;
-    switch (tag) {
-      case ColorTag.NONE:
-        return { tag: ColorTag.NONE };
-      case ColorTag.PALETTE:
-        return { tag: ColorTag.PALETTE, index: data[offset + 1] ?? 0 };
-      case ColorTag.RGB:
-        return { 
-          tag: ColorTag.RGB, 
-          r: data[offset + 1] ?? 0, 
-          g: data[offset + 2] ?? 0, 
-          b: data[offset + 3] ?? 0 
-        };
-      default:
-        return { tag: ColorTag.NONE };
-    }
-  }
-
   /** Decode row IDs from packed u64 bytes (little-endian) */
   private decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
     if (!data || data.length === 0) {
@@ -697,9 +677,9 @@ export class TerminalConnection {
       const styleId = (data[offset] ?? 0) | ((data[offset + 1] ?? 0) << 8);
       offset += 2;
       
-      const fgColor = this.decodeColor(data, offset);
-      const bgColor = this.decodeColor(data, offset + 4);
-      const underlineColor = this.decodeColor(data, offset + 8);
+      const fgColor = decodeColor(data[offset] ?? 0, data[offset + 1] ?? 0, data[offset + 2] ?? 0, data[offset + 3] ?? 0);
+      const bgColor = decodeColor(data[offset + 4] ?? 0, data[offset + 5] ?? 0, data[offset + 6] ?? 0, data[offset + 7] ?? 0);
+      const underlineColor = decodeColor(data[offset + 8] ?? 0, data[offset + 9] ?? 0, data[offset + 10] ?? 0, data[offset + 11] ?? 0);
       
       // Flags (2 bytes, little-endian)
       const flagsWord = (data[offset + 12] ?? 0) | ((data[offset + 13] ?? 0) << 8);
