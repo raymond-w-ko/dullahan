@@ -211,13 +211,13 @@ export class KeyboardHandler {
     // Check for matching keybind
     const entry = this.findMatchingKeybind(e);
     if (entry && entry.action.type !== "none" && this.actionContext) {
-      // For clipboard actions, don't preventDefault() to preserve user gesture
-      // context required by the Clipboard API
-      const isClipboardAction =
-        entry.action.type === "copy_to_clipboard" ||
-        entry.action.type === "paste_from_clipboard";
+      // For paste, don't preventDefault() to preserve user gesture context
+      // required by the Clipboard API's readText(). Copy (writeText) works
+      // fine with preventDefault, and we need it to prevent browser's native
+      // copy from interfering with our selection clearing.
+      const isPasteAction = entry.action.type === "paste_from_clipboard";
 
-      if (!isClipboardAction) {
+      if (!isPasteAction) {
         e.preventDefault();
         e.stopPropagation();
       }
