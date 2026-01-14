@@ -317,7 +317,12 @@ export function initConnection() {
   const conn = new TerminalConnection();
   store.connection = conn;
 
-  conn.onConnect = () => setConnected(true);
+  conn.onConnect = () => {
+    setConnected(true);
+    // Trigger dimension recalculation shortly after connection
+    // This ensures panes resize after layout settles
+    setTimeout(() => triggerDimensionRecalc(), 100);
+  };
   conn.onDisconnect = () => setConnected(false);
   conn.onError = (err) => setError(err);
 

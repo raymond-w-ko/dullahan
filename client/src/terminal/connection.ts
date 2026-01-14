@@ -248,6 +248,8 @@ export class TerminalConnection {
   // Pending resize tracking - resizes are queued and sent when connected
   private _pendingResizes: Map<number, { cols: number; rows: number }> = new Map();
   private _lastSentResizes: Map<number, { cols: number; rows: number }> = new Map();
+  private _resizeDebounceTimer: number | null = null;
+  private static readonly RESIZE_DEBOUNCE_MS = 333;
 
   public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
   public onDelta: ((delta: DeltaUpdate) => void) | null = null;
@@ -742,6 +744,10 @@ export class TerminalConnection {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this._resizeDebounceTimer !== null) {
+      clearTimeout(this._resizeDebounceTimer);
+      this._resizeDebounceTimer = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -860,8 +866,22 @@ export class TerminalConnection {
     this._pendingResizes.set(paneId, { cols, rows });
     debug.log(`Queued resize for pane ${paneId}: ${cols}x${rows}`);
 
-    // Try to flush immediately if connected
-    this.flushPendingResizes();
+    // Schedule debounced flush to avoid resize cascades in dev builds
+    this.scheduleResizeFlush();
+  }
+
+  /**
+   * Schedule a debounced flush of pending resizes.
+   * Waits RESIZE_DEBOUNCE_MS after the last call before actually flushing.
+   */
+  private scheduleResizeFlush(): void {
+    if (this._resizeDebounceTimer !== null) {
+      window.clearTimeout(this._resizeDebounceTimer);
+    }
+    this._resizeDebounceTimer = window.setTimeout(() => {
+      this._resizeDebounceTimer = null;
+      this.flushPendingResizes();
+    }, TerminalConnection.RESIZE_DEBOUNCE_MS);
   }
 
   /**
