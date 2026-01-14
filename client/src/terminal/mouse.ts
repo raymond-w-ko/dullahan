@@ -6,6 +6,7 @@
  */
 
 import { debug } from "../debug";
+import { getCellDimensions, getPadding } from "./dimensions";
 
 export interface MouseMessage {
   type: "mouse";
@@ -100,15 +101,15 @@ export class MouseHandler {
       ".terminal-measure"
     ) as HTMLDivElement | null;
     if (measure) {
-      const rect = measure.getBoundingClientRect();
-      this.cellWidth = rect.width;
-      this.cellHeight = rect.height;
+      const dims = getCellDimensions(measure);
+      this.cellWidth = dims.cellWidth;
+      this.cellHeight = dims.cellHeight;
     }
 
-    // Get terminal padding
-    const style = getComputedStyle(this.element);
-    this.terminalPaddingX = parseFloat(style.paddingLeft);
-    this.terminalPaddingY = parseFloat(style.paddingTop);
+    // Get terminal padding (for coordinate offset)
+    const padding = getPadding(this.element);
+    this.terminalPaddingX = padding.left;
+    this.terminalPaddingY = padding.top;
   }
 
   /**

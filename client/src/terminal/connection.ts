@@ -28,6 +28,7 @@ function readSnappyLength(data: Uint8Array): number {
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell, CellContent, WideValue } from "../../../protocol/schema/cell";
 import { ColorTag, Underline, decodeColor } from "../../../protocol/schema/style";
+import { calculateTerminalSize } from "./dimensions";
 import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
@@ -781,59 +782,8 @@ export class TerminalConnection {
    * for efficiency and debuggability in Chrome DevTools.
    */
   calculatePaneSize(container: HTMLElement): { cols: number; rows: number } {
-    // Find or create persistent measurement element
-    let measure = container.querySelector('.terminal-measure') as HTMLDivElement | null;
-    if (!measure) {
-      measure = document.createElement('div');
-      measure.className = 'terminal-measure terminal-line';
-      measure.textContent = 'X';
-      container.appendChild(measure);
-    }
-
-    const rect = measure.getBoundingClientRect();
-    const cellWidth = rect.width;
-    const cellHeight = rect.height;
-
-    // Not ready if we can't measure
-    if (cellWidth === 0 || cellHeight === 0) {
-      return { cols: -1, rows: -1 };
-    }
-
-    // Get container dimensions (minus container padding)
-    const containerStyle = getComputedStyle(container);
-    const containerPaddingX = parseFloat(containerStyle.paddingLeft) + parseFloat(containerStyle.paddingRight);
-    const containerPaddingY = parseFloat(containerStyle.paddingTop) + parseFloat(containerStyle.paddingBottom);
-
-    // Also account for .terminal element padding inside the container
-    const terminal = container.querySelector('.terminal') as HTMLElement | null;
-    let terminalPaddingX = 0;
-    let terminalPaddingY = 0;
-    if (terminal) {
-      const terminalStyle = getComputedStyle(terminal);
-      terminalPaddingX = parseFloat(terminalStyle.paddingLeft) + parseFloat(terminalStyle.paddingRight);
-      terminalPaddingY = parseFloat(terminalStyle.paddingTop) + parseFloat(terminalStyle.paddingBottom);
-    }
-
-    const availableWidth = container.clientWidth - containerPaddingX - terminalPaddingX;
-    const availableHeight = container.clientHeight - containerPaddingY - terminalPaddingY;
-
-    // Not ready if container has no size
-    if (availableWidth <= 0 || availableHeight <= 0) {
-      return { cols: -1, rows: -1 };
-    }
-
-    // Calculate dimensions with safe minimums
-    const safeCellWidth = Math.max(cellWidth, 4);
-    const safeCellHeight = Math.max(cellHeight, 8);
-
-    const cols = Math.floor(availableWidth / safeCellWidth);
-    const rows = Math.floor(availableHeight / safeCellHeight);
-
-    // Clamp to reasonable terminal sizes (1-500 cols/rows)
-    return {
-      cols: Math.max(1, Math.min(500, cols)),
-      rows: Math.max(1, Math.min(500, rows)),
-    };
+    const { cols, rows } = calculateTerminalSize(container);
+    return { cols, rows };
   }
 
   /**

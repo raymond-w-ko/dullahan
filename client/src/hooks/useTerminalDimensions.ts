@@ -1,12 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import type { RefObject } from "preact";
+import {
+  calculateTerminalSize,
+  getOrCreateMeasureElement,
+  type TerminalSize,
+} from "../terminal/dimensions";
 
-export interface TerminalDimensions {
-  cols: number;
-  rows: number;
-  cellWidth: number;
-  cellHeight: number;
-}
+export type TerminalDimensions = TerminalSize;
 
 /**
  * Hook to calculate visible terminal dimensions based on container size and font metrics.
@@ -27,43 +27,15 @@ export function useTerminalDimensions(
     const container = containerRef.current;
     if (!container) return;
 
-    // Find or create persistent measurement element
-    let measure = container.querySelector('.terminal-measure') as HTMLDivElement | null;
-    if (!measure) {
-      measure = document.createElement('div');
-      measure.className = 'terminal-measure terminal-line';
-      measure.textContent = 'X';
-      container.appendChild(measure);
-    }
+    // Ensure measurement element exists
+    getOrCreateMeasureElement(container);
 
     const calculate = () => {
-      if (!measure || !container) return;
-
-      const rect = measure.getBoundingClientRect();
-      const cellWidth = rect.width;
-      const cellHeight = rect.height;
-
-      if (cellWidth === 0 || cellHeight === 0) return;
-
-      // Get container dimensions (minus padding)
-      const style = getComputedStyle(container);
-      const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-      const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      const availableWidth = container.clientWidth - paddingX;
-      const availableHeight = container.clientHeight - paddingY;
-
-      const safeCellWidth = Math.max(cellWidth, 4);
-      const safeCellHeight = Math.max(cellHeight, 8);
-
-      const cols = Math.floor(availableWidth / safeCellWidth);
-      const rows = Math.floor(availableHeight / safeCellHeight);
-
-      setDimensions({
-        cols: Math.max(1, Math.min(500, cols)),
-        rows: Math.max(1, Math.min(500, rows)),
-        cellWidth,
-        cellHeight,
-      });
+      const size = calculateTerminalSize(container);
+      // Only update if measurement succeeded
+      if (size.cols > 0 && size.rows > 0) {
+        setDimensions(size);
+      }
     };
 
     // Initial calculation
