@@ -14,7 +14,6 @@ pub const cli = @import("cli.zig");
 // WebSocket/HTTP server
 pub const http = @import("http.zig");
 pub const websocket = @import("websocket.zig");
-pub const ws_server = @import("ws_server.zig");
 pub const snapshot = @import("snapshot.zig");
 
 // Session/Window/Pane hierarchy

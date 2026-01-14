@@ -70,6 +70,20 @@ const FocusMessage = struct {
     paneId: u16,
 };
 
+const MouseMessage = struct {
+    type: []const u8,
+    paneId: u16,
+    button: u8,
+    x: u16,
+    y: u16,
+    state: []const u8,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+    timestamp: f64 = 0,
+};
+
 const HelloMessage = struct {
     type: []const u8,
     clientId: []const u8,
@@ -1142,6 +1156,38 @@ pub const EventLoop = struct {
                     }
                 }
             }
+        } else if (std.mem.eql(u8, type_str, "mouse")) {
+            // Mouse event - will be used for terminal mouse reporting
+            const mouse_msg = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch |e| {
+                log.warn("Failed to parse mouse message: {any}", .{e});
+                return;
+            };
+            defer mouse_msg.deinit();
+
+            const msg = mouse_msg.value;
+            log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) mods={s}{s}{s}{s} ts={d:.3}", .{
+                msg.state,
+                msg.paneId,
+                msg.button,
+                msg.x,
+                msg.y,
+                if (msg.ctrl) "C" else "",
+                if (msg.alt) "A" else "",
+                if (msg.shift) "S" else "",
+                if (msg.meta) "M" else "",
+                msg.timestamp,
+            });
+
+            // Validate pane exists
+            _ = self.session.getPaneById(msg.paneId) orelse {
+                log.warn("Mouse event for unknown pane {d}", .{msg.paneId});
+                return;
+            };
+
+            // TODO: Convert to terminal mouse protocol sequences (X10, SGR, etc.)
+            // For now, just log the event
         }
     }
 
