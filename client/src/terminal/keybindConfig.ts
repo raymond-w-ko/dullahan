@@ -26,6 +26,10 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "super+c=copy_to_clipboard",
   "super+v=paste_from_clipboard",
 
+  // Clipboard (performable - only copy if selection, otherwise pass through)
+  "ctrl+c=performable:copy_to_clipboard",
+  "ctrl+v=paste_from_clipboard",
+
   // Scrolling
   "shift+page_up=scroll_page_up",
   "shift+page_down=scroll_page_down",
