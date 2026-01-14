@@ -285,12 +285,21 @@ pub const Pane = struct {
     fn collectDirtyRows(self: *Pane) void {
         const pages = &self.terminal.screens.active.pages;
 
+        // Check if a screen-level clear occurred (e.g., screen switch, erase display).
+        // When this happens, ghostty doesn't mark individual rows dirty - it just sets
+        // this flag. We need to mark all viewport rows as dirty in this case.
+        const full_clear = self.terminal.flags.dirty.clear;
+        if (full_clear) {
+            self.terminal.flags.dirty.clear = false;
+        }
+
         // Iterate through viewport rows to find dirty ones
         var y: usize = 0;
         while (y < self.rows) : (y += 1) {
             const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
 
-            if (pin.isDirty()) {
+            // Mark row dirty if: screen-level clear occurred OR row is individually dirty
+            if (full_clear or pin.isDirty()) {
                 const row_id = snapshot.computeRowId(pin);
                 self.dirty_rows.put(row_id, {}) catch {
                     log.warn("Failed to track dirty row {d}", .{row_id});
