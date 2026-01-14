@@ -21,7 +21,7 @@
 import type { Keybind } from "./keybinds";
 import { matchesKeybind } from "./keybinds";
 import type { TerminalAction, ActionContext } from "./actions";
-import { executeAction } from "./actions";
+import { executeAction, canPerformAction } from "./actions";
 
 export interface KeyMessage {
   type: "key";
@@ -44,6 +44,8 @@ export type KeyboardCallback = (message: KeyMessage) => void;
 export interface KeybindEntry {
   keybind: Keybind;
   action: TerminalAction;
+  /** If true, only consume the key if the action can be performed */
+  performable?: boolean;
 }
 
 /**
@@ -170,12 +172,22 @@ export class KeyboardHandler {
 
   /**
    * Find a matching keybind for the given event.
-   * Returns the action if found, null otherwise.
+   * Returns the entry if found, null otherwise.
+   *
+   * If a keybind has `performable: true`, it's only matched if the action
+   * can actually be performed (checked via canPerformAction).
    */
-  private findMatchingKeybind(e: KeyboardEvent): TerminalAction | null {
+  private findMatchingKeybind(e: KeyboardEvent): KeybindEntry | null {
     for (const entry of this.keybinds) {
       if (matchesKeybind(e, entry.keybind)) {
-        return entry.action;
+        // If performable flag is set, check if action can be performed
+        if (entry.performable && this.actionContext) {
+          if (!canPerformAction(entry.action, this.actionContext)) {
+            // Action can't be performed, skip this keybind
+            continue;
+          }
+        }
+        return entry;
       }
     }
     return null;
@@ -197,13 +209,13 @@ export class KeyboardHandler {
     }
 
     // Check for matching keybind
-    const action = this.findMatchingKeybind(e);
-    if (action && action.type !== "none" && this.actionContext) {
+    const entry = this.findMatchingKeybind(e);
+    if (entry && entry.action.type !== "none" && this.actionContext) {
       // For clipboard actions, don't preventDefault() to preserve user gesture
       // context required by the Clipboard API
       const isClipboardAction =
-        action.type === "copy_to_clipboard" ||
-        action.type === "paste_from_clipboard";
+        entry.action.type === "copy_to_clipboard" ||
+        entry.action.type === "paste_from_clipboard";
 
       if (!isClipboardAction) {
         e.preventDefault();
@@ -214,7 +226,7 @@ export class KeyboardHandler {
       this.consumedKeys.add(e.code);
 
       // Execute the action
-      void executeAction(action, this.actionContext);
+      void executeAction(entry.action, this.actionContext);
       return;
     }
 

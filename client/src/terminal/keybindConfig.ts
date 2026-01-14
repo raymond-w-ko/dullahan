@@ -191,6 +191,9 @@ export function parseAction(actionStr: string): TerminalAction | null {
 /**
  * Parse a keybind config string like "ctrl+shift+c=copy_to_clipboard"
  * into a KeybindEntry.
+ *
+ * Supports the `performable:` prefix on actions:
+ * - "ctrl+c=performable:copy_to_clipboard" - only consume if action can perform
  */
 export function parseKeybindConfig(configStr: string): KeybindEntry | null {
   const eqIdx = configStr.indexOf("=");
@@ -200,11 +203,18 @@ export function parseKeybindConfig(configStr: string): KeybindEntry | null {
   }
 
   const keybindStr = configStr.slice(0, eqIdx).trim();
-  const actionStr = configStr.slice(eqIdx + 1).trim();
+  let actionStr = configStr.slice(eqIdx + 1).trim();
 
   if (!keybindStr || !actionStr) {
     console.warn(`Invalid keybind config (empty parts): ${configStr}`);
     return null;
+  }
+
+  // Check for performable: prefix
+  let performable = false;
+  if (actionStr.startsWith("performable:")) {
+    performable = true;
+    actionStr = actionStr.slice("performable:".length);
   }
 
   try {
@@ -215,7 +225,7 @@ export function parseKeybindConfig(configStr: string): KeybindEntry | null {
       return null;
     }
 
-    return { keybind, action };
+    return { keybind, action, performable };
   } catch (err) {
     console.warn(`Failed to parse keybind config: ${configStr}`, err);
     return null;

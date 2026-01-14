@@ -173,6 +173,59 @@ export type ActionHandler = (
 // ============================================================================
 
 /**
+ * Check if an action can be performed in the current context.
+ *
+ * Used by the `performable:` keybind prefix - if this returns false,
+ * the keybind is not consumed and the key passes through to the terminal.
+ *
+ * @example
+ * // performable:ctrl+c=copy_to_clipboard
+ * // Only consumes Ctrl+C if there's a selection to copy
+ */
+export function canPerformAction(
+  action: TerminalAction,
+  ctx: ActionContext
+): boolean {
+  switch (action.type) {
+    case "copy_to_clipboard": {
+      // Can only copy if there's a selection
+      const selection = ctx.getSelection();
+      return selection !== null && selection.length > 0;
+    }
+
+    case "switch_window": {
+      // Can only switch if target window exists
+      const windowIds = ctx.getWindowIds();
+      const idx = action.windowIndex - 1;
+      return idx >= 0 && idx < windowIds.length;
+    }
+
+    case "cycle_window": {
+      // Can only cycle if there are multiple windows
+      return ctx.getWindowIds().length > 1;
+    }
+
+    case "focus_pane": {
+      // Can only focus if there are multiple panes
+      return ctx.getPaneIds().length > 1;
+    }
+
+    // Most actions are always performable
+    case "paste_from_clipboard":
+    case "scroll":
+    case "send_text":
+    case "clear_screen":
+    case "reset_terminal":
+    case "new_window":
+    case "close_window":
+    case "toggle_fullscreen":
+    case "open_settings":
+    case "none":
+      return true;
+  }
+}
+
+/**
  * Execute a terminal action.
  *
  * This is the main entry point for the action system. It dispatches
