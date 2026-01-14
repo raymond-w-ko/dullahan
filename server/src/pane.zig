@@ -8,6 +8,14 @@ const posix = std.posix;
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
 const Pty = @import("pty.zig").Pty;
+
+/// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
+/// Re-exported from ghostty for use by event_loop.zig
+pub const MouseEvents = Terminal.MouseEvents;
+
+/// Mouse encoding formats (DECSET 1005, 1006, 1015, 1016)
+/// Re-exported from ghostty for use by event_loop.zig
+pub const MouseFormat = Terminal.MouseFormat;
 const snapshot = @import("snapshot.zig");
 const process = @import("process.zig");
 const dlog = @import("dlog.zig");
@@ -673,6 +681,31 @@ pub const Pane = struct {
         return self.terminal.modes.get(.cursor_keys);
     }
 
+    /// Get the current mouse event reporting mode.
+    /// Returns .none if mouse reporting is disabled.
+    /// Used to determine whether to send mouse events to the terminal.
+    pub fn getMouseEvents(self: *const Pane) MouseEvents {
+        return self.terminal.flags.mouse_event;
+    }
+
+    /// Get the current mouse encoding format.
+    /// Determines how mouse events are encoded in escape sequences.
+    /// Only meaningful when getMouseEvents() != .none
+    pub fn getMouseFormat(self: *const Pane) MouseFormat {
+        return self.terminal.flags.mouse_format;
+    }
+
+    /// Check if mouse event reporting is enabled
+    pub fn isMouseEnabled(self: *const Pane) bool {
+        return self.terminal.flags.mouse_event != .none;
+    }
+
+    /// Check if mouse motion events should be reported.
+    /// True for modes 1002 (button) and 1003 (any).
+    pub fn wantsMouseMotion(self: *const Pane) bool {
+        return self.terminal.flags.mouse_event.motion();
+    }
+
     /// Dump pane state in compact human-readable format
     pub fn dump(self: *Pane, writer: anytype) !void {
         const screen = self.terminal.screens.active;
@@ -967,4 +1000,39 @@ test "bell detection skips OSC terminators" {
     // Text with OSC in middle and real bell after
     try pane.feed("Hello\x1b]0;Title\x07World\x07");
     try std.testing.expect(pane.hasBell());
+}
+
+test "mouse mode accessors" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Initially mouse reporting is disabled
+    try std.testing.expectEqual(MouseEvents.none, pane.getMouseEvents());
+    try std.testing.expectEqual(MouseFormat.x10, pane.getMouseFormat());
+    try std.testing.expect(!pane.isMouseEnabled());
+    try std.testing.expect(!pane.wantsMouseMotion());
+
+    // Enable SGR mouse mode via escape sequence (DECSET 1000 + 1006)
+    try pane.feed("\x1b[?1000h"); // Enable normal mouse tracking
+    try std.testing.expectEqual(MouseEvents.normal, pane.getMouseEvents());
+    try std.testing.expect(pane.isMouseEnabled());
+    try std.testing.expect(!pane.wantsMouseMotion()); // Normal mode doesn't track motion
+
+    try pane.feed("\x1b[?1006h"); // Enable SGR format
+    try std.testing.expectEqual(MouseFormat.sgr, pane.getMouseFormat());
+
+    // Enable button tracking (motion while pressed)
+    try pane.feed("\x1b[?1002h");
+    try std.testing.expectEqual(MouseEvents.button, pane.getMouseEvents());
+    try std.testing.expect(pane.wantsMouseMotion());
+
+    // Enable any-event tracking (all motion)
+    try pane.feed("\x1b[?1003h");
+    try std.testing.expectEqual(MouseEvents.any, pane.getMouseEvents());
+    try std.testing.expect(pane.wantsMouseMotion());
+
+    // Disable mouse tracking
+    try pane.feed("\x1b[?1003l");
+    try std.testing.expectEqual(MouseEvents.none, pane.getMouseEvents());
+    try std.testing.expect(!pane.isMouseEnabled());
 }

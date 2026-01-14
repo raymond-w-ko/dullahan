@@ -20,7 +20,10 @@ const snapshot = @import("snapshot.zig");
 const layout_db = @import("layout_db.zig");
 const Session = @import("session.zig").Session;
 const Window = @import("window.zig").Window;
-const Pane = @import("pane.zig").Pane;
+const pane_mod = @import("pane.zig");
+const Pane = pane_mod.Pane;
+const MouseEvents = pane_mod.MouseEvents;
+const MouseFormat = pane_mod.MouseFormat;
 const signal = @import("signal.zig");
 
 const log = std.log.scoped(.event_loop);
@@ -1180,14 +1183,47 @@ pub const EventLoop = struct {
                 msg.timestamp,
             });
 
-            // Validate pane exists
-            _ = self.session.getPaneById(msg.paneId) orelse {
+            // Get pane and check mouse mode
+            const pane = self.session.getPaneById(msg.paneId) orelse {
                 log.warn("Mouse event for unknown pane {d}", .{msg.paneId});
                 return;
             };
 
-            // TODO: Convert to terminal mouse protocol sequences (X10, SGR, etc.)
-            // For now, just log the event
+            // Check if terminal has mouse reporting enabled
+            const mouse_events = pane.getMouseEvents();
+            if (mouse_events == .none) {
+                // Mouse reporting disabled, ignore event
+                log.debug("Mouse event ignored (reporting disabled)", .{});
+                return;
+            }
+
+            // Check if this event type should be reported
+            const is_motion = std.mem.eql(u8, msg.state, "move");
+            if (is_motion and !mouse_events.motion()) {
+                // Motion event but terminal only wants clicks
+                log.debug("Mouse motion ignored (mode={s})", .{@tagName(mouse_events)});
+                return;
+            }
+
+            // For X10 mode (9), only report button presses (not releases)
+            const is_release = std.mem.eql(u8, msg.state, "up");
+            if (mouse_events == .x10 and is_release) {
+                log.debug("Mouse release ignored (X10 mode)", .{});
+                return;
+            }
+
+            const mouse_format = pane.getMouseFormat();
+            log.debug("Mouse event accepted: mode={s} format={s}", .{
+                @tagName(mouse_events),
+                @tagName(mouse_format),
+            });
+
+            // TODO(du-qsq): Encode mouse event based on format and write to PTY
+            // - SGR (1006): ESC [ < button ; x ; y M/m
+            // - X10: ESC [ M <button+32> <x+33> <y+33>
+            // - UTF-8 (1005): ESC [ M <button+32> <utf8(x+33)> <utf8(y+33)>
+            // - URXVT (1015): ESC [ button ; x ; y M
+            // - SGR-Pixels (1016): ESC [ < button ; pixel_x ; pixel_y M/m
         }
     }
 
