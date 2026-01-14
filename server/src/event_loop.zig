@@ -1333,9 +1333,43 @@ pub const EventLoop = struct {
                     };
                     log.debug("Sent X10 mouse: button={d} pos=({d},{d})", .{ button_code, msg.x, msg.y });
                 },
+                .urxvt => {
+                    // URXVT format (mode 1015): ESC [ <button+32> ; <x+1> ; <y+1> M
+                    // Like X10 but uses decimal encoding for coordinates (no 223 limit)
+                    var button_code: u8 = if (is_release)
+                        3 // Release is always 3
+                    else
+                        msg.button;
+
+                    if (msg.shift) button_code += 4;
+                    if (msg.alt) button_code += 8;
+                    if (msg.ctrl) button_code += 16;
+                    if (is_motion) button_code += 32;
+
+                    // Coordinates are 1-indexed
+                    const x = msg.x + 1;
+                    const y = msg.y + 1;
+
+                    // Format the sequence
+                    var buf: [32]u8 = undefined;
+                    const seq = std.fmt.bufPrint(&buf, "\x1b[{d};{d};{d}M", .{
+                        32 + button_code,
+                        x,
+                        y,
+                    }) catch {
+                        log.warn("Failed to format URXVT mouse sequence", .{});
+                        return;
+                    };
+
+                    // Write to PTY
+                    pane.writeInput(seq) catch |e| {
+                        log.warn("Failed to send URXVT mouse event: {any}", .{e});
+                        return;
+                    };
+                    log.debug("Sent URXVT mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
+                },
                 else => {
                     // TODO(du-94n): UTF-8 format
-                    // TODO(du-1sc): URXVT format
                     log.debug("Mouse format {s} not yet implemented", .{@tagName(mouse_format)});
                 },
             }
