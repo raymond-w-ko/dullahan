@@ -6,6 +6,7 @@ import { useRef, useEffect, useCallback } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
 import { IMEHandler, createIMEHandler } from "../terminal/ime";
+import { MouseHandler, createMouseHandler } from "../terminal/mouse";
 import { getActiveKeybinds, onKeybindsChange } from "../terminal/keybindConfig";
 import {
   getSelection,
@@ -57,6 +58,7 @@ export function TerminalView({
   const terminalRef = useRef<HTMLPreElement>(null);
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
+  const mouseRef = useRef<MouseHandler | null>(null);
 
   // Setup keyboard and IME handlers
   useEffect(() => {
@@ -190,6 +192,31 @@ export function TerminalView({
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
+
+  // Setup mouse handler
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el) return;
+
+    const mouse = createMouseHandler();
+    mouseRef.current = mouse;
+    mouse.setPaneId(paneId);
+
+    // Attach to terminal element
+    mouse.attach(el, (_msg) => {
+      // Currently just debug output in mouse.ts
+      // Future: send to server for terminal mouse support
+    });
+
+    // Update cell dimensions when fonts load
+    document.fonts.ready.then(() => {
+      mouse.updateCellDimensions();
+    });
+
+    return () => {
+      mouse.detach();
+    };
+  }, [paneId]);
 
   // Focus IME textarea when terminal is clicked (but not when selecting text)
   // The keyboard handler is attached to the IME textarea, not the terminal element

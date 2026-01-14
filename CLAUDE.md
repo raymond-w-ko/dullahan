@@ -277,7 +277,8 @@ dullahan/
 │   │       ├── keyboard.ts   # Keyboard event handling + keybind interception
 │   │       ├── keybinds.ts   # Keybind string parser (Ghostty-style)
 │   │       ├── actions.ts    # Terminal action types and handlers
-│   │       └── ime.ts        # IME composition support
+│   │       ├── ime.ts        # IME composition support
+│   │       └── mouse.ts      # Mouse event handling + coordinate conversion
 │   └── dist/                # build output (gitignored)
 │
 ├── protocol/                # shared definitions
@@ -461,6 +462,35 @@ When creating new CSS, JS, or static files in `client/`, you must update `script
 for (const css of ["palette.css", "liquid-glass.css", "dullahan.css", "themes.css"]) {
 //                               ^^^^^^^^^^^^^^^^^ add new CSS here
 ```
+
+### Client Debug Logging
+
+Use `client/src/debug.ts` for all client-side debug logging. **Never use `console.log` directly** for debug output.
+
+```typescript
+import { debug } from "../debug";
+
+// ✅ GOOD - uses debug module
+debug.log("[mouse] click at (5, 12)");
+debug.warn("Unexpected state");
+
+// ❌ BAD - direct console.log
+console.log("click at", x, y);
+```
+
+**Enable debug logging:**
+- URL param: `?debug` (e.g., `http://localhost:7681/?debug`)
+- localStorage: `localStorage.setItem('debug', 'true')`
+
+**Available methods:**
+- `debug.log()` — general debug info (disabled by default)
+- `debug.warn()` — warnings (disabled by default)
+- `debug.error()` — errors (always enabled)
+- `debug.group()` / `debug.groupEnd()` — grouped output
+- `debug.table()` — tabular data
+- `debug.time()` / `debug.timeEnd()` — timing
+
+All output is prefixed with `[dullahan]` for easy filtering in DevTools.
 
 ---
 
