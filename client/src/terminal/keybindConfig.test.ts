@@ -163,6 +163,78 @@ describe("parseAction", () => {
   test("returns null for unknown actions", () => {
     expect(parseAction("unknown_action")).toBe(null);
   });
+
+  describe("text: action", () => {
+    test("parses text with hex escape", () => {
+      const result = parseAction("text:\\x15");
+      expect(result).toEqual({ type: "send_text", text: "\x15" });
+    });
+
+    test("parses text with multiple escapes", () => {
+      const result = parseAction("text:\\x1b[A");
+      expect(result).toEqual({ type: "send_text", text: "\x1b[A" });
+    });
+
+    test("parses text with newline", () => {
+      const result = parseAction("text:echo hello\\n");
+      expect(result).toEqual({ type: "send_text", text: "echo hello\n" });
+    });
+
+    test("parses plain text", () => {
+      const result = parseAction("text:hello");
+      expect(result).toEqual({ type: "send_text", text: "hello" });
+    });
+
+    test("returns null without parameter", () => {
+      expect(parseAction("text")).toBe(null);
+    });
+
+    test("returns null for invalid escape", () => {
+      expect(parseAction("text:\\q")).toBe(null);
+    });
+  });
+
+  describe("csi: action", () => {
+    test("parses csi:A (cursor up)", () => {
+      const result = parseAction("csi:A");
+      expect(result).toEqual({ type: "send_text", text: "\x1b[A" });
+    });
+
+    test("parses csi:2J (clear screen)", () => {
+      const result = parseAction("csi:2J");
+      expect(result).toEqual({ type: "send_text", text: "\x1b[2J" });
+    });
+
+    test("parses csi with parameters (1;5A for Ctrl+Up)", () => {
+      const result = parseAction("csi:1;5A");
+      expect(result).toEqual({ type: "send_text", text: "\x1b[1;5A" });
+    });
+
+    test("returns null without parameter", () => {
+      expect(parseAction("csi")).toBe(null);
+    });
+  });
+
+  describe("esc: action", () => {
+    test("parses esc:c (reset terminal)", () => {
+      const result = parseAction("esc:c");
+      expect(result).toEqual({ type: "send_text", text: "\x1bc" });
+    });
+
+    test("parses esc:d (delete word)", () => {
+      const result = parseAction("esc:d");
+      expect(result).toEqual({ type: "send_text", text: "\x1bd" });
+    });
+
+    test("parses esc with escape sequences", () => {
+      const result = parseAction("esc:\\x5b");
+      expect(result).toEqual({ type: "send_text", text: "\x1b[" });
+    });
+
+    test("returns null without parameter", () => {
+      expect(parseAction("esc")).toBe(null);
+    });
+  });
 });
 
 describe("parseKeybindConfig", () => {

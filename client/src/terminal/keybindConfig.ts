@@ -9,6 +9,7 @@
 import type { KeybindEntry } from "./keyboard";
 import type { TerminalAction } from "./actions";
 import { parseKeybind } from "./keybinds";
+import { parseStringLiteral } from "./stringLiteral";
 
 const STORAGE_KEY = "dullahan.keybinds";
 
@@ -143,6 +144,43 @@ export function parseAction(actionStr: string): TerminalAction | null {
     case "none":
     case "unbind":
       return { type: "none" };
+
+    // Raw input actions (Ghostty-compatible)
+    case "text":
+      // text:xxx - send literal text with escape parsing
+      if (param !== null) {
+        try {
+          return { type: "send_text", text: parseStringLiteral(param) };
+        } catch (err) {
+          console.warn(`Invalid text: action: ${err}`);
+          return null;
+        }
+      }
+      return null;
+
+    case "csi":
+      // csi:xxx - send CSI sequence (ESC [ + xxx)
+      if (param !== null) {
+        try {
+          return { type: "send_text", text: "\x1b[" + parseStringLiteral(param) };
+        } catch (err) {
+          console.warn(`Invalid csi: action: ${err}`);
+          return null;
+        }
+      }
+      return null;
+
+    case "esc":
+      // esc:xxx - send ESC sequence (ESC + xxx)
+      if (param !== null) {
+        try {
+          return { type: "send_text", text: "\x1b" + parseStringLiteral(param) };
+        } catch (err) {
+          console.warn(`Invalid esc: action: ${err}`);
+          return null;
+        }
+      }
+      return null;
 
     default:
       console.warn(`Unknown keybind action: ${actionStr}`);
