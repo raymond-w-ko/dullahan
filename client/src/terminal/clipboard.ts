@@ -38,11 +38,19 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
 
     // Fallback: use deprecated execCommand (for older browsers)
-    return fallbackCopy(text);
+    const success = fallbackCopy(text);
+    if (!success) {
+      window.alert("Copy failed: Clipboard API not available and fallback failed.");
+    }
+    return success;
   } catch (err) {
     console.warn("Clipboard write failed:", err);
     // Try fallback on permission error
-    return fallbackCopy(text);
+    const success = fallbackCopy(text);
+    if (!success) {
+      window.alert(`Copy failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+    return success;
   }
 }
 
@@ -56,10 +64,12 @@ export async function pasteFromClipboard(): Promise<string> {
     if (isClipboardAvailable()) {
       return await navigator.clipboard.readText();
     }
+    window.alert("Paste failed: Clipboard API not available.");
     return "";
   } catch (err) {
     // Permission denied or not in secure context
     console.warn("Clipboard read failed:", err);
+    window.alert(`Paste failed: ${err instanceof Error ? err.message : "Permission denied or not in secure context"}`);
     return "";
   }
 }

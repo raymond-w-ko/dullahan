@@ -286,16 +286,11 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
     // Check for matching keybind
     const entry = this.findMatchingKeybind(e);
     if (entry && entry.action.type !== "none" && this.actionContext) {
-      // For paste, don't preventDefault() to preserve user gesture context
-      // required by the Clipboard API's readText(). Copy (writeText) works
-      // fine with preventDefault, and we need it to prevent browser's native
-      // copy from interfering with our selection clearing.
-      const isPasteAction = entry.action.type === "paste_from_clipboard";
-
-      if (!isPasteAction) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      // Always prevent default for both copy and paste to avoid browser
+      // interference. The Clipboard API's user gesture requirement is about
+      // having a recent user interaction, not about preventDefault.
+      e.preventDefault();
+      e.stopPropagation();
 
       // Track this key as consumed so we suppress its keyup
       this.consumedKeys.add(e.code);
