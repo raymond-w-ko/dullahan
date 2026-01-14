@@ -71,7 +71,7 @@ interface PaneState {
 }
 
 /** Binary msgpack snapshot from server */
-interface BinarySnapshot {
+export interface BinarySnapshot {
   type: "snapshot";
   paneId: number;      // Pane ID for multi-pane support
   gen: number;         // Generation counter for delta sync
@@ -95,7 +95,7 @@ interface BinarySnapshot {
 }
 
 /** Binary msgpack delta update from server */
-interface BinaryDelta {
+export interface BinaryDelta {
   type: "delta";
   paneId: number;      // Pane ID for multi-pane support
   fromGen: number;     // Generation this delta applies FROM (client must be at this gen)

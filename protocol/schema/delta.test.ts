@@ -17,55 +17,7 @@ import type { Cell, CellContent, WideValue } from "./cell";
 import { ContentTag, Wide } from "./cell";
 import type { Style, StyleTable, Color, UnderlineValue } from "./style";
 import { ColorTag, Underline } from "./style";
-
-// ============================================================================
-// Types matching server wire format
-// ============================================================================
-
-interface BinarySnapshot {
-  type: "snapshot";
-  gen: number;
-  cols: number;
-  rows: number;
-  cursor: {
-    x: number;
-    y: number;
-    visible: boolean;
-    style: string;
-  };
-  altScreen: boolean;
-  scrollback: {
-    totalRows: number;
-    viewportTop: number;
-  };
-  cells: Uint8Array;
-  styles: Uint8Array;
-  rowIds: Uint8Array;
-}
-
-interface BinaryDelta {
-  type: "delta";
-  gen: number;
-  cols: number;
-  rows: number;
-  cursor: {
-    x: number;
-    y: number;
-    visible: boolean;
-    style: string;
-  };
-  altScreen: boolean;
-  vp: {
-    totalRows: number;
-    viewportTop: number;
-  };
-  dirtyRows: Array<{
-    id: number;
-    cells: Uint8Array;
-  }>;
-  rowIds: Uint8Array;
-  styles: Uint8Array;
-}
+import type { BinarySnapshot, BinaryDelta } from "../../client/src/terminal/connection";
 
 interface DecodedSnapshot {
   gen: number;
