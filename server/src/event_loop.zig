@@ -25,6 +25,7 @@ const Pane = pane_mod.Pane;
 const MouseEvents = pane_mod.MouseEvents;
 const MouseFormat = pane_mod.MouseFormat;
 const signal = @import("signal.zig");
+const mouse = @import("mouse.zig");
 
 const log = std.log.scoped(.event_loop);
 
@@ -1222,196 +1223,43 @@ pub const EventLoop = struct {
                 @tagName(mouse_format),
             });
 
-            // Encode and send mouse event based on format
-            switch (mouse_format) {
-                .sgr => {
-                    // SGR format: ESC [ < button ; x ; y M/m
-                    // Button code: base + modifiers + motion flag
-                    var button_code: u8 = msg.button; // 0=left, 1=middle, 2=right
-                    if (msg.shift) button_code += 4;
-                    if (msg.alt) button_code += 8;
-                    if (msg.ctrl) button_code += 16;
-                    if (is_motion) button_code += 32;
+            // Build mouse event for encoding
+            const mouse_state = mouse.MouseState.fromString(msg.state) orelse {
+                log.warn("Unknown mouse state: {s}", .{msg.state});
+                return;
+            };
 
-                    // Coordinates are 1-indexed in SGR (cell coordinates)
-                    const x = msg.x + 1;
-                    const y = msg.y + 1;
-
-                    // Terminator: 'M' for press/motion, 'm' for release
-                    const terminator: u8 = if (is_release) 'm' else 'M';
-
-                    // Format the sequence
-                    var buf: [32]u8 = undefined;
-                    const seq = std.fmt.bufPrint(&buf, "\x1b[<{d};{d};{d}{c}", .{
-                        button_code,
-                        x,
-                        y,
-                        terminator,
-                    }) catch {
-                        log.warn("Failed to format SGR mouse sequence", .{});
-                        return;
-                    };
-
-                    // Write to PTY
-                    pane.writeInput(seq) catch |e| {
-                        log.warn("Failed to send mouse event: {any}", .{e});
-                        return;
-                    };
-                    log.debug("Sent SGR mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
+            const event = mouse.MouseEvent{
+                .button = msg.button,
+                .x = msg.x,
+                .y = msg.y,
+                .px = msg.px,
+                .py = msg.py,
+                .state = mouse_state,
+                .modifiers = .{
+                    .ctrl = msg.ctrl,
+                    .alt = msg.alt,
+                    .shift = msg.shift,
+                    .meta = msg.meta,
                 },
-                .sgr_pixels => {
-                    // SGR-Pixels format (mode 1016): ESC [ < button ; px ; py M/m
-                    // Same as SGR but uses pixel coordinates instead of cell coordinates
-                    var button_code: u8 = msg.button; // 0=left, 1=middle, 2=right
-                    if (msg.shift) button_code += 4;
-                    if (msg.alt) button_code += 8;
-                    if (msg.ctrl) button_code += 16;
-                    if (is_motion) button_code += 32;
+            };
 
-                    // Use pixel coordinates if available, otherwise fall back to cell coords
-                    // Note: Unlike SGR which is 1-indexed, SGR-Pixels is 0-indexed
-                    const px = msg.px orelse msg.x;
-                    const py = msg.py orelse msg.y;
+            // X10 mode (DECSET 9) doesn't have modifiers, but normal mode (1000) does
+            const include_x10_modifiers = mouse_events != .x10;
 
-                    // Terminator: 'M' for press/motion, 'm' for release
-                    const terminator: u8 = if (is_release) 'm' else 'M';
+            // Encode and send mouse event
+            var buf: [48]u8 = undefined;
+            const result = mouse.encode(event, mouse_format, &buf, include_x10_modifiers) orelse {
+                log.debug("Failed to encode mouse event (format={s})", .{@tagName(mouse_format)});
+                return;
+            };
 
-                    // Format the sequence
-                    var buf: [48]u8 = undefined;
-                    const seq = std.fmt.bufPrint(&buf, "\x1b[<{d};{d};{d}{c}", .{
-                        button_code,
-                        px,
-                        py,
-                        terminator,
-                    }) catch {
-                        log.warn("Failed to format SGR-Pixels mouse sequence", .{});
-                        return;
-                    };
-
-                    // Write to PTY
-                    pane.writeInput(seq) catch |e| {
-                        log.warn("Failed to send mouse event: {any}", .{e});
-                        return;
-                    };
-                    log.debug("Sent SGR-Pixels mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
-                },
-                .x10 => {
-                    // X10 format: ESC [ M <button+32> <x+32+1> <y+32+1>
-                    // Coordinate limit: max 222 (222 + 32 + 1 = 255)
-                    if (msg.x > 222 or msg.y > 222) {
-                        log.debug("X10 mouse: coordinates ({d},{d}) exceed limit 222", .{ msg.x, msg.y });
-                        return;
-                    }
-
-                    // Button code calculation
-                    var button_code: u8 = if (is_release)
-                        3 // Release is always 3 in X10 format
-                    else
-                        msg.button; // 0=left, 1=middle, 2=right
-
-                    // X10 mode (DECSET 9) doesn't have modifiers, but normal mode (1000) does
-                    if (mouse_events != .x10) {
-                        if (msg.shift) button_code += 4;
-                        if (msg.alt) button_code += 8;
-                        if (msg.ctrl) button_code += 16;
-                    }
-                    if (is_motion) button_code += 32;
-
-                    // Encode: ESC [ M <button+32> <x+33> <y+33>
-                    const seq = [6]u8{
-                        0x1b, // ESC
-                        '[',
-                        'M',
-                        32 + button_code,
-                        32 + @as(u8, @intCast(msg.x)) + 1,
-                        32 + @as(u8, @intCast(msg.y)) + 1,
-                    };
-
-                    pane.writeInput(&seq) catch |e| {
-                        log.warn("Failed to send X10 mouse event: {any}", .{e});
-                        return;
-                    };
-                    log.debug("Sent X10 mouse: button={d} pos=({d},{d})", .{ button_code, msg.x, msg.y });
-                },
-                .urxvt => {
-                    // URXVT format (mode 1015): ESC [ <button+32> ; <x+1> ; <y+1> M
-                    // Like X10 but uses decimal encoding for coordinates (no 223 limit)
-                    var button_code: u8 = if (is_release)
-                        3 // Release is always 3
-                    else
-                        msg.button;
-
-                    if (msg.shift) button_code += 4;
-                    if (msg.alt) button_code += 8;
-                    if (msg.ctrl) button_code += 16;
-                    if (is_motion) button_code += 32;
-
-                    // Coordinates are 1-indexed
-                    const x = msg.x + 1;
-                    const y = msg.y + 1;
-
-                    // Format the sequence
-                    var buf: [32]u8 = undefined;
-                    const seq = std.fmt.bufPrint(&buf, "\x1b[{d};{d};{d}M", .{
-                        32 + button_code,
-                        x,
-                        y,
-                    }) catch {
-                        log.warn("Failed to format URXVT mouse sequence", .{});
-                        return;
-                    };
-
-                    // Write to PTY
-                    pane.writeInput(seq) catch |e| {
-                        log.warn("Failed to send URXVT mouse event: {any}", .{e});
-                        return;
-                    };
-                    log.debug("Sent URXVT mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
-                },
-                .utf8 => {
-                    // UTF-8 format (mode 1005): ESC [ M <button+32> <utf8(x+33)> <utf8(y+33)>
-                    // Like X10 but uses UTF-8 encoding for coordinates (extends beyond 223)
-                    var button_code: u8 = if (is_release)
-                        3 // Release is always 3
-                    else
-                        msg.button;
-
-                    if (msg.shift) button_code += 4;
-                    if (msg.alt) button_code += 8;
-                    if (msg.ctrl) button_code += 16;
-                    if (is_motion) button_code += 32;
-
-                    // Build the sequence: ESC [ M <button> <x> <y>
-                    var buf: [12]u8 = undefined;
-                    buf[0] = 0x1b; // ESC
-                    buf[1] = '[';
-                    buf[2] = 'M';
-                    buf[3] = 32 + button_code;
-
-                    // UTF-8 encode coordinates (1-indexed, +32 offset)
-                    var i: usize = 4;
-                    i += std.unicode.utf8Encode(@intCast(32 + msg.x + 1), buf[i..]) catch {
-                        log.warn("Failed to UTF-8 encode X coordinate", .{});
-                        return;
-                    };
-                    i += std.unicode.utf8Encode(@intCast(32 + msg.y + 1), buf[i..]) catch {
-                        log.warn("Failed to UTF-8 encode Y coordinate", .{});
-                        return;
-                    };
-
-                    // Write to PTY
-                    pane.writeInput(buf[0..i]) catch |e| {
-                        log.warn("Failed to send UTF-8 mouse event: {any}", .{e});
-                        return;
-                    };
-                    log.debug("Sent UTF-8 mouse: button={d} pos=({d},{d}) len={d}", .{
-                        button_code,
-                        msg.x,
-                        msg.y,
-                        i,
-                    });
-                },
-            }
+            // Write to PTY
+            pane.writeInput(result.slice()) catch |e| {
+                log.warn("Failed to send mouse event: {any}", .{e});
+                return;
+            };
+            log.debug("Sent {s} mouse: pos=({d},{d})", .{ @tagName(mouse_format), msg.x, msg.y });
         }
     }
 
