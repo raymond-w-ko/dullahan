@@ -59,6 +59,10 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
     // Initial calculation
     calculate();
 
+    // Delayed recalculation - handles cases where layout hasn't settled yet
+    // (new windows, varying layouts, initial connection)
+    const delayedTimer = window.setTimeout(calculate, 100);
+
     // Observe resize
     const observer = new ResizeObserver(() => {
       calculate();
@@ -69,6 +73,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
     document.fonts.ready.then(calculate);
 
     return () => {
+      window.clearTimeout(delayedTimer);
       observer.disconnect();
     };
   }, [connection, paneId, isReadOnly, dimensionVersion]);
