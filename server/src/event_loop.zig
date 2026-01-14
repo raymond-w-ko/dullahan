@@ -1218,12 +1218,50 @@ pub const EventLoop = struct {
                 @tagName(mouse_format),
             });
 
-            // TODO(du-qsq): Encode mouse event based on format and write to PTY
-            // - SGR (1006): ESC [ < button ; x ; y M/m
-            // - X10: ESC [ M <button+32> <x+33> <y+33>
-            // - UTF-8 (1005): ESC [ M <button+32> <utf8(x+33)> <utf8(y+33)>
-            // - URXVT (1015): ESC [ button ; x ; y M
-            // - SGR-Pixels (1016): ESC [ < button ; pixel_x ; pixel_y M/m
+            // Encode and send mouse event based on format
+            switch (mouse_format) {
+                .sgr, .sgr_pixels => {
+                    // SGR format: ESC [ < button ; x ; y M/m
+                    // Button code: base + modifiers + motion flag
+                    var button_code: u8 = msg.button; // 0=left, 1=middle, 2=right
+                    if (msg.shift) button_code += 4;
+                    if (msg.alt) button_code += 8;
+                    if (msg.ctrl) button_code += 16;
+                    if (is_motion) button_code += 32;
+
+                    // Coordinates are 1-indexed in SGR
+                    const x = msg.x + 1;
+                    const y = msg.y + 1;
+
+                    // Terminator: 'M' for press/motion, 'm' for release
+                    const terminator: u8 = if (is_release) 'm' else 'M';
+
+                    // Format the sequence
+                    var buf: [32]u8 = undefined;
+                    const seq = std.fmt.bufPrint(&buf, "\x1b[<{d};{d};{d}{c}", .{
+                        button_code,
+                        x,
+                        y,
+                        terminator,
+                    }) catch {
+                        log.warn("Failed to format SGR mouse sequence", .{});
+                        return;
+                    };
+
+                    // Write to PTY
+                    pane.writeInput(seq) catch |e| {
+                        log.warn("Failed to send mouse event: {any}", .{e});
+                        return;
+                    };
+                    log.debug("Sent SGR mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
+                },
+                else => {
+                    // TODO(du-2xd): X10 format
+                    // TODO(du-94n): UTF-8 format
+                    // TODO(du-1sc): URXVT format
+                    log.debug("Mouse format {s} not yet implemented", .{@tagName(mouse_format)});
+                },
+            }
         }
     }
 
