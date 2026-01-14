@@ -1368,9 +1368,48 @@ pub const EventLoop = struct {
                     };
                     log.debug("Sent URXVT mouse: {s}", .{seq[2..]}); // Skip ESC [ for readability
                 },
-                else => {
-                    // TODO(du-94n): UTF-8 format
-                    log.debug("Mouse format {s} not yet implemented", .{@tagName(mouse_format)});
+                .utf8 => {
+                    // UTF-8 format (mode 1005): ESC [ M <button+32> <utf8(x+33)> <utf8(y+33)>
+                    // Like X10 but uses UTF-8 encoding for coordinates (extends beyond 223)
+                    var button_code: u8 = if (is_release)
+                        3 // Release is always 3
+                    else
+                        msg.button;
+
+                    if (msg.shift) button_code += 4;
+                    if (msg.alt) button_code += 8;
+                    if (msg.ctrl) button_code += 16;
+                    if (is_motion) button_code += 32;
+
+                    // Build the sequence: ESC [ M <button> <x> <y>
+                    var buf: [12]u8 = undefined;
+                    buf[0] = 0x1b; // ESC
+                    buf[1] = '[';
+                    buf[2] = 'M';
+                    buf[3] = 32 + button_code;
+
+                    // UTF-8 encode coordinates (1-indexed, +32 offset)
+                    var i: usize = 4;
+                    i += std.unicode.utf8Encode(@intCast(32 + msg.x + 1), buf[i..]) catch {
+                        log.warn("Failed to UTF-8 encode X coordinate", .{});
+                        return;
+                    };
+                    i += std.unicode.utf8Encode(@intCast(32 + msg.y + 1), buf[i..]) catch {
+                        log.warn("Failed to UTF-8 encode Y coordinate", .{});
+                        return;
+                    };
+
+                    // Write to PTY
+                    pane.writeInput(buf[0..i]) catch |e| {
+                        log.warn("Failed to send UTF-8 mouse event: {any}", .{e});
+                        return;
+                    };
+                    log.debug("Sent UTF-8 mouse: button={d} pos=({d},{d}) len={d}", .{
+                        button_code,
+                        msg.x,
+                        msg.y,
+                        i,
+                    });
                 },
             }
         }
