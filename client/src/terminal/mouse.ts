@@ -7,24 +7,14 @@
 
 import { debug } from "../debug";
 import { getCellDimensions, getPadding } from "./dimensions";
+import type { MouseMessage } from "../../../protocol/schema/messages";
+import type { InputHandler } from "./handler";
 
-export interface MouseMessage {
-  type: "mouse";
-  paneId: number;
-  button: number; // 0=left, 1=middle, 2=right
-  x: number; // Column (0-indexed)
-  y: number; // Row (0-indexed)
-  state: "down" | "up" | "move";
-  ctrl: boolean;
-  alt: boolean;
-  shift: boolean;
-  meta: boolean;
-  timestamp: number;
-}
+export type { MouseMessage };
 
 export type MouseCallback = (message: MouseMessage) => void;
 
-export class MouseHandler {
+export class MouseHandler implements InputHandler<MouseCallback> {
   private element: HTMLElement | null = null;
   private callback: MouseCallback | null = null;
   private _paneId: number = 1;

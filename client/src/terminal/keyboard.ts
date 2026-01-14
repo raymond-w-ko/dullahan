@@ -22,6 +22,10 @@ import type { Keybind } from "./keybinds";
 import { matchesKeybind } from "./keybinds";
 import type { TerminalAction, ActionContext } from "./actions";
 import { executeAction, canPerformAction } from "./actions";
+import type { KeyMessage } from "../../../protocol/schema/messages";
+import type { InputHandler } from "./handler";
+
+export type { KeyMessage };
 
 /**
  * Check if a selection exists within a given element.
@@ -34,21 +38,6 @@ function isSelectionInElement(element: HTMLElement): boolean {
   if (!anchorNode) return false;
 
   return element.contains(anchorNode);
-}
-
-export interface KeyMessage {
-  type: "key";
-  paneId: number; // Target pane ID
-  key: string; // Logical key value ("a", "Enter", "ArrowUp")
-  code: string; // Physical key code ("KeyA", "Enter", "ArrowUp")
-  keyCode: number; // Legacy keyCode (deprecated but useful)
-  state: "down" | "up";
-  ctrl: boolean;
-  alt: boolean;
-  shift: boolean;
-  meta: boolean;
-  repeat: boolean;
-  timestamp: number; // High-resolution timestamp (performance.now())
 }
 
 export type KeyboardCallback = (message: KeyMessage) => void;
@@ -80,7 +69,7 @@ function isModifierKey(code: string): boolean {
   );
 }
 
-export class KeyboardHandler {
+export class KeyboardHandler implements InputHandler<KeyboardCallback> {
   private element: HTMLElement | null = null;
   private callback: KeyboardCallback | null = null;
   private boundKeyDown: (e: KeyboardEvent) => void;

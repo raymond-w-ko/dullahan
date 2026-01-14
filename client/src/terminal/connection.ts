@@ -33,11 +33,35 @@ import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
 import type { MouseMessage } from "./mouse";
+import type {
+  BinarySnapshot,
+  BinaryDelta,
+  TitleMessage,
+  BellMessage,
+  FocusServerMessage,
+  MasterChangedMessage,
+  WindowLayout,
+  WindowInfo,
+  LayoutTemplate,
+  LayoutUpdate,
+  LayoutMessage,
+  ServerMessage,
+  ClientMessage,
+  DeltaUpdate,
+  ScrollbackInfo,
+} from "../../../protocol/schema/messages";
 
-export interface ScrollbackInfo {
-  totalRows: number;    // Total rows including scrollback
-  viewportTop: number;  // Current viewport offset from top
-}
+export type {
+  BinarySnapshot,
+  BinaryDelta,
+  WindowLayout,
+  WindowInfo,
+  LayoutTemplate,
+  LayoutUpdate,
+  ClientMessage,
+  DeltaUpdate,
+  ScrollbackInfo,
+};
 
 export interface TerminalSnapshot {
   paneId: number; // Pane ID for multi-pane support
@@ -69,151 +93,6 @@ interface PaneState {
   lastRowIds: bigint[] | null;
   deltaCount: number;
   resyncCount: number;
-}
-
-/** Binary msgpack snapshot from server */
-export interface BinarySnapshot {
-  type: "snapshot";
-  paneId: number;      // Pane ID for multi-pane support
-  gen: number;         // Generation counter for delta sync
-  cols: number;
-  rows: number;
-  cursor: {
-    x: number;
-    y: number;
-    visible: boolean;
-    style: string;
-    blink?: boolean;   // DEC Mode 12 state (optional for backwards compat)
-  };
-  altScreen: boolean;
-  scrollback: {
-    totalRows: number;
-    viewportTop: number;
-  };
-  cells: Uint8Array;   // Raw cell bytes
-  styles: Uint8Array;  // Raw style bytes
-  rowIds: Uint8Array;  // Packed u64 row IDs (little-endian)
-}
-
-/** Binary msgpack delta update from server */
-export interface BinaryDelta {
-  type: "delta";
-  paneId: number;      // Pane ID for multi-pane support
-  fromGen: number;     // Generation this delta applies FROM (client must be at this gen)
-  gen: number;         // New generation after applying (toGen)
-  cols: number;
-  rows: number;
-  cursor: {
-    x: number;
-    y: number;
-    visible: boolean;
-    style: string;
-    blink?: boolean;   // DEC Mode 12 state (optional for backwards compat)
-  };
-  altScreen: boolean;
-  vp: {
-    totalRows: number;
-    viewportTop: number;
-  };
-  dirtyRows: Array<{
-    id: number;        // Row ID (as number, fits in 53 bits)
-    cells: Uint8Array; // Raw cell bytes for this row
-  }>;
-  rowIds: Uint8Array;  // Packed u64 row IDs for viewport (little-endian)
-  styles: Uint8Array;  // Raw style bytes for dirty rows
-}
-
-/** Title update message from server */
-interface TitleMessage {
-  type: "title";
-  paneId: number;
-  title: string;
-}
-
-/** Bell notification from server (BEL 0x07 triggered) */
-interface BellMessage {
-  type: "bell";
-}
-
-/** Focus change notification from server */
-interface FocusServerMessage {
-  type: "focus";
-  paneId: number;
-}
-
-/** Master changed notification from server */
-interface MasterChangedMessage {
-  type: "master_changed";
-  masterId: string | null;
-}
-
-/** Window layout from server */
-export interface WindowLayout {
-  templateId: string;
-  nodes: import("../../../protocol/schema/layout").LayoutNode[];
-}
-
-export interface WindowInfo {
-  id: number;
-  activePaneId: number;
-  panes: number[];
-  layout?: WindowLayout;
-}
-
-/** Layout template from server */
-export interface LayoutTemplate {
-  id: string;
-  name: string;
-  nodes: import("../../../protocol/schema/layout").LayoutNode[];
-}
-
-/** Layout update event */
-export interface LayoutUpdate {
-  activeWindowId: number;
-  windows: WindowInfo[];
-  templates?: LayoutTemplate[];
-}
-
-interface LayoutMessage {
-  type: "layout";
-  activeWindowId: number;
-  windows: WindowInfo[];
-  templates?: LayoutTemplate[];
-}
-
-export type BinaryServerMessage =
-  | BinarySnapshot
-  | BinaryDelta
-  | TitleMessage
-  | BellMessage
-  | FocusServerMessage
-  | MasterChangedMessage
-  | LayoutMessage
-  | { type: "output"; data: string }
-  | { type: "pong" };
-
-// All client messages (except ping/hello) include paneId to route to specific pane
-export type ClientMessage =
-  | KeyMessage
-  | TextMessage
-  | MouseMessage
-  | { type: "resize"; paneId: number; cols: number; rows: number }
-  | { type: "scroll"; paneId: number; delta: number }  // Scroll viewport by delta rows (negative = up)
-  | { type: "ping" }
-  | { type: "sync"; paneId: number; gen: number; minRowId: number }
-  | { type: "focus"; paneId: number }  // Request focus on pane
-  | { type: "hello"; clientId: string }  // Client identification on connect
-  | { type: "request_master" }  // Request to become master
-  | { type: "new_window"; templateId?: string };  // Create a new window (master only)
-
-/** Delta update event with applied changes */
-export interface DeltaUpdate {
-  paneId: number;
-  gen: number;
-  cols: number;
-  rows: number;
-  scrollback: ScrollbackInfo;
-  changedRowIds: bigint[]; // Row IDs that were updated
 }
 
 /** Storage key for client ID */
@@ -407,7 +286,7 @@ export class TerminalConnection {
           const decompressed = isCompressed
             ? snappyUncompress(payload, readSnappyLength(payload))
             : payload;
-          const msg = decode(decompressed) as BinaryServerMessage;
+          const msg = decode(decompressed) as ServerMessage;
           // Log raw message keys for debugging
           if (msg && typeof msg === 'object') {
             debug.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
@@ -423,7 +302,7 @@ export class TerminalConnection {
     };
   }
 
-  private handleBinaryMessage(msg: BinaryServerMessage): void {
+  private handleBinaryMessage(msg: ServerMessage): void {
     switch (msg.type) {
       case "snapshot": {
         const paneId = msg.paneId;

@@ -278,6 +278,7 @@ dullahan/
 │   │       ├── keybinds.ts   # Keybind string parser (Ghostty-style)
 │   │       ├── actions.ts    # Terminal action types and handlers
 │   │       ├── dimensions.ts # Shared cell dimension calculation
+│   │       ├── handler.ts    # InputHandler interface for input handlers
 │   │       ├── ime.ts        # IME composition support
 │   │       └── mouse.ts      # Mouse event handling + coordinate conversion
 │   └── dist/                # build output (gitignored)
@@ -290,6 +291,7 @@ dullahan/
 │       ├── delta.test.ts    # Delta sync tests (bun test)
 │       ├── layout.ts        # Layout node types + helpers
 │       ├── layout.test.ts   # Layout tests (bun test)
+│       ├── messages.ts      # Wire protocol message types (client↔server)
 │       ├── style.ts         # Style encode/decode (colors, attributes)
 │       └── style.test.ts    # Style tests (bun test)
 │

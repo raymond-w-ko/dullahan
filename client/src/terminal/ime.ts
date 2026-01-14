@@ -11,16 +11,14 @@
  * - Also enables mobile virtual keyboard support
  */
 
-export interface TextMessage {
-  type: "text";
-  paneId: number; // Target pane ID
-  data: string; // UTF-8 composed text
-  timestamp: number; // High-resolution timestamp
-}
+import type { TextMessage } from "../../../protocol/schema/messages";
+import type { InputHandler } from "./handler";
+
+export type { TextMessage };
 
 export type TextCallback = (message: TextMessage) => void;
 
-export class IMEHandler {
+export class IMEHandler implements InputHandler<TextCallback> {
   private callback: TextCallback | null = null;
   private _paneId: number = 1; // Default pane ID
   private textarea: HTMLTextAreaElement | null = null;
@@ -64,25 +62,13 @@ export class IMEHandler {
   }
 
   /**
-   * Set callback for text messages
-   */
-  setCallback(callback: TextCallback): void {
-    this.callback = callback;
-  }
-
-  /**
-   * Clear callback
-   */
-  clearCallback(): void {
-    this.callback = null;
-  }
-
-  /**
    * Attach IME handler to a parent element.
    * Creates a hidden textarea for IME input.
    */
-  attach(parent: HTMLElement): void {
+  attach(parent: HTMLElement, callback: TextCallback): void {
     this.detach(); // Clean up any previous attachment
+
+    this.callback = callback;
 
     this.parent = parent;
 

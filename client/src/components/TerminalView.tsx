@@ -70,7 +70,12 @@ export function TerminalView({
     imeRef.current = ime;
 
     // Attach IME first - creates hidden textarea for composition input
-    ime.attach(terminalRef.current);
+    ime.attach(terminalRef.current, (msg) => {
+      if (connection?.isConnected) {
+        connection.sendText(msg);
+      }
+      onKeyInput?.();
+    });
     ime.setPaneId(paneId);
     keyboard.setPaneId(paneId);
 
@@ -153,13 +158,6 @@ export function TerminalView({
     if (terminalRef.current) {
       keyboard.attachGlobalCopyHandler(terminalRef.current);
     }
-
-    ime.setCallback((msg) => {
-      if (connection?.isConnected) {
-        connection.sendText(msg);
-      }
-      onKeyInput?.();
-    });
 
     // Auto-focus terminal on mount (focus IME's textarea)
     ime.focus();
