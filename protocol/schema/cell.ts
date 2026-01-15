@@ -121,6 +121,17 @@ export function decodeCells(buffer: ArrayBuffer): Cell[] {
 }
 
 /**
+ * Decode all cells from a Uint8Array.
+ * Useful when working with raw byte arrays (e.g., from msgpack).
+ */
+export function decodeCellsFromBytes(bytes: Uint8Array): Cell[] {
+  // Create a new ArrayBuffer with proper alignment
+  const buffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(buffer).set(bytes);
+  return decodeCells(buffer);
+}
+
+/**
  * Decode cells from a base64-encoded string.
  */
 export function decodeCellsFromBase64(base64: string): Cell[] {

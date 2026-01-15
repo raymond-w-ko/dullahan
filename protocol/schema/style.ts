@@ -289,6 +289,12 @@ export function decodeStyleTable(bytes: Uint8Array): StyleTable {
 }
 
 /**
+ * Decode a style table from a Uint8Array.
+ * Alias for decodeStyleTable for naming consistency.
+ */
+export const decodeStyleTableFromBytes = decodeStyleTable;
+
+/**
  * Decode a style table from base64.
  */
 export function decodeStyleTableFromBase64(base64: string): StyleTable {
