@@ -7,7 +7,10 @@
  * See protocol/messages.md for wire format documentation.
  */
 
-import type { LayoutNode } from "./layout";
+import type { LayoutNode, WindowLayout, LayoutTemplate } from "./layout";
+
+// Re-export layout types used in messages
+export type { WindowLayout, LayoutTemplate } from "./layout";
 
 // =============================================================================
 // Client → Server Messages
@@ -227,11 +230,8 @@ export interface OutputMessage {
 // Layout Types (used in messages)
 // =============================================================================
 
-/** Window layout with template and nodes */
-export interface WindowLayout {
-  templateId: string;
-  nodes: LayoutNode[];
-}
+// WindowLayout and LayoutTemplate are imported and re-exported from ./layout.ts
+// to maintain a single source of truth for these types.
 
 /** Window information in layout message */
 export interface WindowInfo {
@@ -239,13 +239,6 @@ export interface WindowInfo {
   activePaneId: number;
   panes: number[];
   layout?: WindowLayout;
-}
-
-/** Layout template definition */
-export interface LayoutTemplate {
-  id: string;
-  name: string;
-  nodes: LayoutNode[];
 }
 
 /** Layout message from server */
