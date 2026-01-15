@@ -2,10 +2,10 @@
 // Allows user to pick a layout when creating a new window
 
 import { h } from "preact";
-import { useState, useEffect } from "preact/hooks";
+import { useEffect } from "preact/hooks";
+import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
-  subscribe,
   setLayoutPickerOpen,
   createWindowWithTemplate,
 } from "../store";
@@ -57,11 +57,7 @@ function LayoutPreview({ template }: { template: LayoutTemplate }) {
 }
 
 export function LayoutPickerModal() {
-  const [, forceUpdate] = useState(0);
-
-  useEffect(() => {
-    return subscribe(() => forceUpdate((n) => n + 1));
-  }, []);
+  useStoreSubscription();
 
   const store = getStore();
   const { layoutPickerOpen, layoutTemplates } = store;

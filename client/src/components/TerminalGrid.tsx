@@ -2,22 +2,17 @@
 // Renders panes from a window's layout tree or falls back to simple grid
 
 import { h } from "preact";
-import { useState, useEffect } from "preact/hooks";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutRenderer } from "./LayoutRenderer";
-import { getWindow, subscribe } from "../store";
+import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { getWindow } from "../store";
 
 export interface TerminalGridProps {
   windowId: number;
 }
 
 export function TerminalGrid({ windowId }: TerminalGridProps) {
-  const [, forceUpdate] = useState(0);
-
-  // Subscribe to store changes
-  useEffect(() => {
-    return subscribe(() => forceUpdate((n) => n + 1));
-  }, []);
+  useStoreSubscription();
 
   const window = getWindow(windowId);
 

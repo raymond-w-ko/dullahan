@@ -2,13 +2,13 @@
 // Wraps TerminalView with titlebar and handles pane-specific state
 
 import { h } from "preact";
-import { useState, useEffect, useRef, useCallback } from "preact/hooks";
+import { useEffect, useRef, useCallback } from "preact/hooks";
 import { TerminalView } from "./TerminalView";
+import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
   getPane,
   getConnection,
-  subscribe,
   setPaneDimensions,
   setBellActive,
   setFocusedPane,
@@ -20,13 +20,8 @@ export interface TerminalPaneProps {
 }
 
 export function TerminalPane({ paneId }: TerminalPaneProps) {
-  const [, forceUpdate] = useState(0);
+  useStoreSubscription();
   const terminalRef = useRef<HTMLDivElement>(null);
-
-  // Subscribe to store changes
-  useEffect(() => {
-    return subscribe(() => forceUpdate((n) => n + 1));
-  }, []);
 
   const store = getStore();
   const pane = getPane(paneId);

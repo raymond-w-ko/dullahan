@@ -2,14 +2,14 @@
 // Initializes connection and renders terminal grid
 
 import { h } from "preact";
-import { useState, useEffect } from "preact/hooks";
+import { useEffect } from "preact/hooks";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
 import { WindowSwitcher } from "./WindowSwitcher";
 import { LayoutPickerModal } from "./LayoutPickerModal";
+import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
-  subscribe,
   initConnection,
   disconnectConnection,
   setSettingsOpen,
@@ -18,12 +18,7 @@ import {
 import * as config from "../config";
 
 export function App() {
-  const [, forceUpdate] = useState(0);
-
-  // Subscribe to store changes
-  useEffect(() => {
-    return subscribe(() => forceUpdate((n) => n + 1));
-  }, []);
+  useStoreSubscription();
 
   // Initialize connection on mount
   useEffect(() => {
