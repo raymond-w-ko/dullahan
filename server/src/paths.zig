@@ -29,11 +29,23 @@ pub fn getTempDir() []const u8 {
 }
 
 /// Ensure the temp directory exists, creating it if necessary.
+/// Directory is created with mode 0o700 (owner-only access) for security.
 /// Returns error if directory cannot be created.
 pub fn ensureTempDir() !void {
     const dir_path = getTempDir();
-    std.fs.makeDirAbsolute(dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
+
+    // Use posix.mkdir directly to set restrictive permissions (0o700 = rwx------)
+    // This prevents other users from accessing socket, logs, etc.
+    var path_buf: [128]u8 = undefined;
+    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{dir_path}) catch return error.NameTooLong;
+
+    posix.mkdir(path_z, 0o700) catch |e| switch (e) {
+        error.PathAlreadyExists => {
+            // Directory exists - ensure permissions are correct
+            // (in case it was created with wrong perms previously)
+            const dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+            dir.chmod(0o700) catch {};
+        },
         else => return e,
     };
 }
