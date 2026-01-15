@@ -8,6 +8,8 @@
  * Provides fallbacks and error handling for clipboard operations.
  */
 
+import { debug } from "../debug";
+
 /**
  * Check if the Clipboard API is available.
  */
@@ -44,7 +46,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
     return success;
   } catch (err) {
-    console.warn("Clipboard write failed:", err);
+    debug.warn("Clipboard write failed:", err);
     // Try fallback on permission error
     const success = fallbackCopy(text);
     if (!success) {
@@ -68,7 +70,7 @@ export async function pasteFromClipboard(): Promise<string> {
     return "";
   } catch (err) {
     // Permission denied or not in secure context
-    console.warn("Clipboard read failed:", err);
+    debug.warn("Clipboard read failed:", err);
     window.alert(`Paste failed: ${err instanceof Error ? err.message : "Permission denied or not in secure context"}`);
     return "";
   }
@@ -99,7 +101,7 @@ function fallbackCopy(text: string): boolean {
     document.body.removeChild(textarea);
     return success;
   } catch (err) {
-    console.warn("Fallback copy failed:", err);
+    debug.warn("Fallback copy failed:", err);
     return false;
   }
 }

@@ -268,7 +268,7 @@ export class TerminalConnection {
     };
 
     this.ws.onerror = (event) => {
-      console.error("WebSocket error:", event);
+      debug.error("WebSocket error:", event);
       this.onError?.("Connection error");
     };
 
@@ -294,10 +294,10 @@ export class TerminalConnection {
           this.handleBinaryMessage(msg);
         } else {
           // Legacy JSON message (shouldn't happen with new server)
-          console.warn("Received text message, expected binary");
+          debug.warn("Received text message, expected binary");
         }
       } catch (e) {
-        console.error("Failed to parse message:", e);
+        debug.error("Failed to parse message:", e);
       }
     };
   }
@@ -523,7 +523,7 @@ export class TerminalConnection {
   /** Decode row IDs from packed u64 bytes (little-endian) */
   private decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
     if (!data || data.length === 0) {
-      console.warn("decodeRowIdsFromBytes: empty or missing data");
+      debug.warn("decodeRowIdsFromBytes: empty or missing data");
       return [];
     }
     
@@ -836,7 +836,7 @@ export class TerminalConnection {
 
     // Decode row IDs from delta (tells us which rows are in viewport)
     if (!delta.rowIds || delta.rowIds.length === 0) {
-      console.error("Delta missing rowIds!", delta);
+      debug.error("Delta missing rowIds!", delta);
       // Fall back to last known rowIds
     }
     const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (paneState.lastRowIds ?? []);
@@ -866,7 +866,7 @@ export class TerminalConnection {
         const rowCells = paneState.rowCache.get(rowId);
         if (rowCells) {
           if (rowCells.length !== delta.cols) {
-            console.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
+            debug.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
           }
           cells.push(...rowCells);
           fromCache++;

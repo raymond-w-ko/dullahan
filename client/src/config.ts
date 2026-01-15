@@ -1,9 +1,11 @@
 /**
  * Client Configuration System
- * 
+ *
  * Uses localStorage for persistence with get(key, fallback) pattern.
  * Never writes defaults - only stores user-changed values.
  */
+
+import { debug } from "./debug";
 
 // Type definitions for config values
 export interface ConfigSchema {
@@ -152,7 +154,7 @@ export function set<K extends ConfigKey>(key: K, value: ConfigValue<K>): void {
     }));
   } catch {
     // localStorage might be unavailable
-    console.warn(`Failed to save config: ${key}`);
+    debug.warn(`Failed to save config: ${key}`);
   }
 }
 
@@ -167,7 +169,7 @@ export function remove(key: ConfigKey): void {
       detail: { key, value: DEFAULTS[key] } 
     }));
   } catch {
-    console.warn(`Failed to remove config: ${key}`);
+    debug.warn(`Failed to remove config: ${key}`);
   }
 }
 

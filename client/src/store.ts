@@ -1,6 +1,7 @@
 // Global state store for terminal windows and panes
 // Provides reactive state management without heavy dependencies
 
+import { debug } from "./debug";
 import { TerminalConnection } from "./terminal/connection";
 import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
@@ -421,6 +422,6 @@ function playBellAudio() {
     oscillator.start(ctx.currentTime);
     oscillator.stop(ctx.currentTime + 0.15);
   } catch (e) {
-    console.warn("Failed to play bell audio:", e);
+    debug.warn("Failed to play bell audio:", e);
   }
 }

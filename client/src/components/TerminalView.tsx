@@ -2,6 +2,7 @@
 // Displays terminal cells with styling and cursor
 
 import { h } from "preact";
+import { debug } from "../debug";
 import { useRef, useEffect, useCallback } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
@@ -83,7 +84,7 @@ export function TerminalView({
     // KeyboardHandler must attach to the same element for focus to work
     const inputElement = ime.getElement();
     if (!inputElement) {
-      console.error("IME failed to create input element");
+      debug.error("IME failed to create input element");
       return;
     }
 
