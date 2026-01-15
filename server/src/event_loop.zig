@@ -31,6 +31,33 @@ const mouse = @import("mouse.zig");
 const log = std.log.scoped(.event_loop);
 
 // ============================================================================
+// Error Handling Helpers
+// ============================================================================
+//
+// Standardized error handling to ensure consistent logging and behavior.
+// Categories:
+//   - fatal: Server should exit (e.g., failed to start IPC)
+//   - client: Log and potentially disconnect client
+//   - recoverable: Log at info/debug level and continue
+//   - silent: Truly ignorable (e.g., failed to send close frame)
+
+/// Log a recoverable error with context. Server continues operation.
+fn logRecoverable(comptime context: []const u8, err: anyerror) void {
+    log.info("[recoverable] {s}: {any}", .{ context, err });
+}
+
+/// Log a client-related error. May result in client disconnect.
+fn logClientError(comptime context: []const u8, err: anyerror) void {
+    log.warn("[client] {s}: {any}", .{ context, err });
+}
+
+/// Log and handle a fatal error. Server should exit after this.
+fn logFatal(comptime context: []const u8, err: anyerror) noreturn {
+    log.err("[FATAL] {s}: {any}", .{ context, err });
+    std.process.exit(1);
+}
+
+// ============================================================================
 // Message Types (for parsing client messages)
 // ============================================================================
 
@@ -261,7 +288,9 @@ pub const ClientState = struct {
     }
 
     pub fn setGeneration(self: *ClientState, pane_id: u16, gen: u64) void {
-        self.pane_generations.put(pane_id, gen) catch {};
+        self.pane_generations.put(pane_id, gen) catch |e| {
+            logRecoverable("pane generation tracking", e);
+        };
     }
 };
 
@@ -300,7 +329,7 @@ pub const EventLoop = struct {
     ) EventLoop {
         var layouts = layout_db.LayoutDb.init(allocator);
         layouts.load() catch |e| {
-            log.warn("Failed to load layouts: {}", .{e});
+            logRecoverable("load layouts", e);
         };
 
         return .{
@@ -617,7 +646,9 @@ pub const EventLoop = struct {
                     break :blk ipc.Response.err(msg);
                 };
 
-                pane.writeInput("claude\n") catch {};
+                pane.writeInput("claude\n") catch |e| {
+                    logRecoverable("capture test input", e);
+                };
                 std.Thread.sleep(500 * std.time.ns_per_ms);
                 pane.stopCapture();
 
@@ -809,7 +840,7 @@ pub const EventLoop = struct {
             const pane = pane_ptr.*;
             log.info("Sending snapshot for pane {d}, gen={d}", .{ pane.id, pane.generation });
             self.sendSnapshot(&client.ws, pane) catch |e| {
-                log.err("Failed to send initial snapshot for pane {d}: {any}", .{ pane.id, e });
+                logClientError("send initial snapshot", e);
                 client.deinit();
                 return;
             };
@@ -822,13 +853,13 @@ pub const EventLoop = struct {
         // Send layout message (window→pane mappings + available templates)
         {
             const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
-                log.err("Failed to generate layout message: {any}", .{e});
+                logClientError("generate layout message", e);
                 client.deinit();
                 return;
             };
             defer self.allocator.free(layout_msg);
             client.ws.sendBinary(layout_msg) catch |e| {
-                log.err("Failed to send layout message: {any}", .{e});
+                logClientError("send layout message", e);
                 client.deinit();
                 return;
             };
@@ -837,13 +868,13 @@ pub const EventLoop = struct {
         // Send current master state
         {
             const master_msg = snapshot.generateMasterChangedMessage(self.allocator, self.master_id) catch |e| {
-                log.err("Failed to generate master_changed message: {any}", .{e});
+                logClientError("generate master_changed message", e);
                 client.deinit();
                 return;
             };
             defer self.allocator.free(master_msg);
             client.ws.sendBinary(master_msg) catch |e| {
-                log.err("Failed to send master_changed message: {any}", .{e});
+                logClientError("send master_changed message", e);
                 client.deinit();
                 return;
             };
@@ -921,12 +952,12 @@ pub const EventLoop = struct {
                 const debug_pane = self.session.getDebugPane();
                 for (self.clients.items) |*client| {
                     self.sendPaneUpdate(client, pane) catch |e| {
-                        log.err("Failed to send update to client: {any}", .{e});
+                        logClientError("send pane update", e);
                     };
                     if (debug_pane) |dp| {
                         if (dp.id != pane.id) { // Don't send twice if this IS the debug pane
                             self.sendPaneUpdate(client, dp) catch |e| {
-                                log.err("Failed to send debug pane update: {any}", .{e});
+                                logClientError("send debug pane update", e);
                             };
                         }
                     }
@@ -944,7 +975,7 @@ pub const EventLoop = struct {
         // If disconnecting client was master, clear master and broadcast
         if (was_master) {
             self.setMaster(null) catch |e| {
-                log.err("Failed to clear master on disconnect: {any}", .{e});
+                logRecoverable("clear master on disconnect", e);
             };
         }
     }
@@ -1007,7 +1038,7 @@ pub const EventLoop = struct {
 
         for (self.clients.items) |*client| {
             client.ws.sendBinary(msg) catch |e| {
-                log.err("Failed to broadcast master_changed: {any}", .{e});
+                logClientError("broadcast master_changed", e);
             };
         }
     }
@@ -1019,7 +1050,7 @@ pub const EventLoop = struct {
 
         for (self.clients.items) |*client| {
             client.ws.sendBinary(msg) catch |e| {
-                log.err("Failed to broadcast layout: {any}", .{e});
+                logClientError("broadcast layout", e);
             };
         }
     }
@@ -1384,7 +1415,7 @@ pub const EventLoop = struct {
                 if (output.len > 0) {
                     self.session.logPtySend(pane.id, output);
                     pane.writeInput(output) catch |e| {
-                        log.err("Failed to write key to PTY: {any}", .{e});
+                        logRecoverable("write key to PTY", e);
                     };
                 }
             },
@@ -1392,7 +1423,7 @@ pub const EventLoop = struct {
                 const pane = self.session.activePane() orelse return;
                 self.session.logPtySend(pane.id, text_msg.data);
                 pane.writeInput(text_msg.data) catch |e| {
-                    log.err("Failed to write text to PTY: {any}", .{e});
+                    logRecoverable("write text to PTY", e);
                 };
             },
             .resize => |resize_msg| {
@@ -1407,7 +1438,14 @@ pub const EventLoop = struct {
                 const rows = resize_msg.rows;
 
                 if (cols < constants.limits.min_cols or cols > constants.limits.max_cols or
-                    rows < constants.limits.min_rows or rows > constants.limits.max_rows) return;
+                    rows < constants.limits.min_rows or rows > constants.limits.max_rows) {
+                    log.warn("Rejecting invalid resize: {d}x{d} (limits: {d}-{d}x{d}-{d})", .{
+                        cols,                          rows,
+                        constants.limits.min_cols,     constants.limits.max_cols,
+                        constants.limits.min_rows,     constants.limits.max_rows,
+                    });
+                    return;
+                }
 
                 // Resize all panes via registry (debug pane needs resize too)
                 try self.session.pane_registry.resizeAll(cols, rows);
@@ -1433,7 +1471,7 @@ pub const EventLoop = struct {
             },
             .hello => |hello_msg| {
                 client.setClientId(hello_msg.clientId) catch |e| {
-                    log.err("Failed to set client ID: {any}", .{e});
+                    logClientError("set client ID", e);
                     return;
                 };
                 log.info("Client identified: {s}", .{client.shortId()});
@@ -1443,7 +1481,7 @@ pub const EventLoop = struct {
                     if (client.client_id) |cid| {
                         log.info("No master, auto-assigning {s} as master", .{client.shortId()});
                         self.setMaster(cid) catch |e| {
-                            log.err("Failed to auto-set master: {any}", .{e});
+                            logRecoverable("auto-set master", e);
                         };
                     }
                 }
@@ -1457,7 +1495,7 @@ pub const EventLoop = struct {
 
                 // Set this client as master (broadcasts to all clients)
                 self.setMaster(client_id) catch |e| {
-                    log.err("Failed to set master: {any}", .{e});
+                    logRecoverable("set master", e);
                 };
             },
             .new_window => |new_window_msg| {
@@ -1486,7 +1524,7 @@ pub const EventLoop = struct {
 
                 // Create new window with the required number of panes
                 const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
-                    log.err("Failed to create new window: {any}", .{e});
+                    logRecoverable("create new window", e);
                     return;
                 };
                 defer self.allocator.free(result.pane_ids);
@@ -1496,13 +1534,13 @@ pub const EventLoop = struct {
                 // Assign layout to the new window
                 if (self.session.getWindow(result.window_id)) |window| {
                     window.setLayoutFromTemplate(template) catch |e| {
-                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                        logRecoverable("set layout for new window", e);
                     };
                 }
 
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
-                    log.err("Failed to broadcast layout: {any}", .{e});
+                    logRecoverable("broadcast layout", e);
                 };
 
                 // Send initial snapshots for new panes to all clients
@@ -1510,7 +1548,7 @@ pub const EventLoop = struct {
                     if (self.session.pane_registry.get(pane_id)) |pane| {
                         for (self.clients.items) |*c| {
                             self.sendSnapshot(&c.ws, pane) catch |e| {
-                                log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
+                                logClientError("send snapshot for new pane", e);
                             };
                             c.setGeneration(pane_id, pane.generation);
                         }
@@ -1599,7 +1637,7 @@ pub const EventLoop = struct {
 
                 // Write to PTY
                 pane.writeInput(result.slice()) catch |e| {
-                    log.warn("Failed to send mouse event: {any}", .{e});
+                    logRecoverable("send mouse event", e);
                     return;
                 };
                 log.debug("Sent {s} mouse: pos=({d},{d})", .{ @tagName(mouse_format), mouse_msg.x, mouse_msg.y });
