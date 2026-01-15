@@ -318,33 +318,33 @@ export function initConnection() {
   const conn = new TerminalConnection();
   store.connection = conn;
 
-  conn.onConnect = () => {
+  conn.on("connect", () => {
     setConnected(true);
     // Trigger dimension recalculation shortly after connection
     // This ensures panes resize after layout settles
     setTimeout(() => triggerDimensionRecalc(), 100);
-  };
-  conn.onDisconnect = () => setConnected(false);
-  conn.onError = (err) => setError(err);
+  });
+  conn.on("disconnect", () => setConnected(false));
+  conn.on("error", (err) => setError(err));
 
-  conn.onSnapshot = (snap) => {
+  conn.on("snapshot", (snap) => {
     setPaneSnapshot(snap.paneId, snap);
-  };
+  });
 
-  conn.onDelta = (delta) => {
+  conn.on("delta", (delta) => {
     updatePaneSyncStats(delta.paneId, delta.gen);
-  };
+  });
 
-  conn.onTitle = (paneId, title) => {
+  conn.on("title", (paneId, title) => {
     // Update the specific pane's title
     setPaneTitle(paneId, title);
     // Update document title only if this is the focused pane
     if (paneId === store.focusedPaneId) {
       document.title = `${title} - Dullahan`;
     }
-  };
+  });
 
-  conn.onBell = () => {
+  conn.on("bell", () => {
     const features = config.getBellFeatures();
     if (features.attention || features.title) {
       setBellActive(true);
@@ -352,15 +352,15 @@ export function initConnection() {
     if (features.audio) {
       playBellAudio();
     }
-  };
+  });
 
-  conn.onMasterChanged = (masterId, isMaster) => {
+  conn.on("masterChanged", (masterId, isMaster) => {
     setMasterState(masterId, isMaster);
-  };
+  });
 
-  conn.onLayout = (layout) => {
+  conn.on("layout", (layout) => {
     setLayout(layout);
-  };
+  });
 
   conn.connect();
 

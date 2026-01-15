@@ -63,6 +63,72 @@ export type {
   ScrollbackInfo,
 };
 
+// ============================================================================
+// Typed EventEmitter (lightweight, zero dependencies)
+// ============================================================================
+
+type EventMap = Record<string, (...args: any[]) => void>;
+
+class TypedEventEmitter<T extends EventMap> {
+  private listeners = new Map<keyof T, Set<T[keyof T]>>();
+
+  on<K extends keyof T>(event: K, callback: T[K]): void {
+    let set = this.listeners.get(event);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(event, set);
+    }
+    set.add(callback);
+  }
+
+  off<K extends keyof T>(event: K, callback: T[K]): void {
+    const set = this.listeners.get(event);
+    if (set) {
+      set.delete(callback);
+    }
+  }
+
+  emit<K extends keyof T>(event: K, ...args: Parameters<T[K]>): void {
+    const set = this.listeners.get(event);
+    if (set) {
+      for (const callback of set) {
+        (callback as (...args: any[]) => void)(...args);
+      }
+    }
+  }
+
+  removeAllListeners(event?: keyof T): void {
+    if (event) {
+      this.listeners.delete(event);
+    } else {
+      this.listeners.clear();
+    }
+  }
+}
+
+// ============================================================================
+// Connection Events
+// ============================================================================
+
+/** Events emitted by TerminalConnection */
+export type ConnectionEvents = {
+  snapshot: (snapshot: TerminalSnapshot) => void;
+  delta: (delta: DeltaUpdate) => void;
+  output: (data: string) => void;
+  title: (paneId: number, title: string) => void;
+  bell: () => void;
+  focus: (paneId: number) => void;
+  connect: () => void;
+  disconnect: () => void;
+  error: (error: string) => void;
+  masterChanged: (masterId: string | null, isMaster: boolean) => void;
+  layout: (layout: LayoutUpdate) => void;
+};
+
+// ============================================================================
+// Terminal Types
+// ============================================================================
+
 export interface TerminalSnapshot {
   paneId: number; // Pane ID for multi-pane support
   gen: number; // Generation counter for delta sync
@@ -133,17 +199,26 @@ export class TerminalConnection {
   private _resizeDebounceTimer: number | null = null;
   private static readonly RESIZE_DEBOUNCE_MS = 333;
 
-  public onSnapshot: ((snapshot: TerminalSnapshot) => void) | null = null;
-  public onDelta: ((delta: DeltaUpdate) => void) | null = null;
-  public onOutput: ((data: string) => void) | null = null;
-  public onTitle: ((paneId: number, title: string) => void) | null = null;
-  public onBell: (() => void) | null = null;
-  public onFocus: ((paneId: number) => void) | null = null;
-  public onConnect: (() => void) | null = null;
-  public onDisconnect: (() => void) | null = null;
-  public onError: ((error: string) => void) | null = null;
-  public onMasterChanged: ((masterId: string | null, isMaster: boolean) => void) | null = null;
-  public onLayout: ((layout: LayoutUpdate) => void) | null = null;
+  // Event emitter for connection events
+  private _emitter = new TypedEventEmitter<ConnectionEvents>();
+
+  /** Subscribe to a connection event */
+  on<K extends keyof ConnectionEvents>(event: K, callback: ConnectionEvents[K]): void {
+    this._emitter.on(event, callback);
+  }
+
+  /** Unsubscribe from a connection event */
+  off<K extends keyof ConnectionEvents>(event: K, callback: ConnectionEvents[K]): void {
+    this._emitter.off(event, callback);
+  }
+
+  /** Emit an event (private) */
+  private emit<K extends keyof ConnectionEvents>(
+    event: K,
+    ...args: Parameters<ConnectionEvents[K]>
+  ): void {
+    this._emitter.emit(event, ...args);
+  }
 
   constructor(url?: string) {
     // Get or generate client ID
@@ -258,18 +333,18 @@ export class TerminalConnection {
       debug.log("Sent hello with client ID:", this._clientId);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
-      this.onConnect?.();
+      this.emit("connect");
     };
 
     this.ws.onclose = () => {
       debug.log("WebSocket disconnected");
-      this.onDisconnect?.();
+      this.emit("disconnect");
       this.scheduleReconnect();
     };
 
     this.ws.onerror = (event) => {
       debug.error("WebSocket error:", event);
-      this.onError?.("Connection error");
+      this.emit("error", "Connection error");
     };
 
     this.ws.binaryType = "arraybuffer";
@@ -366,13 +441,13 @@ export class TerminalConnection {
 
         debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
 
-        this.onSnapshot?.(snapshot);
+        this.emit("snapshot", snapshot);
 
         // Extract title from snapshot if present
         const snapshotTitle = (msg as any).title;
         if (snapshotTitle && typeof snapshotTitle === 'string') {
           debug.log("Snapshot includes title for pane", paneId, ":", snapshotTitle);
-          this.onTitle?.(paneId, snapshotTitle);
+          this.emit("title", paneId, snapshotTitle);
         }
         break;
       }
@@ -412,25 +487,25 @@ export class TerminalConnection {
         break;
       }
       case "output":
-        this.onOutput?.(msg.data);
+        this.emit("output", msg.data);
         break;
       case "title":
         debug.log("Received title for pane", msg.paneId, ":", msg.title);
-        this.onTitle?.(msg.paneId, msg.title);
+        this.emit("title", msg.paneId, msg.title);
         break;
       case "bell":
         debug.log("Received bell");
-        this.onBell?.();
+        this.emit("bell");
         break;
       case "focus":
         debug.log("Received focus:", msg.paneId);
-        this.onFocus?.(msg.paneId);
+        this.emit("focus", msg.paneId);
         break;
       case "master_changed": {
         this._masterId = msg.masterId;
         const isMaster = this._masterId !== null && this._masterId === this._clientId;
         debug.log("Master changed:", msg.masterId, "isMaster:", isMaster);
-        this.onMasterChanged?.(msg.masterId, isMaster);
+        this.emit("masterChanged", msg.masterId, isMaster);
         break;
       }
       case "layout": {
@@ -447,7 +522,7 @@ export class TerminalConnection {
           templates: msg.templates,
         };
         debug.log("Layout received:", msg.windows.length, "windows,", msg.templates?.length ?? 0, "templates, active:", msg.activeWindowId);
-        this.onLayout?.(this._layout);
+        this.emit("layout", this._layout);
         break;
       }
       case "pong":
@@ -911,10 +986,10 @@ export class TerminalConnection {
     };
 
     // Notify via onSnapshot (unified handler)
-    this.onSnapshot?.(snapshot);
+    this.emit("snapshot", snapshot);
 
     // Notify delta listeners with change info
-    this.onDelta?.({
+    this.emit("delta", {
       paneId,
       gen: delta.gen,
       cols: delta.cols,
@@ -930,7 +1005,7 @@ export class TerminalConnection {
     const deltaTitle = (delta as any).title;
     if (deltaTitle && typeof deltaTitle === 'string') {
       debug.log("Delta includes title for pane", paneId, ":", deltaTitle);
-      this.onTitle?.(paneId, deltaTitle);
+      this.emit("title", paneId, deltaTitle);
     }
   }
 
