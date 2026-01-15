@@ -43,8 +43,9 @@ pub fn ensureTempDir() !void {
         error.PathAlreadyExists => {
             // Directory exists - ensure permissions are correct
             // (in case it was created with wrong perms previously)
-            const dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
-            dir.chmod(0o700) catch {};
+            // Note: Use fchmodat with AT.FDCWD, not Dir.chmod() which
+            // tries to open "." and fchmod, failing with EBADF on some systems (WSL)
+            posix.fchmodat(posix.AT.FDCWD, path_z, 0o700, 0) catch {};
         },
         else => return e,
     };
