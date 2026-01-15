@@ -616,7 +616,23 @@ Run `bd prime` for workflow context, or install hooks (`bd hooks install`) for a
 
 For full workflow details: `bd prime`
 
+### Issue Close Protocol
+
+**CRITICAL**: Always push code before closing issues. This ensures other agents see the changes when they receive the close broadcast.
+
+**Required pattern** (single tool call):
+```bash
+git push && bd close <id1> <id2> ...
+```
+
+- Infer issue ID(s) from the work just completed
+- Close multiple issues in one command if applicable
+- If push fails: `git pull --rebase`, resolve conflicts, then retry `git push && bd close`
+
+**Never close issues with unpushed commits.**
+
 ---
 
 ## User Request Aliases
-- When the user says `scp`, run the SESSION CLOSE PROTOCOL checklist.
+- `scp` → Run the SESSION CLOSE PROTOCOL checklist
+- `gpbc` → Run `git push && bd close <id>` for recently completed work
