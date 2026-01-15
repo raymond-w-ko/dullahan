@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const constants = @import("constants.zig");
 
 const log = std.log.scoped(.process);
 
@@ -25,7 +26,7 @@ pub fn tryWaitpid(pid: posix.pid_t) bool {
 }
 
 /// Try to reap a child process with timeout, handling all error cases.
-/// Sends SIGTERM first, waits 500ms, then SIGKILL if needed.
+/// Sends SIGTERM first, waits for grace period, then SIGKILL if needed.
 pub fn reapChild(pid: posix.pid_t) void {
     // Check if already exited
     if (tryWaitpid(pid)) return;
@@ -34,10 +35,10 @@ pub fn reapChild(pid: posix.pid_t) void {
     log.debug("Child still running, sending SIGTERM", .{});
     _ = posix.kill(pid, posix.SIG.TERM) catch {};
 
-    // Wait up to 500ms for graceful exit
+    // Wait for graceful exit
     var waited: usize = 0;
-    while (waited < 500) : (waited += 50) {
-        std.Thread.sleep(50 * std.time.ns_per_ms);
+    while (waited < constants.timeout.sigterm_grace_ms) : (waited += constants.process.poll_interval_ms) {
+        std.Thread.sleep(constants.process.poll_interval_ms * std.time.ns_per_ms);
         if (tryWaitpid(pid)) return;
     }
 
@@ -45,10 +46,10 @@ pub fn reapChild(pid: posix.pid_t) void {
     log.debug("Child did not exit, sending SIGKILL", .{});
     _ = posix.kill(pid, posix.SIG.KILL) catch {};
 
-    // Wait up to 1 second for SIGKILL
+    // Wait for SIGKILL to take effect
     var kill_waited: usize = 0;
-    while (kill_waited < 1000) : (kill_waited += 100) {
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+    while (kill_waited < constants.timeout.sigkill_wait_ms) : (kill_waited += constants.process.sigkill_poll_interval_ms) {
+        std.Thread.sleep(constants.process.sigkill_poll_interval_ms * std.time.ns_per_ms);
         if (tryWaitpid(pid)) return;
     }
 

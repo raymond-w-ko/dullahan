@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const constants = @import("constants.zig");
 const websocket = @import("websocket.zig");
 const embedded_assets = @import("embedded_assets.zig");
 
@@ -115,7 +116,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
 
 /// Send HTTP response with body
 pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const [2][]const u8, body: []const u8) !void {
-    var buf: [4096]u8 = undefined;
+    var buf: [constants.buffer.general]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
 
@@ -419,7 +420,7 @@ pub const Server = struct {
         // Set read/write timeouts so we don't block forever
         const timeout = std.posix.timeval{
             .sec = 0,
-            .usec = 500_000, // 500ms timeout
+            .usec = constants.timeout.http_read_ms * 1000,
         };
         std.posix.setsockopt(
             conn.stream.handle,
@@ -435,7 +436,7 @@ pub const Server = struct {
         ) catch {};
 
         // Read HTTP request
-        var buf: [4096]u8 = undefined;
+        var buf: [constants.buffer.general]u8 = undefined;
         const n = conn.stream.read(&buf) catch |e| {
             if (e == error.WouldBlock) {
                 log.debug("Read timeout waiting for HTTP request", .{});

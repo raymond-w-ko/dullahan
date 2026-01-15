@@ -26,6 +26,7 @@ import {
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
+import { SCROLL } from "../constants";
 import type { CursorConfig } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
 
@@ -175,8 +176,8 @@ export function TerminalView({
       e.preventDefault();
       if (!connection?.isConnected) return;
 
-      // Convert wheel delta to rows (roughly 3 rows per scroll tick)
-      const delta = Math.sign(e.deltaY) * 3;
+      // Convert wheel delta to rows
+      const delta = Math.sign(e.deltaY) * SCROLL.ROWS_PER_TICK;
       connection.sendScroll(paneId, delta);
     },
     [connection, paneId]

@@ -7,6 +7,7 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const snappy = @import("snappy");
+const constants = @import("constants.zig");
 const Pane = @import("pane.zig").Pane;
 const Session = @import("session.zig").Session;
 const window_mod = @import("window.zig");
@@ -19,11 +20,6 @@ const Cell = ghostty.page.Cell;
 const point = ghostty.point;
 
 const log = std.log.scoped(.snapshot);
-
-/// Minimum payload size (bytes) before applying Snappy compression.
-/// Below this threshold, compression overhead isn't worth it.
-/// Typical terminal snapshots are 10-50KB, deltas are 100B-5KB.
-const snappy_compression_threshold = 256;
 
 // ============================================================================
 // Buffer Stream for msgpack encoding
@@ -73,7 +69,7 @@ const BufferStream = struct {
 /// Page size for row_id computation. Matches ghostty's typical page size.
 /// row_id = (page_serial * PAGE_SIZE) + row_index_in_page
 /// See docs/delta-sync-design.md for details.
-pub const PAGE_SIZE: u64 = 1000;
+pub const PAGE_SIZE: u64 = constants.snapshot.page_size;
 
 /// Compute stable row_id from a pin's page serial and row index.
 /// Returns a unique, monotonic ID that persists until the row is pruned.
@@ -84,7 +80,7 @@ pub fn computeRowId(pin: anytype) u64 {
 /// Compress data with Snappy if above threshold, otherwise pass through.
 /// Returns owned slice with 1-byte header (0 = uncompressed, 1 = compressed) that caller must free.
 fn compress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    if (data.len >= snappy_compression_threshold) {
+    if (data.len >= constants.snapshot.compression_threshold) {
         const compressed_max = snappy.raw.maxCompressedLength(data.len);
         const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
         errdefer allocator.free(compressed_buf);
@@ -482,7 +478,7 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Encode to msgpack bytes
     // Use a buffer large enough for typical terminal snapshots
     // 80x24 terminal = 1920 cells * 8 bytes = ~15KB cells + styles + overhead
-    const max_size = 4 * 1024 * 1024; // 4MB for up to 500x500 terminals
+    const max_size = constants.snapshot.max_buffer_size;
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 
@@ -887,7 +883,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     }
 
     // Encode and compress
-    const max_size = 4 * 1024 * 1024;
+    const max_size = constants.snapshot.max_buffer_size;
     const buffer = try allocator.alloc(u8, max_size);
     errdefer allocator.free(buffer);
 

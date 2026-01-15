@@ -11,6 +11,7 @@ const msgpack = @import("msgpack");
 const sys = @cImport({
     @cInclude("sys/ioctl.h");
 });
+const constants = @import("constants.zig");
 const ipc = @import("ipc.zig");
 const http = @import("http.zig");
 const paths = @import("paths.zig");
@@ -896,7 +897,7 @@ pub const EventLoop = struct {
     }
 
     fn handlePtyData(self: *EventLoop, pane: *Pane) !void {
-        var buf: [4096]u8 = undefined;
+        var buf: [constants.buffer.general]u8 = undefined;
 
         if (pane.pty) |*pty| {
             const n = pty.read(&buf) catch |e| {
@@ -1210,7 +1211,7 @@ pub const EventLoop = struct {
     /// Parse a msgpack message into the unified ParsedMessage type.
     /// Returns null if parsing fails.
     fn parseMsgpackMessage(self: *EventLoop, data: []const u8) ?struct { msg: ParsedMessage, payload: msgpack.Payload } {
-        var buffer: [4096]u8 = undefined;
+        var buffer: [constants.buffer.general]u8 = undefined;
         @memcpy(buffer[0..data.len], data);
 
         var write_stream = msgpack.compat.fixedBufferStream(&buffer);
@@ -1405,7 +1406,8 @@ pub const EventLoop = struct {
                 const cols = resize_msg.cols;
                 const rows = resize_msg.rows;
 
-                if (cols < 1 or cols > 500 or rows < 1 or rows > 500) return;
+                if (cols < constants.limits.min_cols or cols > constants.limits.max_cols or
+                    rows < constants.limits.min_rows or rows > constants.limits.max_rows) return;
 
                 // Resize all panes via registry (debug pane needs resize too)
                 try self.session.pane_registry.resizeAll(cols, rows);

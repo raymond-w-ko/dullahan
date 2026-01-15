@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const constants = @import("constants.zig");
 const paths = @import("paths.zig");
 
 pub const Config = struct {
@@ -13,7 +14,7 @@ pub const Config = struct {
     /// PID file path (null = use default from paths module)
     pid_path: ?[]const u8 = null,
     /// Command timeout in milliseconds
-    timeout_ms: u32 = 5000,
+    timeout_ms: u32 = constants.timeout.cli_default_ms,
 
     /// Resolve socket path - returns provided value or default
     pub fn getSocketPath(self: Config) []const u8 {
@@ -230,7 +231,7 @@ pub const Server = struct {
         const conn = try posix.accept(self.socket, null, null, 0);
         errdefer posix.close(conn);
 
-        var buf: [4096]u8 = undefined; // Larger buffer for send data
+        var buf: [constants.buffer.general]u8 = undefined;
         const n = try posix.read(conn, &buf);
         if (n == 0) return error.ConnectionClosed;
 
@@ -275,7 +276,7 @@ pub const Server = struct {
             const conn = try posix.accept(self.socket, null, null, 0);
             errdefer posix.close(conn);
 
-            var buf: [4096]u8 = undefined; // Larger buffer for send data
+            var buf: [constants.buffer.general]u8 = undefined;
             const n = try posix.read(conn, &buf);
             if (n == 0) return error.ConnectionClosed;
 

@@ -3,6 +3,7 @@
 
 import { debug } from "./debug";
 import { TerminalConnection } from "./terminal/connection";
+import { AUDIO } from "./constants";
 import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
 
@@ -410,17 +411,17 @@ function playBellAudio() {
     const gainNode = ctx.createGain();
 
     oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+    oscillator.frequency.setValueAtTime(AUDIO.BELL_FREQUENCY, ctx.currentTime);
 
     gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.01);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+    gainNode.gain.linearRampToValueAtTime(AUDIO.PEAK_GAIN, ctx.currentTime + AUDIO.ATTACK_TIME);
+    gainNode.gain.exponentialRampToValueAtTime(AUDIO.MIN_GAIN, ctx.currentTime + AUDIO.DECAY_TIME);
 
     oscillator.connect(gainNode);
     gainNode.connect(ctx.destination);
 
     oscillator.start(ctx.currentTime);
-    oscillator.stop(ctx.currentTime + 0.15);
+    oscillator.stop(ctx.currentTime + AUDIO.DECAY_TIME);
   } catch (e) {
     debug.warn("Failed to play bell audio:", e);
   }

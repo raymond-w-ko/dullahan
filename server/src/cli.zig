@@ -3,6 +3,7 @@
 //! Sends commands to running server, spawning it if necessary.
 
 const std = @import("std");
+const constants = @import("constants.zig");
 const ipc = @import("ipc.zig");
 const paths = @import("paths.zig");
 const test_runners = @import("test_runners.zig");
@@ -10,7 +11,7 @@ const test_runners = @import("test_runners.zig");
 pub const CliArgs = struct {
     command: ?ipc.Command = null,
     send_data: ?[]const u8 = null, // Data payload for send command (pane_id + text)
-    timeout_ms: u32 = 5000,
+    timeout_ms: u32 = constants.timeout.cli_default_ms,
     socket_path: ?[]const u8 = null, // null means use default from paths module
     pid_path: ?[]const u8 = null, // null means use default from paths module
     static_dir: ?[]const u8 = null,
@@ -62,7 +63,7 @@ pub const CliArgs = struct {
                 // If only pane_id provided (no text), we'll read from stdin in runClient
             } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
                 const val = arg["--timeout=".len..];
-                args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch 5000;
+                args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch constants.timeout.cli_default_ms;
             } else if (std.mem.startsWith(u8, arg, "--socket=")) {
                 args.socket_path = @as(?[]const u8, arg["--socket=".len..]);
             } else if (std.mem.startsWith(u8, arg, "--static-dir=")) {
@@ -219,7 +220,7 @@ fn readStdin(allocator: std.mem.Allocator) ![]u8 {
     var buf: std.ArrayListUnmanaged(u8) = .{};
     errdefer buf.deinit(allocator);
 
-    var read_buf: [4096]u8 = undefined;
+    var read_buf: [constants.buffer.general]u8 = undefined;
     while (true) {
         const n = posix.read(stdin_fd, &read_buf) catch |e| {
             if (e == error.WouldBlock) break;
