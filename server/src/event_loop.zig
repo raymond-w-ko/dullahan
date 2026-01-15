@@ -105,6 +105,107 @@ const MessageType = struct {
 };
 
 // ============================================================================
+// Parsed Message Union (protocol-agnostic)
+// ============================================================================
+
+/// Unified message representation for both JSON and msgpack protocols.
+/// Borrows string data from the underlying protocol payload.
+const ParsedMessage = union(enum) {
+    key: ParsedKeyEvent,
+    text: ParsedText,
+    resize: ParsedResize,
+    scroll: ParsedScroll,
+    ping: void,
+    sync: ParsedSync,
+    focus: ParsedFocus,
+    hello: ParsedHello,
+    request_master: void,
+    new_window: ParsedNewWindow,
+    mouse: ParsedMouse,
+    unknown: void,
+};
+
+const ParsedKeyEvent = struct {
+    key: []const u8,
+    code: []const u8 = "",
+    state: []const u8,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+    repeat: bool = false,
+    timestamp: f64 = 0,
+    keyCode: u16 = 0,
+};
+
+const ParsedText = struct {
+    data: []const u8,
+};
+
+const ParsedResize = struct {
+    cols: u16,
+    rows: u16,
+};
+
+const ParsedScroll = struct {
+    delta: i32,
+};
+
+const ParsedSync = struct {
+    gen: u64,
+    minRowId: u64 = 0,
+};
+
+const ParsedFocus = struct {
+    paneId: u16,
+};
+
+const ParsedHello = struct {
+    clientId: []const u8,
+};
+
+const ParsedNewWindow = struct {
+    templateId: ?[]const u8 = null,
+};
+
+const ParsedMouse = struct {
+    paneId: u16,
+    button: u8,
+    x: u16,
+    y: u16,
+    px: ?u32 = null,
+    py: ?u32 = null,
+    state: []const u8,
+    ctrl: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    meta: bool = false,
+    timestamp: f64 = 0,
+};
+
+/// Cleanup helper for JSON parsed messages.
+/// Holds references to parsed JSON that need to be freed after message handling.
+const JsonCleanup = union(enum) {
+    none: void,
+    json_key: std.json.Parsed(KeyEvent),
+    json_text: std.json.Parsed(TextMessage),
+    json_hello: std.json.Parsed(HelloMessage),
+    json_new_window: std.json.Parsed(NewWindowMessage),
+    json_mouse: std.json.Parsed(MouseMessage),
+
+    pub fn deinit(self: *JsonCleanup) void {
+        switch (self.*) {
+            .none => {},
+            .json_key => |*p| p.deinit(),
+            .json_text => |*p| p.deinit(),
+            .json_hello => |*p| p.deinit(),
+            .json_new_window => |*p| p.deinit(),
+            .json_mouse => |*p| p.deinit(),
+        }
+    }
+};
+
+// ============================================================================
 // Client State
 // ============================================================================
 
@@ -766,12 +867,19 @@ pub const EventLoop = struct {
 
         switch (frame.opcode) {
             .text => {
-                try self.handleClientMessage(frame.payload, client);
-                try self.sendClientUpdates(client);
+                if (self.parseJsonMessage(frame.payload)) |result| {
+                    var cleanup = result.cleanup;
+                    defer cleanup.deinit();
+                    try self.handleParsedMessage(result.msg, client);
+                    try self.sendClientUpdates(client);
+                }
             },
             .binary => {
-                try self.handleBinaryMessage(frame.payload, client);
-                try self.sendClientUpdates(client);
+                if (self.parseMsgpackMessage(frame.payload)) |result| {
+                    defer result.payload.free(self.allocator);
+                    try self.handleParsedMessage(result.msg, client);
+                    try self.sendClientUpdates(client);
+                }
             },
             .ping => {
                 ws.sendPong(frame.payload) catch {};
@@ -976,294 +1084,132 @@ pub const EventLoop = struct {
         try ws.sendBinary(snap);
     }
 
-    fn handleClientMessage(self: *EventLoop, data: []const u8, client: *ClientState) !void {
+    // ========================================================================
+    // Protocol-Agnostic Message Parsing
+    // ========================================================================
+
+    /// Parse a JSON message into the unified ParsedMessage type.
+    /// Returns null if parsing fails.
+    fn parseJsonMessage(self: *EventLoop, data: []const u8) ?struct { msg: ParsedMessage, cleanup: JsonCleanup } {
         const msg_type = std.json.parseFromSlice(MessageType, self.allocator, data, .{
             .ignore_unknown_fields = true,
-        }) catch |e| {
-            log.warn("Failed to parse message type: {any}", .{e});
-            return;
-        };
+        }) catch return null;
         defer msg_type.deinit();
 
         const type_str = msg_type.value.type;
 
         if (std.mem.eql(u8, type_str, "key")) {
-            const key_event = std.json.parseFromSlice(KeyEvent, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(KeyEvent, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer key_event.deinit();
-
-            const pane = self.session.activePane() orelse return;
-            var output_buf: [32]u8 = undefined;
-            const cursor_key_app = pane.isCursorKeyApplication();
-            const output = keyEventToBytes(key_event.value, &output_buf, cursor_key_app);
-
-            if (output.len > 0) {
-                self.session.logPtySend(pane.id, output);
-                pane.writeInput(output) catch |e| {
-                    log.err("Failed to write key to PTY: {any}", .{e});
-                };
-            }
+            }) catch return null;
+            return .{
+                .msg = .{ .key = .{
+                    .key = parsed.value.key,
+                    .code = parsed.value.code,
+                    .state = parsed.value.state,
+                    .ctrl = parsed.value.ctrl,
+                    .alt = parsed.value.alt,
+                    .shift = parsed.value.shift,
+                    .meta = parsed.value.meta,
+                    .repeat = parsed.value.repeat,
+                    .timestamp = parsed.value.timestamp,
+                    .keyCode = parsed.value.keyCode,
+                } },
+                .cleanup = .{ .json_key = parsed },
+            };
         } else if (std.mem.eql(u8, type_str, "text")) {
-            const text_msg = std.json.parseFromSlice(TextMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(TextMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer text_msg.deinit();
-
-            const pane = self.session.activePane() orelse return;
-            self.session.logPtySend(pane.id, text_msg.value.data);
-            pane.writeInput(text_msg.value.data) catch |e| {
-                log.err("Failed to write text to PTY: {any}", .{e});
+            }) catch return null;
+            return .{
+                .msg = .{ .text = .{ .data = parsed.value.data } },
+                .cleanup = .{ .json_text = parsed },
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
-            // Only master can resize
-            const client_id = client.client_id orelse return;
-            if (!self.isMaster(client_id)) {
-                log.debug("Rejecting resize from non-master client {s}", .{client.shortId()});
-                return;
-            }
-
-            const resize_msg = std.json.parseFromSlice(ResizeMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(ResizeMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer resize_msg.deinit();
-
-            const cols = resize_msg.value.cols;
-            const rows = resize_msg.value.rows;
-
-            if (cols < 1 or cols > 500 or rows < 1 or rows > 500) return;
-
-            // Resize all panes via registry (debug pane needs resize too)
-            try self.session.pane_registry.resizeAll(cols, rows);
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .resize = .{ .cols = parsed.value.cols, .rows = parsed.value.rows } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "scroll")) {
-            const scroll_msg = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(ScrollMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer scroll_msg.deinit();
-
-            const pane = self.session.activePane() orelse return;
-            pane.scroll(scroll_msg.value.delta);
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .scroll = .{ .delta = parsed.value.delta } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "ping")) {
-            const pong = try snapshot.generateBinaryPong(self.allocator);
-            defer self.allocator.free(pong);
-            try client.ws.sendBinary(pong);
+            return .{ .msg = .{ .ping = {} }, .cleanup = .{ .none = {} } };
         } else if (std.mem.eql(u8, type_str, "sync")) {
-            const sync_msg = std.json.parseFromSlice(SyncMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(SyncMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer sync_msg.deinit();
-
-            const pane = self.session.activePane() orelse return;
-            try self.handleSyncRequest(client, pane, sync_msg.value.gen);
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .sync = .{ .gen = parsed.value.gen, .minRowId = parsed.value.minRowId } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "focus")) {
-            const focus_msg = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer focus_msg.deinit();
-
-            const window = self.session.activeWindow() orelse return;
-            if (window.setActivePane(focus_msg.value.paneId)) {
-                log.info("Switched to pane {d}", .{focus_msg.value.paneId});
-            }
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .focus = .{ .paneId = parsed.value.paneId } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "hello")) {
-            const hello_msg = std.json.parseFromSlice(HelloMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(HelloMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch return;
-            defer hello_msg.deinit();
-
-            client.setClientId(hello_msg.value.clientId) catch |e| {
-                log.err("Failed to set client ID: {any}", .{e});
-                return;
+            }) catch return null;
+            return .{
+                .msg = .{ .hello = .{ .clientId = parsed.value.clientId } },
+                .cleanup = .{ .json_hello = parsed },
             };
-            log.info("Client identified: {s}", .{client.shortId()});
-
-            // Auto-assign as master if no master exists
-            if (self.master_id == null) {
-                if (client.client_id) |cid| {
-                    log.info("No master, auto-assigning {s} as master", .{client.shortId()});
-                    self.setMaster(cid) catch |e| {
-                        log.err("Failed to auto-set master: {any}", .{e});
-                    };
-                }
-            }
         } else if (std.mem.eql(u8, type_str, "request_master")) {
-            // Client is requesting to become master
-            const client_id = client.client_id orelse {
-                log.warn("Anonymous client tried to request master", .{});
-                return;
-            };
-
-            // Set this client as master (broadcasts to all clients)
-            self.setMaster(client_id) catch |e| {
-                log.err("Failed to set master: {any}", .{e});
-            };
+            return .{ .msg = .{ .request_master = {} }, .cleanup = .{ .none = {} } };
         } else if (std.mem.eql(u8, type_str, "new_window")) {
-            // Only master can create windows
-            const client_id = client.client_id orelse return;
-            if (!self.isMaster(client_id)) {
-                log.debug("Rejecting new_window from non-master client {s}", .{client.shortId()});
-                return;
-            }
-
-            // Parse the message to get templateId
-            const new_window_msg = std.json.parseFromSlice(NewWindowMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(NewWindowMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch |e| {
-                log.err("Failed to parse new_window message: {any}", .{e});
-                return;
+            }) catch return null;
+            return .{
+                .msg = .{ .new_window = .{ .templateId = parsed.value.templateId } },
+                .cleanup = .{ .json_new_window = parsed },
             };
-            defer new_window_msg.deinit();
-
-            // Get template ID (default to 3-col if not specified)
-            const template_id = new_window_msg.value.templateId orelse "3-col";
-
-            // Look up the template
-            const template = self.layouts.get(template_id) orelse blk: {
-                log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
-                break :blk self.layouts.get("3-col") orelse {
-                    log.err("Fallback template '3-col' not found", .{});
-                    return;
-                };
-            };
-
-            // Count panes needed for this template
-            const pane_count = template.countPanes();
-            log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
-
-            // Create new window with the required number of panes
-            const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
-                log.err("Failed to create new window: {any}", .{e});
-                return;
-            };
-            defer self.allocator.free(result.pane_ids);
-
-            log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
-
-            // Assign layout to the new window
-            if (self.session.getWindow(result.window_id)) |window| {
-                window.setLayoutFromTemplate(template) catch |e| {
-                    log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
-                };
-            }
-
-            // Broadcast updated layout to all clients
-            self.broadcastLayout() catch |e| {
-                log.err("Failed to broadcast layout: {any}", .{e});
-            };
-
-            // Send initial snapshots for new panes to all clients
-            for (result.pane_ids) |pane_id| {
-                if (self.session.pane_registry.get(pane_id)) |pane| {
-                    for (self.clients.items) |*c| {
-                        self.sendSnapshot(&c.ws, pane) catch |e| {
-                            log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
-                        };
-                        c.setGeneration(pane_id, pane.generation);
-                    }
-                }
-            }
         } else if (std.mem.eql(u8, type_str, "mouse")) {
-            // Mouse event - will be used for terminal mouse reporting
-            const mouse_msg = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
+            const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
-            }) catch |e| {
-                log.warn("Failed to parse mouse message: {any}", .{e});
-                return;
+            }) catch return null;
+            return .{
+                .msg = .{ .mouse = .{
+                    .paneId = parsed.value.paneId,
+                    .button = parsed.value.button,
+                    .x = parsed.value.x,
+                    .y = parsed.value.y,
+                    .px = parsed.value.px,
+                    .py = parsed.value.py,
+                    .state = parsed.value.state,
+                    .ctrl = parsed.value.ctrl,
+                    .alt = parsed.value.alt,
+                    .shift = parsed.value.shift,
+                    .meta = parsed.value.meta,
+                    .timestamp = parsed.value.timestamp,
+                } },
+                .cleanup = .{ .json_mouse = parsed },
             };
-            defer mouse_msg.deinit();
-
-            const msg = mouse_msg.value;
-            log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) px=({?},{?}) mods={s}{s}{s}{s} ts={d:.3}", .{
-                msg.state,
-                msg.paneId,
-                msg.button,
-                msg.x,
-                msg.y,
-                msg.px,
-                msg.py,
-                if (msg.ctrl) "C" else "",
-                if (msg.alt) "A" else "",
-                if (msg.shift) "S" else "",
-                if (msg.meta) "M" else "",
-                msg.timestamp,
-            });
-
-            // Get pane and check mouse mode
-            const pane = self.session.getPaneById(msg.paneId) orelse {
-                log.warn("Mouse event for unknown pane {d}", .{msg.paneId});
-                return;
-            };
-
-            // Check if terminal has mouse reporting enabled
-            const mouse_events = pane.getMouseEvents();
-            if (mouse_events == .none) {
-                // Mouse reporting disabled, ignore event
-                log.debug("Mouse event ignored (reporting disabled)", .{});
-                return;
-            }
-
-            // Check if this event type should be reported
-            const is_motion = std.mem.eql(u8, msg.state, "move");
-            if (is_motion and !mouse_events.motion()) {
-                // Motion event but terminal only wants clicks
-                log.debug("Mouse motion ignored (mode={s})", .{@tagName(mouse_events)});
-                return;
-            }
-
-            // For X10 mode (9), only report button presses (not releases)
-            const is_release = std.mem.eql(u8, msg.state, "up");
-            if (mouse_events == .x10 and is_release) {
-                log.debug("Mouse release ignored (X10 mode)", .{});
-                return;
-            }
-
-            const mouse_format = pane.getMouseFormat();
-            log.debug("Mouse event accepted: mode={s} format={s}", .{
-                @tagName(mouse_events),
-                @tagName(mouse_format),
-            });
-
-            // Build mouse event for encoding
-            const mouse_state = mouse.MouseState.fromString(msg.state) orelse {
-                log.warn("Unknown mouse state: {s}", .{msg.state});
-                return;
-            };
-
-            const event = mouse.MouseEvent{
-                .button = msg.button,
-                .x = msg.x,
-                .y = msg.y,
-                .px = msg.px,
-                .py = msg.py,
-                .state = mouse_state,
-                .modifiers = .{
-                    .ctrl = msg.ctrl,
-                    .alt = msg.alt,
-                    .shift = msg.shift,
-                    .meta = msg.meta,
-                },
-            };
-
-            // X10 mode (DECSET 9) doesn't have modifiers, but normal mode (1000) does
-            const include_x10_modifiers = mouse_events != .x10;
-
-            // Encode and send mouse event
-            var buf: [48]u8 = undefined;
-            const result = mouse.encode(event, mouse_format, &buf, include_x10_modifiers) orelse {
-                log.debug("Failed to encode mouse event (format={s})", .{@tagName(mouse_format)});
-                return;
-            };
-
-            // Write to PTY
-            pane.writeInput(result.slice()) catch |e| {
-                log.warn("Failed to send mouse event: {any}", .{e});
-                return;
-            };
-            log.debug("Sent {s} mouse: pos=({d},{d})", .{ @tagName(mouse_format), msg.x, msg.y });
         }
+
+        return .{ .msg = .{ .unknown = {} }, .cleanup = .{ .none = {} } };
     }
 
-    fn handleBinaryMessage(self: *EventLoop, data: []const u8, client: *ClientState) !void {
+    /// Parse a msgpack message into the unified ParsedMessage type.
+    /// Returns null if parsing fails.
+    fn parseMsgpackMessage(self: *EventLoop, data: []const u8) ?struct { msg: ParsedMessage, payload: msgpack.Payload } {
         var buffer: [4096]u8 = undefined;
         @memcpy(buffer[0..data.len], data);
 
@@ -1280,183 +1226,383 @@ pub const EventLoop = struct {
             BufferType.read,
         ).init(&write_stream, &read_stream);
 
-        const payload = packer.read(self.allocator) catch |e| {
-            log.warn("Failed to parse msgpack: {any}", .{e});
-            return;
-        };
-        defer payload.free(self.allocator);
+        const payload = packer.read(self.allocator) catch return null;
 
-        const type_payload = payload.mapGet("type") catch return orelse return;
-        const type_str = type_payload.asStr() catch return;
+        const type_payload = (payload.mapGet("type") catch return null) orelse return null;
+        const type_str = type_payload.asStr() catch return null;
 
         if (std.mem.eql(u8, type_str, "key")) {
-            const pane = self.session.activePane() orelse return;
-
-            const key_payload = (payload.mapGet("key") catch return) orelse return;
-            const key = key_payload.asStr() catch return;
-
-            const state_payload = (payload.mapGet("state") catch return) orelse return;
-            const state = state_payload.asStr() catch return;
-
-            if (!std.mem.eql(u8, state, "down")) return;
+            const key_payload = (payload.mapGet("key") catch return null) orelse return null;
+            const key = key_payload.asStr() catch return null;
+            const state_payload = (payload.mapGet("state") catch return null) orelse return null;
+            const state = state_payload.asStr() catch return null;
 
             const ctrl = if (payload.mapGet("ctrl") catch null) |p| (p.asBool() catch false) else false;
             const alt = if (payload.mapGet("alt") catch null) |p| (p.asBool() catch false) else false;
             const shift = if (payload.mapGet("shift") catch null) |p| (p.asBool() catch false) else false;
 
-            var output_buf: [32]u8 = undefined;
-            const event = KeyEvent{
-                .type = "key",
-                .key = key,
-                .code = "",
-                .state = state,
-                .ctrl = ctrl,
-                .alt = alt,
-                .shift = shift,
+            return .{
+                .msg = .{ .key = .{
+                    .key = key,
+                    .state = state,
+                    .ctrl = ctrl,
+                    .alt = alt,
+                    .shift = shift,
+                } },
+                .payload = payload,
             };
-            const cursor_key_app = pane.isCursorKeyApplication();
-            const output = keyEventToBytes(event, &output_buf, cursor_key_app);
-
-            if (output.len > 0) {
-                self.session.logPtySend(pane.id, output);
-                pane.writeInput(output) catch |e| {
-                    log.err("Failed to write key to PTY: {any}", .{e});
-                };
-            }
         } else if (std.mem.eql(u8, type_str, "text")) {
-            const pane = self.session.activePane() orelse return;
-            const data_payload = (payload.mapGet("data") catch return) orelse return;
-            const text = data_payload.asStr() catch return;
-
-            self.session.logPtySend(pane.id, text);
-            pane.writeInput(text) catch |e| {
-                log.err("Failed to write text to PTY: {any}", .{e});
+            const data_payload = (payload.mapGet("data") catch return null) orelse return null;
+            const text = data_payload.asStr() catch return null;
+            return .{
+                .msg = .{ .text = .{ .data = text } },
+                .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
-            // Only master can resize
-            const client_id = client.client_id orelse return;
-            if (!self.isMaster(client_id)) {
-                log.debug("Rejecting resize from non-master client {s}", .{client.shortId()});
-                return;
-            }
-
-            const cols_payload = (payload.mapGet("cols") catch return) orelse return;
-            const rows_payload = (payload.mapGet("rows") catch return) orelse return;
-            const cols: u16 = @intCast(cols_payload.getUint() catch return);
-            const rows: u16 = @intCast(rows_payload.getUint() catch return);
-            // Resize all panes via registry (debug pane needs resize too)
-            try self.session.pane_registry.resizeAll(cols, rows);
-        } else if (std.mem.eql(u8, type_str, "scroll")) {
-            const pane = self.session.activePane() orelse return;
-            const delta_payload = (payload.mapGet("delta") catch return) orelse return;
-            const delta: i32 = @intCast(delta_payload.getInt() catch return);
-            pane.scroll(delta);
-        } else if (std.mem.eql(u8, type_str, "ping")) {
-            const pong = try snapshot.generateBinaryPong(self.allocator);
-            defer self.allocator.free(pong);
-            try client.ws.sendBinary(pong);
-        } else if (std.mem.eql(u8, type_str, "focus")) {
-            const pane_id_payload = (payload.mapGet("paneId") catch return) orelse return;
-            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return);
-            const window = self.session.activeWindow() orelse return;
-            if (window.setActivePane(pane_id)) {
-                log.info("Switched to pane {d}", .{pane_id});
-            }
-        } else if (std.mem.eql(u8, type_str, "hello")) {
-            const client_id_payload = (payload.mapGet("clientId") catch return) orelse return;
-            const client_id_str = client_id_payload.asStr() catch return;
-
-            client.setClientId(client_id_str) catch |e| {
-                log.err("Failed to set client ID: {any}", .{e});
-                return;
+            const cols_payload = (payload.mapGet("cols") catch return null) orelse return null;
+            const rows_payload = (payload.mapGet("rows") catch return null) orelse return null;
+            const cols: u16 = @intCast(cols_payload.getUint() catch return null);
+            const rows: u16 = @intCast(rows_payload.getUint() catch return null);
+            return .{
+                .msg = .{ .resize = .{ .cols = cols, .rows = rows } },
+                .payload = payload,
             };
-            log.info("Client identified: {s}", .{client.shortId()});
+        } else if (std.mem.eql(u8, type_str, "scroll")) {
+            const delta_payload = (payload.mapGet("delta") catch return null) orelse return null;
+            const delta: i32 = @intCast(delta_payload.getInt() catch return null);
+            return .{
+                .msg = .{ .scroll = .{ .delta = delta } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "ping")) {
+            return .{ .msg = .{ .ping = {} }, .payload = payload };
+        } else if (std.mem.eql(u8, type_str, "sync")) {
+            const gen_payload = (payload.mapGet("gen") catch return null) orelse return null;
+            const gen: u64 = gen_payload.getUint() catch return null;
+            const minRowId: u64 = if (payload.mapGet("minRowId") catch null) |p| (p.getUint() catch 0) else 0;
+            return .{
+                .msg = .{ .sync = .{ .gen = gen, .minRowId = minRowId } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "focus")) {
+            const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
+            return .{
+                .msg = .{ .focus = .{ .paneId = pane_id } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "hello")) {
+            const client_id_payload = (payload.mapGet("clientId") catch return null) orelse return null;
+            const client_id_str = client_id_payload.asStr() catch return null;
+            return .{
+                .msg = .{ .hello = .{ .clientId = client_id_str } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "request_master")) {
+            return .{ .msg = .{ .request_master = {} }, .payload = payload };
+        } else if (std.mem.eql(u8, type_str, "new_window")) {
+            const template_id: ?[]const u8 = if (payload.mapGet("templateId") catch null) |p| (p.asStr() catch null) else null;
+            return .{
+                .msg = .{ .new_window = .{ .templateId = template_id } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "mouse")) {
+            const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
+            const button_payload = (payload.mapGet("button") catch return null) orelse return null;
+            const x_payload = (payload.mapGet("x") catch return null) orelse return null;
+            const y_payload = (payload.mapGet("y") catch return null) orelse return null;
+            const state_payload = (payload.mapGet("state") catch return null) orelse return null;
 
-            // Auto-assign as master if no master exists
-            if (self.master_id == null) {
-                if (client.client_id) |cid| {
-                    log.info("No master, auto-assigning {s} as master", .{client.shortId()});
-                    self.setMaster(cid) catch |e| {
-                        log.err("Failed to auto-set master: {any}", .{e});
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
+            const button: u8 = @intCast(button_payload.getUint() catch return null);
+            const x: u16 = @intCast(x_payload.getUint() catch return null);
+            const y: u16 = @intCast(y_payload.getUint() catch return null);
+            const state = state_payload.asStr() catch return null;
+
+            const px: ?u32 = if (payload.mapGet("px") catch null) |p| @intCast(p.getUint() catch 0) else null;
+            const py: ?u32 = if (payload.mapGet("py") catch null) |p| @intCast(p.getUint() catch 0) else null;
+            const ctrl = if (payload.mapGet("ctrl") catch null) |p| (p.asBool() catch false) else false;
+            const alt = if (payload.mapGet("alt") catch null) |p| (p.asBool() catch false) else false;
+            const shift = if (payload.mapGet("shift") catch null) |p| (p.asBool() catch false) else false;
+            const meta = if (payload.mapGet("meta") catch null) |p| (p.asBool() catch false) else false;
+            // Note: msgpack doesn't have getFloat, and timestamp is rarely needed. Use 0.
+            const timestamp: f64 = 0;
+
+            return .{
+                .msg = .{ .mouse = .{
+                    .paneId = pane_id,
+                    .button = button,
+                    .x = x,
+                    .y = y,
+                    .px = px,
+                    .py = py,
+                    .state = state,
+                    .ctrl = ctrl,
+                    .alt = alt,
+                    .shift = shift,
+                    .meta = meta,
+                    .timestamp = timestamp,
+                } },
+                .payload = payload,
+            };
+        }
+
+        return .{ .msg = .{ .unknown = {} }, .payload = payload };
+    }
+
+    // ========================================================================
+    // Unified Message Handler
+    // ========================================================================
+
+    /// Handle a parsed message (works for both JSON and msgpack protocols).
+    fn handleParsedMessage(self: *EventLoop, msg: ParsedMessage, client: *ClientState) !void {
+        switch (msg) {
+            .key => |key_msg| {
+                if (!std.mem.eql(u8, key_msg.state, "down")) return;
+
+                const pane = self.session.activePane() orelse return;
+                var output_buf: [32]u8 = undefined;
+                const cursor_key_app = pane.isCursorKeyApplication();
+
+                // Convert ParsedKeyEvent to KeyEvent for keyEventToBytes
+                const key_event = KeyEvent{
+                    .type = "key",
+                    .key = key_msg.key,
+                    .code = key_msg.code,
+                    .state = key_msg.state,
+                    .ctrl = key_msg.ctrl,
+                    .alt = key_msg.alt,
+                    .shift = key_msg.shift,
+                    .meta = key_msg.meta,
+                    .repeat = key_msg.repeat,
+                    .timestamp = key_msg.timestamp,
+                    .keyCode = key_msg.keyCode,
+                };
+                const output = keyEventToBytes(key_event, &output_buf, cursor_key_app);
+
+                if (output.len > 0) {
+                    self.session.logPtySend(pane.id, output);
+                    pane.writeInput(output) catch |e| {
+                        log.err("Failed to write key to PTY: {any}", .{e});
                     };
                 }
-            }
-        } else if (std.mem.eql(u8, type_str, "request_master")) {
-            // Client is requesting to become master
-            const client_id = client.client_id orelse {
-                log.warn("Anonymous client tried to request master", .{});
-                return;
-            };
+            },
+            .text => |text_msg| {
+                const pane = self.session.activePane() orelse return;
+                self.session.logPtySend(pane.id, text_msg.data);
+                pane.writeInput(text_msg.data) catch |e| {
+                    log.err("Failed to write text to PTY: {any}", .{e});
+                };
+            },
+            .resize => |resize_msg| {
+                // Only master can resize
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting resize from non-master client {s}", .{client.shortId()});
+                    return;
+                }
 
-            // Set this client as master (broadcasts to all clients)
-            self.setMaster(client_id) catch |e| {
-                log.err("Failed to set master: {any}", .{e});
-            };
-        } else if (std.mem.eql(u8, type_str, "new_window")) {
-            // Only master can create windows
-            const client_id = client.client_id orelse return;
-            if (!self.isMaster(client_id)) {
-                log.debug("Rejecting new_window from non-master client {s}", .{client.shortId()});
-                return;
-            }
+                const cols = resize_msg.cols;
+                const rows = resize_msg.rows;
 
-            // Parse the message to get templateId
-            const new_window_msg = std.json.parseFromSlice(NewWindowMessage, self.allocator, data, .{
-                .ignore_unknown_fields = true,
-            }) catch |e| {
-                log.err("Failed to parse new_window message: {any}", .{e});
-                return;
-            };
-            defer new_window_msg.deinit();
+                if (cols < 1 or cols > 500 or rows < 1 or rows > 500) return;
 
-            // Get template ID (default to 3-col if not specified)
-            const template_id = new_window_msg.value.templateId orelse "3-col";
-
-            // Look up the template
-            const template = self.layouts.get(template_id) orelse blk: {
-                log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
-                break :blk self.layouts.get("3-col") orelse {
-                    log.err("Fallback template '3-col' not found", .{});
+                // Resize all panes via registry (debug pane needs resize too)
+                try self.session.pane_registry.resizeAll(cols, rows);
+            },
+            .scroll => |scroll_msg| {
+                const pane = self.session.activePane() orelse return;
+                pane.scroll(scroll_msg.delta);
+            },
+            .ping => {
+                const pong = try snapshot.generateBinaryPong(self.allocator);
+                defer self.allocator.free(pong);
+                try client.ws.sendBinary(pong);
+            },
+            .sync => |sync_msg| {
+                const pane = self.session.activePane() orelse return;
+                try self.handleSyncRequest(client, pane, sync_msg.gen);
+            },
+            .focus => |focus_msg| {
+                const window = self.session.activeWindow() orelse return;
+                if (window.setActivePane(focus_msg.paneId)) {
+                    log.info("Switched to pane {d}", .{focus_msg.paneId});
+                }
+            },
+            .hello => |hello_msg| {
+                client.setClientId(hello_msg.clientId) catch |e| {
+                    log.err("Failed to set client ID: {any}", .{e});
                     return;
                 };
-            };
+                log.info("Client identified: {s}", .{client.shortId()});
 
-            // Count panes needed for this template
-            const pane_count = template.countPanes();
-            log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
-
-            // Create new window with the required number of panes
-            const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
-                log.err("Failed to create new window: {any}", .{e});
-                return;
-            };
-            defer self.allocator.free(result.pane_ids);
-
-            log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
-
-            // Assign layout to the new window
-            if (self.session.getWindow(result.window_id)) |window| {
-                window.setLayoutFromTemplate(template) catch |e| {
-                    log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
-                };
-            }
-
-            // Broadcast updated layout to all clients
-            self.broadcastLayout() catch |e| {
-                log.err("Failed to broadcast layout: {any}", .{e});
-            };
-
-            // Send initial snapshots for new panes to all clients
-            for (result.pane_ids) |pane_id| {
-                if (self.session.pane_registry.get(pane_id)) |pane| {
-                    for (self.clients.items) |*c| {
-                        self.sendSnapshot(&c.ws, pane) catch |e| {
-                            log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
+                // Auto-assign as master if no master exists
+                if (self.master_id == null) {
+                    if (client.client_id) |cid| {
+                        log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                        self.setMaster(cid) catch |e| {
+                            log.err("Failed to auto-set master: {any}", .{e});
                         };
-                        c.setGeneration(pane_id, pane.generation);
                     }
                 }
-            }
+            },
+            .request_master => {
+                // Client is requesting to become master
+                const client_id = client.client_id orelse {
+                    log.warn("Anonymous client tried to request master", .{});
+                    return;
+                };
+
+                // Set this client as master (broadcasts to all clients)
+                self.setMaster(client_id) catch |e| {
+                    log.err("Failed to set master: {any}", .{e});
+                };
+            },
+            .new_window => |new_window_msg| {
+                // Only master can create windows
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting new_window from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                // Get template ID (default to 3-col if not specified)
+                const template_id = new_window_msg.templateId orelse "3-col";
+
+                // Look up the template
+                const template = self.layouts.get(template_id) orelse blk: {
+                    log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
+                    break :blk self.layouts.get("3-col") orelse {
+                        log.err("Fallback template '3-col' not found", .{});
+                        return;
+                    };
+                };
+
+                // Count panes needed for this template
+                const pane_count = template.countPanes();
+                log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+
+                // Create new window with the required number of panes
+                const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
+                    log.err("Failed to create new window: {any}", .{e});
+                    return;
+                };
+                defer self.allocator.free(result.pane_ids);
+
+                log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+
+                // Assign layout to the new window
+                if (self.session.getWindow(result.window_id)) |window| {
+                    window.setLayoutFromTemplate(template) catch |e| {
+                        log.err("Failed to set layout for window {d}: {any}", .{ result.window_id, e });
+                    };
+                }
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    log.err("Failed to broadcast layout: {any}", .{e});
+                };
+
+                // Send initial snapshots for new panes to all clients
+                for (result.pane_ids) |pane_id| {
+                    if (self.session.pane_registry.get(pane_id)) |pane| {
+                        for (self.clients.items) |*c| {
+                            self.sendSnapshot(&c.ws, pane) catch |e| {
+                                log.err("Failed to send snapshot for new pane {d}: {any}", .{ pane_id, e });
+                            };
+                            c.setGeneration(pane_id, pane.generation);
+                        }
+                    }
+                }
+            },
+            .mouse => |mouse_msg| {
+                log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) px=({?},{?}) mods={s}{s}{s}{s} ts={d:.3}", .{
+                    mouse_msg.state,
+                    mouse_msg.paneId,
+                    mouse_msg.button,
+                    mouse_msg.x,
+                    mouse_msg.y,
+                    mouse_msg.px,
+                    mouse_msg.py,
+                    if (mouse_msg.ctrl) "C" else "",
+                    if (mouse_msg.alt) "A" else "",
+                    if (mouse_msg.shift) "S" else "",
+                    if (mouse_msg.meta) "M" else "",
+                    mouse_msg.timestamp,
+                });
+
+                // Get pane and check mouse mode
+                const pane = self.session.getPaneById(mouse_msg.paneId) orelse {
+                    log.warn("Mouse event for unknown pane {d}", .{mouse_msg.paneId});
+                    return;
+                };
+
+                // Check if terminal has mouse reporting enabled
+                const mouse_events = pane.getMouseEvents();
+                if (mouse_events == .none) {
+                    log.debug("Mouse event ignored (reporting disabled)", .{});
+                    return;
+                }
+
+                // Check if this event type should be reported
+                const is_motion = std.mem.eql(u8, mouse_msg.state, "move");
+                if (is_motion and !mouse_events.motion()) {
+                    log.debug("Mouse motion ignored (mode={s})", .{@tagName(mouse_events)});
+                    return;
+                }
+
+                // For X10 mode (9), only report button presses (not releases)
+                const is_release = std.mem.eql(u8, mouse_msg.state, "up");
+                if (mouse_events == .x10 and is_release) {
+                    log.debug("Mouse release ignored (X10 mode)", .{});
+                    return;
+                }
+
+                const mouse_format = pane.getMouseFormat();
+                log.debug("Mouse event accepted: mode={s} format={s}", .{
+                    @tagName(mouse_events),
+                    @tagName(mouse_format),
+                });
+
+                // Build mouse event for encoding
+                const mouse_state = mouse.MouseState.fromString(mouse_msg.state) orelse {
+                    log.warn("Unknown mouse state: {s}", .{mouse_msg.state});
+                    return;
+                };
+
+                const event = mouse.MouseEvent{
+                    .button = mouse_msg.button,
+                    .x = mouse_msg.x,
+                    .y = mouse_msg.y,
+                    .px = mouse_msg.px,
+                    .py = mouse_msg.py,
+                    .state = mouse_state,
+                    .modifiers = .{
+                        .ctrl = mouse_msg.ctrl,
+                        .alt = mouse_msg.alt,
+                        .shift = mouse_msg.shift,
+                        .meta = mouse_msg.meta,
+                    },
+                };
+
+                // X10 mode (DECSET 9) doesn't have modifiers, but normal mode (1000) does
+                const include_x10_modifiers = mouse_events != .x10;
+
+                // Encode and send mouse event
+                var buf: [48]u8 = undefined;
+                const result = mouse.encode(event, mouse_format, &buf, include_x10_modifiers) orelse {
+                    log.debug("Failed to encode mouse event (format={s})", .{@tagName(mouse_format)});
+                    return;
+                };
+
+                // Write to PTY
+                pane.writeInput(result.slice()) catch |e| {
+                    log.warn("Failed to send mouse event: {any}", .{e});
+                    return;
+                };
+                log.debug("Sent {s} mouse: pos=({d},{d})", .{ @tagName(mouse_format), mouse_msg.x, mouse_msg.y });
+            },
+            .unknown => {},
         }
     }
 
