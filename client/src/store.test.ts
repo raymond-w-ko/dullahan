@@ -44,6 +44,29 @@ import {
   type WindowState,
   type PaneState,
 } from "./store";
+import type { TerminalSnapshot } from "./terminal/connection";
+
+/** Create a valid mock snapshot for testing */
+function createMockSnapshot(overrides: Partial<TerminalSnapshot> & { paneId: number }): TerminalSnapshot {
+  return {
+    paneId: overrides.paneId,
+    gen: overrides.gen ?? 1,
+    cols: overrides.cols ?? 80,
+    rows: overrides.rows ?? 24,
+    cursor: overrides.cursor ?? {
+      x: 0,
+      y: 0,
+      visible: true,
+      style: "block",
+      blink: false,
+    },
+    altScreen: overrides.altScreen ?? false,
+    scrollback: overrides.scrollback ?? { totalRows: 24, viewportTop: 0 },
+    cells: overrides.cells ?? [],
+    styles: overrides.styles ?? new Map(),
+    rowIds: overrides.rowIds ?? [],
+  };
+}
 
 describe("store initial state", () => {
   test("starts disconnected", () => {
@@ -165,18 +188,7 @@ describe("setError", () => {
 
 describe("setPaneSnapshot", () => {
   test("creates pane if not exists", () => {
-    const snapshot = {
-      paneId: 42,
-      gen: 1,
-      rows: 24,
-      cols: 80,
-      cursorRow: 0,
-      cursorCol: 0,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
+    const snapshot = createMockSnapshot({ paneId: 42 });
 
     setPaneSnapshot(42, snapshot);
 
@@ -187,46 +199,23 @@ describe("setPaneSnapshot", () => {
   });
 
   test("updates existing pane snapshot", () => {
-    const snapshot1 = {
+    const snapshot1 = createMockSnapshot({ paneId: 1, gen: 1 });
+    const snapshot2 = createMockSnapshot({
       paneId: 1,
-      gen: 1,
-      rows: 24,
-      cols: 80,
-      cursorRow: 0,
-      cursorCol: 0,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
-
-    const snapshot2 = {
-      ...snapshot1,
       gen: 2,
-      cursorRow: 5,
-    };
+      cursor: { x: 0, y: 5, visible: true, style: "block", blink: false },
+    });
 
     setPaneSnapshot(1, snapshot1);
     setPaneSnapshot(1, snapshot2);
 
     const pane = getPane(1);
     expect(pane!.snapshot).toBe(snapshot2);
-    expect(pane!.snapshot!.cursorRow).toBe(5);
+    expect(pane!.snapshot!.cursor.y).toBe(5);
   });
 
   test("sets default title for new pane", () => {
-    const snapshot = {
-      paneId: 99,
-      gen: 1,
-      rows: 24,
-      cols: 80,
-      cursorRow: 0,
-      cursorCol: 0,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
+    const snapshot = createMockSnapshot({ paneId: 99 });
 
     setPaneSnapshot(99, snapshot);
 
@@ -238,18 +227,7 @@ describe("setPaneSnapshot", () => {
 describe("setPaneTitle", () => {
   test("updates pane title", () => {
     // First create the pane
-    const snapshot = {
-      paneId: 1,
-      gen: 1,
-      rows: 24,
-      cols: 80,
-      cursorRow: 0,
-      cursorCol: 0,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
+    const snapshot = createMockSnapshot({ paneId: 1 });
     setPaneSnapshot(1, snapshot);
 
     setPaneTitle(1, "bash - ~/projects");
@@ -267,18 +245,7 @@ describe("setPaneTitle", () => {
 
 describe("setPaneDimensions", () => {
   test("updates pane dimensions", () => {
-    const snapshot = {
-      paneId: 1,
-      gen: 1,
-      rows: 24,
-      cols: 80,
-      cursorRow: 0,
-      cursorCol: 0,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
+    const snapshot = createMockSnapshot({ paneId: 1 });
     setPaneSnapshot(1, snapshot);
 
     setPaneDimensions(1, 120, 40);
@@ -381,18 +348,11 @@ describe("setLayout", () => {
 
   test("preserves existing pane state", () => {
     // Create pane with snapshot
-    const snapshot = {
+    const snapshot = createMockSnapshot({
       paneId: 1,
       gen: 5,
-      rows: 24,
-      cols: 80,
-      cursorRow: 10,
-      cursorCol: 20,
-      cursorVisible: true,
-      cursorShape: 0,
-      cells: [],
-      rowIds: [],
-    };
+      cursor: { x: 20, y: 10, visible: true, style: "block", blink: false },
+    });
     setPaneSnapshot(1, snapshot);
 
     // Update layout including this pane
@@ -429,14 +389,14 @@ describe("setLayout", () => {
 
   test("updates layout templates when provided", () => {
     const templates = [
-      { id: "single", name: "Single Pane" },
-      { id: "2-col", name: "Two Columns" },
+      { id: "single", name: "Single Pane", nodes: [] },
+      { id: "2-col", name: "Two Columns", nodes: [] },
     ];
 
     setLayout({
       activeWindowId: 0,
       windows: [],
-      templates: templates as any,
+      templates,
     });
 
     expect(getLayoutTemplates()).toEqual(templates);

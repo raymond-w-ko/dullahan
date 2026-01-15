@@ -213,8 +213,8 @@ describe("set", () => {
     set("theme", "dracula");
 
     expect(dispatchedEvents.length).toBe(1);
-    expect(dispatchedEvents[0].type).toBe("config-change");
-    expect(dispatchedEvents[0].detail).toEqual({
+    expect(dispatchedEvents[0]!.type).toBe("config-change");
+    expect(dispatchedEvents[0]!.detail).toEqual({
       key: "theme",
       value: "dracula",
     });
@@ -238,7 +238,7 @@ describe("remove", () => {
     remove("theme");
 
     expect(dispatchedEvents.length).toBe(1);
-    expect(dispatchedEvents[0].detail).toEqual({
+    expect(dispatchedEvents[0]!.detail).toEqual({
       key: "theme",
       value: DEFAULTS.theme,
     });
