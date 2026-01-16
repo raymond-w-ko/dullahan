@@ -87,10 +87,11 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
   }, []);
 
   const displayDims = dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
+  const isFocused = focusedPaneId === paneId;
 
   return (
     <div
-      class={`terminal-pane${hasBell ? " bell-active" : ""}${isReadOnly ? " terminal-pane--readonly" : ""}`}
+      class={`terminal-pane${hasBell ? " bell-active" : ""}${isReadOnly ? " terminal-pane--readonly" : ""}${isFocused ? " terminal-pane--focused" : ""}`}
       onClick={handlePaneClick}
     >
       <div class="terminal-titlebar">
