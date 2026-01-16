@@ -87,7 +87,7 @@ export function useScrollback(maxRows: number = DEFAULT_MAX_ROWS): [ScrollbackSt
       }
 
       // For now, just replace entirely
-      // TODO: Implement smart diffing to detect scrollback vs. screen updates
+      // TODO(du-bh4): Implement smart diffing to detect scrollback vs. screen updates
       // This is a simplistic approach - full screen updates replace buffer
       const totalRows = newRows.length;
       

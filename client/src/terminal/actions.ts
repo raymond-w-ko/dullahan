@@ -267,7 +267,7 @@ export async function executeAction(
       break;
 
     case "close_window":
-      // TODO: Implement when protocol supports it
+      // TODO(du-eqf): Implement when protocol supports it
       break;
 
     case "switch_window":
@@ -283,7 +283,7 @@ export async function executeAction(
       break;
 
     case "toggle_fullscreen":
-      // TODO: Implement fullscreen toggle
+      // TODO(du-eej): Implement fullscreen toggle
       break;
 
     case "open_settings":

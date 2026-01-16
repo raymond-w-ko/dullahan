@@ -12,7 +12,7 @@ test "math module is accessible from library root" {
 }
 
 test "example multi-module interaction" {
-    // TODO: When we have server + terminal modules, test them together
+    // TODO(du-9lb): When we have server + terminal modules, test them together
     // const server = dullahan.server.init(...);
     // const terminal = dullahan.terminal.spawn(...);
     // try std.testing.expect(server.hasTerminal(terminal.id));
