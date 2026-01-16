@@ -145,6 +145,9 @@ export interface ActionContext {
   /** Create a new window */
   createWindow: () => void;
 
+  /** Close a window by ID */
+  closeWindow: (windowId: number) => void;
+
   /** Open settings modal */
   openSettings: () => void;
 
@@ -267,7 +270,7 @@ export async function executeAction(
       break;
 
     case "close_window":
-      // TODO(du-eqf): Implement when protocol supports it
+      ctx.closeWindow(ctx.getActiveWindowId());
       break;
 
     case "switch_window":

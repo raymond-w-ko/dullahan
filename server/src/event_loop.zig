@@ -128,6 +128,11 @@ const NewWindowMessage = struct {
     templateId: ?[]const u8 = null,
 };
 
+const CloseWindowMessage = struct {
+    type: []const u8,
+    windowId: u16,
+};
+
 const MessageType = struct {
     type: []const u8,
 };
@@ -149,6 +154,7 @@ const ParsedMessage = union(enum) {
     hello: ParsedHello,
     request_master: void,
     new_window: ParsedNewWindow,
+    close_window: ParsedCloseWindow,
     mouse: ParsedMouse,
     unknown: void,
 };
@@ -194,6 +200,10 @@ const ParsedHello = struct {
 
 const ParsedNewWindow = struct {
     templateId: ?[]const u8 = null,
+};
+
+const ParsedCloseWindow = struct {
+    windowId: u16,
 };
 
 const ParsedMouse = struct {
@@ -1219,6 +1229,15 @@ pub const EventLoop = struct {
                 .msg = .{ .new_window = .{ .templateId = parsed.value.templateId } },
                 .cleanup = .{ .json_new_window = parsed },
             };
+        } else if (std.mem.eql(u8, type_str, "close_window")) {
+            const parsed = std.json.parseFromSlice(CloseWindowMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .close_window = .{ .windowId = parsed.value.windowId } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
             const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -1342,6 +1361,13 @@ pub const EventLoop = struct {
             const template_id: ?[]const u8 = if (payload.mapGet("templateId") catch null) |p| (p.asStr() catch null) else null;
             return .{
                 .msg = .{ .new_window = .{ .templateId = template_id } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "close_window")) {
+            const window_id_payload = (payload.mapGet("windowId") catch return null) orelse return null;
+            const window_id: u16 = @intCast(window_id_payload.getUint() catch return null);
+            return .{
+                .msg = .{ .close_window = .{ .windowId = window_id } },
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
@@ -1560,6 +1586,35 @@ pub const EventLoop = struct {
                         }
                     }
                 }
+            },
+            .close_window => |close_window_msg| {
+                // Only master can close windows
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting close_window from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                const window_id = close_window_msg.windowId;
+
+                // Can't close the last window
+                if (self.session.windowCount() <= 1) {
+                    log.warn("Rejecting close_window: can't close the last window", .{});
+                    return;
+                }
+
+                // Close the window (removes window, destroys panes, updates active window)
+                self.session.closeWindow(window_id) catch |e| {
+                    logRecoverable("close window", e);
+                    return;
+                };
+
+                log.info("Closed window {d}", .{window_id});
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    logRecoverable("broadcast layout after close", e);
+                };
             },
             .mouse => |mouse_msg| {
                 log.debug("Mouse {s}: pane={d} button={d} pos=({d},{d}) px=({?},{?}) mods={s}{s}{s}{s} ts={d:.3}", .{

@@ -20,6 +20,7 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     getWindowIds: () => [0],
     getActiveWindowId: () => 0,
     createWindow: () => {},
+    closeWindow: () => {},
     openSettings: () => {},
     setFocusedPane: () => {},
     getPaneIds: () => [1],

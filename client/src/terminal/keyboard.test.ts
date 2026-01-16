@@ -68,6 +68,9 @@ function createMockActionContext(): ActionContext & {
     createWindow: () => {
       calls.push({ action: "createWindow" });
     },
+    closeWindow: (id: number) => {
+      calls.push({ action: "closeWindow", args: id });
+    },
     openSettings: () => {
       calls.push({ action: "openSettings" });
     },

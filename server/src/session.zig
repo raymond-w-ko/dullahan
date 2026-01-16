@@ -225,6 +225,32 @@ pub const Session = struct {
         };
     }
 
+    /// Close a window and destroy all its panes.
+    /// If this was the active window, switches to another window.
+    /// Returns error.WindowNotFound if the window doesn't exist.
+    pub fn closeWindow(self: *Session, window_id: u16) !void {
+        // Get the window
+        const window_ptr = self.windows.getPtr(window_id) orelse return error.WindowNotFound;
+
+        // Destroy all panes in the window
+        for (window_ptr.pane_ids.items) |pane_id| {
+            self.pane_registry.destroy(pane_id);
+        }
+
+        // Deinit and remove the window
+        window_ptr.deinit();
+        _ = self.windows.remove(window_id);
+
+        // If this was the active window, switch to another
+        if (self.active_window_id == window_id) {
+            // Pick any remaining window
+            var it = self.windows.keyIterator();
+            if (it.next()) |next_window_id| {
+                self.active_window_id = next_window_id.*;
+            }
+        }
+    }
+
     /// Get a window by ID
     pub fn getWindow(self: *Session, window_id: u16) ?*Window {
         return self.windows.getPtr(window_id);

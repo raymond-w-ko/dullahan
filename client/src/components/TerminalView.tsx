@@ -22,6 +22,7 @@ import {
   setSettingsOpen,
   switchWindow,
   createWindow,
+  closeWindow,
   setFocusedPane,
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
@@ -122,6 +123,7 @@ export function TerminalView({
       },
       getActiveWindowId: () => getStore().activeWindowId,
       createWindow: () => createWindow(),
+      closeWindow: (windowId: number) => closeWindow(windowId),
       openSettings: () => setSettingsOpen(true),
       setFocusedPane: (targetPaneId: number) => setFocusedPane(targetPaneId),
       getPaneIds: () => {

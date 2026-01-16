@@ -247,6 +247,10 @@ export function createWindowWithTemplate(templateId: string) {
   setLayoutPickerOpen(false);
 }
 
+export function closeWindow(windowId: number) {
+  store.connection?.closeWindow(windowId);
+}
+
 export function setLayout(layout: LayoutUpdate) {
   store.activeWindowId = layout.activeWindowId;
 

@@ -113,6 +113,12 @@ export interface NewWindowMessage {
   templateId?: string;
 }
 
+/** Close a window */
+export interface CloseWindowMessage {
+  type: "close_window";
+  windowId: number;
+}
+
 /** Ping for keepalive */
 export interface PingMessage {
   type: "ping";
@@ -130,6 +136,7 @@ export type ClientMessage =
   | HelloMessage
   | RequestMasterMessage
   | NewWindowMessage
+  | CloseWindowMessage
   | PingMessage;
 
 // =============================================================================
