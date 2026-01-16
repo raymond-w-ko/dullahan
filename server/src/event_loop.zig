@@ -1013,17 +1013,23 @@ pub const EventLoop = struct {
 
     /// Set a new master (or clear if null). Broadcasts master_changed to all clients.
     pub fn setMaster(self: *EventLoop, new_master_id: ?[]const u8) !void {
-        // Free old master_id
+        // Allocate new ID first (before freeing old) to avoid use-after-free
+        // if allocation fails
+        const new_copy = if (new_master_id) |id|
+            try self.allocator.dupe(u8, id)
+        else
+            null;
+
+        // Only free old after new is successfully allocated
         if (self.master_id) |old| {
             self.allocator.free(old);
         }
 
-        // Set new master_id
-        if (new_master_id) |id| {
-            self.master_id = try self.allocator.dupe(u8, id);
+        self.master_id = new_copy;
+
+        if (new_copy) |id| {
             log.info("Master set to: {s}", .{if (id.len >= 8) id[0..8] else id});
         } else {
-            self.master_id = null;
             log.info("Master cleared (no master)", .{});
         }
 
