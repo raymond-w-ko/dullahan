@@ -158,6 +158,15 @@ export interface ScrollbackInfo {
   viewportTop: number;
 }
 
+/** Selection bounds in viewport coordinates */
+export interface SelectionBounds {
+  startX: number; // u16 - column
+  startY: number; // u32 - viewport row
+  endX: number; // u16 - column
+  endY: number; // u32 - viewport row
+  isRectangle: boolean;
+}
+
 /**
  * Full terminal state snapshot.
  * Sent on connect and when delta sync fails.
@@ -174,6 +183,7 @@ export interface BinarySnapshot {
   cells: Uint8Array; // Raw cell bytes
   styles: Uint8Array; // Raw style bytes
   rowIds: Uint8Array; // Packed u64 row IDs (little-endian)
+  selection?: SelectionBounds; // Current selection (if any)
 }
 
 /**
@@ -196,6 +206,7 @@ export interface BinaryDelta {
   }>;
   rowIds: Uint8Array; // Packed u64 row IDs for viewport (little-endian)
   styles: Uint8Array; // Raw style bytes for dirty rows
+  selection?: SelectionBounds; // Current selection (if any)
 }
 
 /** Title update from server */

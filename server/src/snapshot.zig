@@ -14,6 +14,7 @@ const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const LayoutNode = window_mod.LayoutNode;
 const layout_db = @import("layout_db.zig");
+const terminal = @import("terminal.zig");
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
 const Cell = ghostty.page.Cell;
@@ -453,6 +454,17 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     try cursor_map.mapPut("blink", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_blinking) });
     try payload.mapPut("cursor", cursor_map);
 
+    // Selection bounds (if any)
+    if (terminal.getSelection(&pane.terminal)) |sel| {
+        var sel_map = msgpack.Payload.mapPayload(allocator);
+        try sel_map.mapPut("startX", msgpack.Payload{ .uint = sel.start_x });
+        try sel_map.mapPut("startY", msgpack.Payload{ .uint = sel.start_y });
+        try sel_map.mapPut("endX", msgpack.Payload{ .uint = sel.end_x });
+        try sel_map.mapPut("endY", msgpack.Payload{ .uint = sel.end_y });
+        try sel_map.mapPut("isRectangle", msgpack.Payload{ .bool = sel.is_rectangle });
+        try payload.mapPut("selection", sel_map);
+    }
+
     // Alt screen flag
     try payload.mapPut("altScreen", msgpack.Payload{ .bool = pane.terminal.screens.active_key == .alternate });
 
@@ -716,6 +728,17 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     try cursor_map.mapPut("style", try msgpack.Payload.strToPayload(cursor_style_str, allocator));
     try cursor_map.mapPut("blink", msgpack.Payload{ .bool = pane.terminal.modes.get(.cursor_blinking) });
     try payload.mapPut("cursor", cursor_map);
+
+    // Selection bounds (if any)
+    if (terminal.getSelection(&pane.terminal)) |sel| {
+        var sel_map = msgpack.Payload.mapPayload(allocator);
+        try sel_map.mapPut("startX", msgpack.Payload{ .uint = sel.start_x });
+        try sel_map.mapPut("startY", msgpack.Payload{ .uint = sel.start_y });
+        try sel_map.mapPut("endX", msgpack.Payload{ .uint = sel.end_x });
+        try sel_map.mapPut("endY", msgpack.Payload{ .uint = sel.end_y });
+        try sel_map.mapPut("isRectangle", msgpack.Payload{ .bool = sel.is_rectangle });
+        try payload.mapPut("selection", sel_map);
+    }
 
     // Alt screen flag
     try payload.mapPut("altScreen", msgpack.Payload{ .bool = pane.terminal.screens.active_key == .alternate });
