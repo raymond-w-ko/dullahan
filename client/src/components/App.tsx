@@ -3,6 +3,7 @@
 
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
 import { WindowSwitcher } from "./WindowSwitcher";
@@ -60,13 +61,15 @@ export function App() {
         </button>
       </aside>
 
-      <main class="main">
-        {error && <div class="error">Error: {error}</div>}
-        <TerminalGrid windowId={activeWindowId} />
-      </main>
+      <ErrorBoundary>
+        <main class="main">
+          {error && <div class="error">Error: {error}</div>}
+          <TerminalGrid windowId={activeWindowId} />
+        </main>
 
-      <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <LayoutPickerModal />
+        <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <LayoutPickerModal />
+      </ErrorBoundary>
     </div>
   );
 }
