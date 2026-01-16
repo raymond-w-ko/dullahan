@@ -9,6 +9,9 @@
  */
 
 import { debug } from "../debug";
+import { cellToChar } from "../../../protocol/schema/cell";
+import type { Cell } from "../../../protocol/schema/cell";
+import type { SelectionBounds } from "../../../protocol/schema/messages";
 
 /**
  * Check if the Clipboard API is available.
@@ -128,4 +131,83 @@ export function clearSelection(): void {
   if (selection) {
     selection.removeAllRanges();
   }
+}
+
+/**
+ * Extract text from terminal cells within the given selection bounds.
+ * Handles both normal (line) and rectangular selection modes.
+ *
+ * @param cells - Terminal cell array (row-major order)
+ * @param cols - Number of columns in the terminal
+ * @param selection - Selection bounds from server
+ * @returns The selected text as a string
+ */
+export function getTerminalSelectionText(
+  cells: Cell[],
+  cols: number,
+  selection: SelectionBounds
+): string {
+  // Normalize so start is before end
+  let startX = selection.startX;
+  let startY = selection.startY;
+  let endX = selection.endX;
+  let endY = selection.endY;
+
+  // Swap if start is after end (for reversed selection)
+  if (startY > endY || (startY === endY && startX > endX)) {
+    [startX, endX] = [endX, startX];
+    [startY, endY] = [endY, startY];
+  }
+
+  const lines: string[] = [];
+
+  if (selection.isRectangle) {
+    // Rectangle selection: extract fixed columns from each row
+    const minX = Math.min(startX, endX);
+    const maxX = Math.max(startX, endX);
+
+    for (let y = startY; y <= endY; y++) {
+      let line = "";
+      for (let x = minX; x <= maxX; x++) {
+        const idx = y * cols + x;
+        const cell = cells[idx];
+        line += cell ? cellToChar(cell) : " ";
+      }
+      lines.push(line.trimEnd());
+    }
+  } else {
+    // Normal (line) selection
+    for (let y = startY; y <= endY; y++) {
+      let lineStart: number;
+      let lineEnd: number;
+
+      if (y === startY && y === endY) {
+        // Single line: between start and end
+        lineStart = startX;
+        lineEnd = endX;
+      } else if (y === startY) {
+        // First line: from startX to end of line
+        lineStart = startX;
+        lineEnd = cols - 1;
+      } else if (y === endY) {
+        // Last line: from start of line to endX
+        lineStart = 0;
+        lineEnd = endX;
+      } else {
+        // Middle lines: entire line
+        lineStart = 0;
+        lineEnd = cols - 1;
+      }
+
+      let line = "";
+      for (let x = lineStart; x <= lineEnd; x++) {
+        const idx = y * cols + x;
+        const cell = cells[idx];
+        line += cell ? cellToChar(cell) : " ";
+      }
+      lines.push(line.trimEnd());
+    }
+  }
+
+  return lines.join("\n");
 }

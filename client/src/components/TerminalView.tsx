@@ -10,10 +10,11 @@ import { IMEHandler, createIMEHandler } from "../terminal/ime";
 import { MouseHandler, createMouseHandler } from "../terminal/mouse";
 import { getActiveKeybinds, onKeybindsChange } from "../terminal/keybindConfig";
 import {
-  getSelection,
+  getSelection as getDOMSelection,
   copyToClipboard,
   pasteFromClipboard,
   clearSelection,
+  getTerminalSelectionText,
 } from "../terminal/clipboard";
 import type { ActionContext } from "../terminal/actions";
 import * as config from "../config";
@@ -108,7 +109,14 @@ export function TerminalView({
           connection.sendScroll(targetPaneId, lines);
         }
       },
-      getSelection: () => getSelection(),
+      getSelection: () => {
+        // First check for terminal selection (from server)
+        if (snapshot.selection) {
+          return getTerminalSelectionText(cells, cols, snapshot.selection);
+        }
+        // Fall back to DOM selection
+        return getDOMSelection();
+      },
       readClipboard: () => pasteFromClipboard(),
       writeClipboard: async (text: string) => {
         await copyToClipboard(text);
@@ -134,6 +142,16 @@ export function TerminalView({
       },
       getFocusedPaneId: () => getStore().focusedPaneId,
       toggleFullscreen: (targetPaneId: number) => toggleFullscreen(targetPaneId),
+      selectAll: (targetPaneId: number) => {
+        if (connection?.isConnected) {
+          connection.selectAll(targetPaneId);
+        }
+      },
+      clearSelectionInPane: (targetPaneId: number) => {
+        if (connection?.isConnected) {
+          connection.clearSelection(targetPaneId);
+        }
+      },
     };
 
     // Set up keybinds
@@ -233,8 +251,8 @@ export function TerminalView({
     imeRef.current?.focus();
   }, []);
 
-  // Convert cells to styled runs
-  const lines = cellsToRuns(cells, styles, cols, rows);
+  // Convert cells to styled runs (with selection highlighting if active)
+  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection);
 
   // Build cursor config object
   const cursorConfig: CursorConfig = {

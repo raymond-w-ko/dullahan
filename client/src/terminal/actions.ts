@@ -84,6 +84,16 @@ export interface OpenSettingsAction {
   type: "open_settings";
 }
 
+/** Select all content in the terminal */
+export interface SelectAllAction {
+  type: "select_all";
+}
+
+/** Clear the current selection */
+export interface ClearSelectionAction {
+  type: "clear_selection";
+}
+
 /** No-op action (for unmapped keys) */
 export interface NoOpAction {
   type: "none";
@@ -104,6 +114,8 @@ export type TerminalAction =
   | FocusPaneAction
   | ToggleFullscreenAction
   | OpenSettingsAction
+  | SelectAllAction
+  | ClearSelectionAction
   | NoOpAction;
 
 // ============================================================================
@@ -162,6 +174,12 @@ export interface ActionContext {
 
   /** Toggle fullscreen for a pane */
   toggleFullscreen: (paneId: number) => void;
+
+  /** Select all content in a pane */
+  selectAll: (paneId: number) => void;
+
+  /** Clear selection in a pane */
+  clearSelectionInPane: (paneId: number) => void;
 }
 
 // ============================================================================
@@ -226,6 +244,8 @@ export function canPerformAction(
     case "close_window":
     case "toggle_fullscreen":
     case "open_settings":
+    case "select_all":
+    case "clear_selection":
     case "none":
       return true;
   }
@@ -294,6 +314,14 @@ export async function executeAction(
 
     case "open_settings":
       ctx.openSettings();
+      break;
+
+    case "select_all":
+      ctx.selectAll(ctx.paneId);
+      break;
+
+    case "clear_selection":
+      ctx.clearSelectionInPane(ctx.paneId);
       break;
 
     case "none":
@@ -467,5 +495,7 @@ export const actions = {
     type: "toggle_fullscreen",
   }),
   openSettings: (): OpenSettingsAction => ({ type: "open_settings" }),
+  selectAll: (): SelectAllAction => ({ type: "select_all" }),
+  clearSelection: (): ClearSelectionAction => ({ type: "clear_selection" }),
   none: (): NoOpAction => ({ type: "none" }),
 };

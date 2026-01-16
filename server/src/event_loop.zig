@@ -156,6 +156,8 @@ const ParsedMessage = union(enum) {
     new_window: ParsedNewWindow,
     close_window: ParsedCloseWindow,
     mouse: ParsedMouse,
+    select_all: ParsedSelectAll,
+    clear_selection: ParsedClearSelection,
     unknown: void,
 };
 
@@ -219,6 +221,14 @@ const ParsedMouse = struct {
     shift: bool = false,
     meta: bool = false,
     timestamp: f64 = 0,
+};
+
+const ParsedSelectAll = struct {
+    paneId: u16,
+};
+
+const ParsedClearSelection = struct {
+    paneId: u16,
 };
 
 /// Cleanup helper for JSON parsed messages.
@@ -1071,6 +1081,16 @@ pub const EventLoop = struct {
         }
     }
 
+    /// Broadcast pane update (snapshot/delta) to all connected clients.
+    /// Used for selection changes and other immediate updates.
+    fn broadcastPaneUpdate(self: *EventLoop, pane: *Pane) !void {
+        for (self.clients.items) |*client| {
+            self.sendPaneUpdate(client, pane) catch |e| {
+                logClientError("broadcast pane update", e);
+            };
+        }
+    }
+
     fn sendClientUpdates(self: *EventLoop, client: *ClientState) !void {
         // Send updates for all panes via registry
         var it = self.session.pane_registry.iterator();
@@ -1258,6 +1278,24 @@ pub const EventLoop = struct {
                     .timestamp = parsed.value.timestamp,
                 } },
                 .cleanup = .{ .json_mouse = parsed },
+            };
+        } else if (std.mem.eql(u8, type_str, "select_all")) {
+            const parsed = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .select_all = .{ .paneId = parsed.value.paneId } },
+                .cleanup = .{ .none = {} },
+            };
+        } else if (std.mem.eql(u8, type_str, "clear_selection")) {
+            const parsed = std.json.parseFromSlice(FocusMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .clear_selection = .{ .paneId = parsed.value.paneId } },
+                .cleanup = .{ .none = {} },
             };
         }
 
@@ -1641,7 +1679,39 @@ pub const EventLoop = struct {
                 // Check if terminal has mouse reporting enabled
                 const mouse_events = pane.getMouseEvents();
                 if (mouse_events == .none) {
-                    log.debug("Mouse event ignored (reporting disabled)", .{});
+                    // Terminal not using mouse - handle selection instead
+                    // Only left button (0) triggers selection
+                    if (mouse_msg.button == 0) {
+                        const is_down = std.mem.eql(u8, mouse_msg.state, "down");
+                        const is_move = std.mem.eql(u8, mouse_msg.state, "move");
+                        const is_up = std.mem.eql(u8, mouse_msg.state, "up");
+
+                        if (is_down) {
+                            // Start selection
+                            pane.startSelection(mouse_msg.x, mouse_msg.y);
+                            // Update with initial point (creates zero-size selection)
+                            pane.updateSelection(mouse_msg.x, mouse_msg.y, mouse_msg.alt);
+                            // Broadcast update to all clients
+                            self.broadcastPaneUpdate(pane) catch |e| {
+                                logRecoverable("broadcast selection start", e);
+                            };
+                        } else if (is_move and pane.isSelectionActive()) {
+                            // Update selection during drag
+                            // Alt key creates rectangular selection
+                            pane.updateSelection(mouse_msg.x, mouse_msg.y, mouse_msg.alt);
+                            // Broadcast update to all clients
+                            self.broadcastPaneUpdate(pane) catch |e| {
+                                logRecoverable("broadcast selection update", e);
+                            };
+                        } else if (is_up and pane.isSelectionActive()) {
+                            // End selection drag
+                            pane.endSelection();
+                            // Final broadcast
+                            self.broadcastPaneUpdate(pane) catch |e| {
+                                logRecoverable("broadcast selection end", e);
+                            };
+                        }
+                    }
                     return;
                 }
 
@@ -1702,6 +1772,41 @@ pub const EventLoop = struct {
                     return;
                 };
                 log.debug("Sent {s} mouse: pos=({d},{d})", .{ @tagName(mouse_format), mouse_msg.x, mouse_msg.y });
+            },
+            .select_all => |select_msg| {
+                const pane = self.session.getPaneById(select_msg.paneId) orelse {
+                    log.warn("select_all for unknown pane {d}", .{select_msg.paneId});
+                    return;
+                };
+
+                const selected = pane.selectAll() catch |e| {
+                    logRecoverable("select_all", e);
+                    return;
+                };
+
+                if (selected) {
+                    log.debug("Selected all content in pane {d}", .{select_msg.paneId});
+                    // Broadcast update to all clients
+                    self.broadcastPaneUpdate(pane) catch |e| {
+                        logRecoverable("broadcast select_all", e);
+                    };
+                } else {
+                    log.debug("select_all: pane {d} is empty", .{select_msg.paneId});
+                }
+            },
+            .clear_selection => |clear_msg| {
+                const pane = self.session.getPaneById(clear_msg.paneId) orelse {
+                    log.warn("clear_selection for unknown pane {d}", .{clear_msg.paneId});
+                    return;
+                };
+
+                pane.clearSelection();
+                log.debug("Cleared selection in pane {d}", .{clear_msg.paneId});
+
+                // Broadcast update to all clients
+                self.broadcastPaneUpdate(pane) catch |e| {
+                    logRecoverable("broadcast clear_selection", e);
+                };
             },
             .unknown => {},
         }

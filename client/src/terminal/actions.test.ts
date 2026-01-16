@@ -26,6 +26,8 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     getPaneIds: () => [1],
     getFocusedPaneId: () => 1,
     toggleFullscreen: () => {},
+    selectAll: () => {},
+    clearSelectionInPane: () => {},
     ...overrides,
   };
 }
@@ -131,6 +133,8 @@ describe("canPerformAction", () => {
       { type: "close_window" },
       { type: "toggle_fullscreen" },
       { type: "open_settings" },
+      { type: "select_all" },
+      { type: "clear_selection" },
       { type: "none" },
     ];
 

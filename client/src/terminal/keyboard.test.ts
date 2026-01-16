@@ -80,6 +80,12 @@ function createMockActionContext(): ActionContext & {
     toggleFullscreen: (paneId: number) => {
       calls.push({ action: "toggleFullscreen", args: paneId });
     },
+    selectAll: (paneId: number) => {
+      calls.push({ action: "selectAll", args: paneId });
+    },
+    clearSelectionInPane: (paneId: number) => {
+      calls.push({ action: "clearSelectionInPane", args: paneId });
+    },
   };
 }
 

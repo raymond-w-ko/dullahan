@@ -49,6 +49,7 @@ import type {
   ClientMessage,
   DeltaUpdate,
   ScrollbackInfo,
+  SelectionBounds,
 } from "../../../protocol/schema/messages";
 
 export type {
@@ -61,6 +62,7 @@ export type {
   ClientMessage,
   DeltaUpdate,
   ScrollbackInfo,
+  SelectionBounds,
 };
 
 // ============================================================================
@@ -146,6 +148,7 @@ export interface TerminalSnapshot {
   cells: Cell[]; // Decoded cell data
   styles: StyleTable; // Decoded style table
   rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
+  selection?: SelectionBounds; // Current selection (if any)
 }
 
 /** Per-pane state for delta sync tracking */
@@ -407,6 +410,7 @@ export class TerminalConnection {
           cells,
           styles,
           rowIds,
+          selection: msg.selection,
         };
 
         // Update pane state from snapshot
@@ -872,6 +876,24 @@ export class TerminalConnection {
   }
 
   /**
+   * Select all content in a pane.
+   * Only master can select.
+   */
+  selectAll(paneId: number): void {
+    if (!this.isMaster) return;
+    this.send({ type: "select_all", paneId });
+  }
+
+  /**
+   * Clear selection in a pane.
+   * Only master can clear selection.
+   */
+  clearSelection(paneId: number): void {
+    if (!this.isMaster) return;
+    this.send({ type: "clear_selection", paneId });
+  }
+
+  /**
    * Apply a delta update to the local cache and notify as snapshot
    */
   private applyDelta(delta: BinaryDelta, paneState: PaneState): void {
@@ -996,6 +1018,7 @@ export class TerminalConnection {
       cells,
       styles,
       rowIds,
+      selection: delta.selection,
     };
 
     // Notify via onSnapshot (unified handler)

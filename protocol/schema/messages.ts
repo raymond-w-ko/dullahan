@@ -124,6 +124,18 @@ export interface PingMessage {
   type: "ping";
 }
 
+/** Select all content in a pane */
+export interface SelectAllMessage {
+  type: "select_all";
+  paneId: number;
+}
+
+/** Clear selection in a pane */
+export interface ClearSelectionMessage {
+  type: "clear_selection";
+  paneId: number;
+}
+
 /** Union of all client → server message types */
 export type ClientMessage =
   | KeyMessage
@@ -137,7 +149,9 @@ export type ClientMessage =
   | RequestMasterMessage
   | NewWindowMessage
   | CloseWindowMessage
-  | PingMessage;
+  | PingMessage
+  | SelectAllMessage
+  | ClearSelectionMessage;
 
 // =============================================================================
 // Server → Client Messages

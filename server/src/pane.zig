@@ -20,6 +20,7 @@ const snapshot = @import("snapshot.zig");
 const process = @import("process.zig");
 const dlog = @import("dlog.zig");
 const shell = @import("shell.zig");
+const terminal_mod = @import("terminal.zig");
 
 const log = std.log.scoped(.pane);
 
@@ -94,6 +95,13 @@ pub const Pane = struct {
     /// Screen switches (primary <-> alternate) require full resync because
     /// row IDs are completely different between screens
     last_was_alt_screen: bool = false,
+
+    /// Selection tracking state for mouse-based selection
+    /// Start position of selection drag (viewport coordinates)
+    selection_start: ?struct { x: u16, y: u16 } = null,
+
+    /// Whether a selection drag is currently active
+    selection_active: bool = false,
 
     pub const Options = struct {
         cols: u16 = 80,
@@ -713,6 +721,90 @@ pub const Pane = struct {
     /// True for modes 1002 (button) and 1003 (any).
     pub fn wantsMouseMotion(self: *const Pane) bool {
         return self.terminal.flags.mouse_event.motion();
+    }
+
+    // ========================================================================
+    // Selection API
+    // ========================================================================
+
+    /// Start a selection drag from the given viewport coordinates.
+    /// Clears any existing selection and marks the start point.
+    pub fn startSelection(self: *Pane, x: u16, y: u16) void {
+        // Clear any existing selection
+        terminal_mod.clearSelection(&self.terminal);
+
+        // Record start position
+        self.selection_start = .{ .x = x, .y = y };
+        self.selection_active = true;
+
+        log.debug("Selection started at ({d}, {d})", .{ x, y });
+    }
+
+    /// Update the selection end point during a drag.
+    /// Must be called after startSelection.
+    /// @param rectangle If true, create a rectangular selection (Alt+drag)
+    pub fn updateSelection(self: *Pane, x: u16, y: u16, rectangle: bool) void {
+        const start = self.selection_start orelse {
+            log.warn("updateSelection called without startSelection", .{});
+            return;
+        };
+
+        // Set selection from start to current position
+        terminal_mod.setSelection(
+            &self.terminal,
+            start.x,
+            start.y,
+            x,
+            y,
+            rectangle,
+        ) catch |e| {
+            log.warn("Failed to set selection: {any}", .{e});
+            return;
+        };
+
+        // Mark pane as dirty so clients receive the update
+        self.generation +%= 1;
+    }
+
+    /// End the selection drag. The selection remains active until cleared.
+    pub fn endSelection(self: *Pane) void {
+        self.selection_active = false;
+        log.debug("Selection ended", .{});
+    }
+
+    /// Clear the current selection.
+    pub fn clearSelection(self: *Pane) void {
+        terminal_mod.clearSelection(&self.terminal);
+        self.selection_start = null;
+        self.selection_active = false;
+        self.generation +%= 1;
+        log.debug("Selection cleared", .{});
+    }
+
+    /// Check if a selection drag is currently in progress.
+    pub fn isSelectionActive(self: *const Pane) bool {
+        return self.selection_active;
+    }
+
+    /// Check if the terminal has a selection (drag completed or programmatic).
+    pub fn hasSelection(self: *const Pane) bool {
+        return terminal_mod.hasSelection(@constCast(&self.terminal));
+    }
+
+    /// Get the selected text content.
+    /// Caller owns the returned memory.
+    pub fn getSelectionText(self: *Pane) !?[:0]const u8 {
+        return terminal_mod.getSelectionText(&self.terminal, self.allocator);
+    }
+
+    /// Select all terminal content.
+    /// Returns true if content was selected, false if terminal is empty.
+    pub fn selectAll(self: *Pane) !bool {
+        const result = try terminal_mod.selectAll(&self.terminal);
+        if (result) {
+            self.generation +%= 1;
+        }
+        return result;
     }
 
     /// Dump pane state in compact human-readable format

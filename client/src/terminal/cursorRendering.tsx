@@ -34,6 +34,12 @@ function resolveCursorColor(
   return setting; // Custom color value
 }
 
+/** Build class string for a run, including selection state */
+function runClasses(run: StyledRun): string {
+  const classes = styleToClasses(run.style);
+  return run.selected ? `${classes} selected`.trim() : classes;
+}
+
 /** Render a line of runs, inserting cursor if needed */
 export function renderLine(
   runs: StyledRun[],
@@ -49,7 +55,7 @@ export function renderLine(
         {runs.map((run, i) => (
           <span
             key={i}
-            class={styleToClasses(run.style)}
+            class={runClasses(run)}
             style={styleToInline(run.style)}
           >
             {run.text}
@@ -88,7 +94,7 @@ export function renderLine(
         elements.push(
           <span
             key={`${i}-before`}
-            class={styleToClasses(run.style)}
+            class={runClasses(run)}
             style={styleToInline(run.style)}
           >
             {before}
@@ -119,7 +125,7 @@ export function renderLine(
       }
 
       const classes = preserveStyle
-        ? `${cursorClass} ${styleToClasses(run.style)}`.trim()
+        ? `${cursorClass} ${runClasses(run)}`.trim()
         : cursorClass;
 
       elements.push(
@@ -140,7 +146,7 @@ export function renderLine(
         elements.push(
           <span
             key={`${i}-after`}
-            class={styleToClasses(run.style)}
+            class={runClasses(run)}
             style={styleToInline(run.style)}
           >
             {after}
@@ -151,7 +157,7 @@ export function renderLine(
       elements.push(
         <span
           key={i}
-          class={styleToClasses(run.style)}
+          class={runClasses(run)}
           style={styleToInline(run.style)}
         >
           {run.text}
