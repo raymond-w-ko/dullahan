@@ -14,6 +14,7 @@ import {
   initConnection,
   disconnectConnection,
   setSettingsOpen,
+  setFullscreenPane,
   requestMaster,
 } from "../store";
 import * as config from "../config";
@@ -26,6 +27,18 @@ export function App() {
     config.applyToCSS();
     initConnection();
     return () => disconnectConnection();
+  }, []);
+
+  // Exit fullscreen on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && getStore().fullscreenPaneId !== null) {
+        e.preventDefault();
+        setFullscreenPane(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const store = getStore();

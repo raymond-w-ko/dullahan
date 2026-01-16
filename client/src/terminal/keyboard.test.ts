@@ -77,6 +77,9 @@ function createMockActionContext(): ActionContext & {
     setFocusedPane: () => {},
     getPaneIds: () => [1],
     getFocusedPaneId: () => 1,
+    toggleFullscreen: (paneId: number) => {
+      calls.push({ action: "toggleFullscreen", args: paneId });
+    },
   };
 }
 

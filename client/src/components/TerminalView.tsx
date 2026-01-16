@@ -24,6 +24,7 @@ import {
   createWindow,
   closeWindow,
   setFocusedPane,
+  toggleFullscreen,
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
@@ -132,6 +133,7 @@ export function TerminalView({
         return activeWindow?.paneIds ?? [];
       },
       getFocusedPaneId: () => getStore().focusedPaneId,
+      toggleFullscreen: (targetPaneId: number) => toggleFullscreen(targetPaneId),
     };
 
     // Set up keybinds

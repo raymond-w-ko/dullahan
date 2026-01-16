@@ -25,6 +25,7 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     setFocusedPane: () => {},
     getPaneIds: () => [1],
     getFocusedPaneId: () => 1,
+    toggleFullscreen: () => {},
     ...overrides,
   };
 }

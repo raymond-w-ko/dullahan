@@ -46,6 +46,7 @@ export interface Store {
   // UI state
   bellActive: boolean;
   settingsOpen: boolean;
+  fullscreenPaneId: number | null; // Pane ID in fullscreen, null if not fullscreen
   dimensionVersion: number; // Incremented when font settings change
 
   // Config (mirrored from config module for reactivity)
@@ -94,6 +95,7 @@ const store: Store = {
 
   bellActive: false,
   settingsOpen: false,
+  fullscreenPaneId: null,
   dimensionVersion: 0, // Incremented when font settings change to trigger recalc
 
   theme: config.get("theme") as string,
@@ -212,6 +214,24 @@ export function setBellActive(active: boolean) {
 export function setSettingsOpen(open: boolean) {
   store.settingsOpen = open;
   notify();
+}
+
+export function setFullscreenPane(paneId: number | null) {
+  store.fullscreenPaneId = paneId;
+  notify();
+}
+
+export function toggleFullscreen(paneId: number) {
+  if (store.fullscreenPaneId === paneId) {
+    store.fullscreenPaneId = null;
+  } else {
+    store.fullscreenPaneId = paneId;
+  }
+  notify();
+}
+
+export function isFullscreen(): boolean {
+  return store.fullscreenPaneId !== null;
 }
 
 export function setFocusedPane(paneId: number) {

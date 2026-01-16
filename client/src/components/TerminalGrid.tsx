@@ -5,7 +5,7 @@ import { h } from "preact";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
-import { getWindow } from "../store";
+import { getWindow, getStore } from "../store";
 
 export interface TerminalGridProps {
   windowId: number;
@@ -14,10 +14,21 @@ export interface TerminalGridProps {
 export function TerminalGrid({ windowId }: TerminalGridProps) {
   useStoreSubscription();
 
+  const store = getStore();
   const window = getWindow(windowId);
 
   if (!window) {
     return <div class="terminal-grid terminal-grid--error">Window {windowId} not found</div>;
+  }
+
+  // Check if a pane in this window is fullscreen
+  const { fullscreenPaneId } = store;
+  if (fullscreenPaneId !== null && window.paneIds.includes(fullscreenPaneId)) {
+    return (
+      <div class="terminal-grid terminal-grid--fullscreen">
+        <TerminalPane key={fullscreenPaneId} paneId={fullscreenPaneId} />
+      </div>
+    );
   }
 
   // Use LayoutRenderer if window has a layout tree

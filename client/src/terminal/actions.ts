@@ -159,6 +159,9 @@ export interface ActionContext {
 
   /** Get focused pane ID */
   getFocusedPaneId: () => number;
+
+  /** Toggle fullscreen for a pane */
+  toggleFullscreen: (paneId: number) => void;
 }
 
 // ============================================================================
@@ -286,7 +289,7 @@ export async function executeAction(
       break;
 
     case "toggle_fullscreen":
-      // TODO(du-eej): Implement fullscreen toggle
+      ctx.toggleFullscreen(ctx.paneId);
       break;
 
     case "open_settings":
