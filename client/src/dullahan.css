@@ -481,6 +481,11 @@ html, body {
   outline: none;
 }
 
+.terminal ::selection {
+  background: var(--term-selection-bg);
+  color: var(--term-selection-fg);
+}
+
 /* Hidden textarea for IME input (CJK, emoji, mobile keyboards) */
 .terminal-ime-input {
   position: absolute;
