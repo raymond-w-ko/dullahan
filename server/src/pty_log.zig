@@ -39,6 +39,7 @@ pub fn getLogPath() []const u8 {
 }
 
 /// Initialize the log file (called when first enabled)
+/// Truncates any existing log file and writes a fresh header.
 fn initLogFile() void {
     if (log_file != null) return;
 
@@ -47,27 +48,20 @@ fn initLogFile() void {
 
     const path = paths.StaticPaths.ptyTraffic();
 
-    // Check if file exists and has content
-    const file_size = blk: {
-        const stat = std.fs.cwd().statFile(path) catch break :blk @as(u64, 0);
-        break :blk stat.size;
-    };
-
+    // Open with truncation - each enable starts fresh
     const fd = std.posix.open(
         path,
-        .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },
+        .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
         0o644,
     ) catch return;
     log_file = .{ .handle = fd };
 
-    // Write header only if file is new/empty
-    if (file_size == 0) {
-        const file = log_file orelse return;
-        file.writeAll("# PTY Traffic Log\n") catch {};
-        file.writeAll("# Format: [HH:MM:SS.mmm] DIR pane N: hex bytes | ascii\n") catch {};
-        file.writeAll("# DIR: > = sent TO PTY, < = received FROM PTY\n") catch {};
-        file.writeAll("#\n") catch {};
-    }
+    // Always write header since we truncated
+    const file = log_file orelse return;
+    file.writeAll("# PTY Traffic Log\n") catch {};
+    file.writeAll("# Format: [HH:MM:SS.mmm] DIR pane N: hex bytes | ascii\n") catch {};
+    file.writeAll("# DIR: > = sent TO PTY, < = received FROM PTY\n") catch {};
+    file.writeAll("#\n") catch {};
 }
 
 /// Log bytes sent TO a pane's PTY

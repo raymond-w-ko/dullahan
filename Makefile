@@ -76,7 +76,7 @@ fmt:
 dev: client server
 	rm -rf /tmp/dullahan-$(shell id -u)/*.log
 	pkill -9 -x dullahan || true
-	./server/zig-out/bin/dullahan serve --port=7682
+	./server/zig-out/bin/dullahan serve --port=7682 --pty-log
 
 prod: dist
 	rm -rf /tmp/dullahan-$(shell id -u)/*.log

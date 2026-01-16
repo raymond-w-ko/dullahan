@@ -83,6 +83,7 @@ pub fn main() !void {
             },
             .static_dir = args.static_dir,
             .ws_port = args.ws_port,
+            .pty_log = args.pty_log,
         };
         try server.run(allocator, config);
     } else if (args.command != null) {

@@ -11,6 +11,7 @@ const http = @import("http.zig");
 const signal = @import("signal.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
 const dlog = @import("dlog.zig");
+const pty_log = @import("pty_log.zig");
 
 const log = std.log.scoped(.server);
 
@@ -18,6 +19,7 @@ pub const RunConfig = struct {
     ipc: ipc.Config = .{},
     static_dir: ?[]const u8 = null,
     ws_port: u16 = http.DEFAULT_PORT,
+    pty_log: bool = false,
 
     /// Get static_dir with fallback to ./client if it exists
     pub fn getStaticDir(self: RunConfig) ?[]const u8 {
@@ -33,6 +35,11 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Install signal handlers first
     signal.install();
     defer signal.reset();
+
+    // Enable PTY logging if requested (truncates existing log file)
+    if (config.pty_log) {
+        pty_log.setEnabled(true);
+    }
 
     // Create global pane registry
     var pane_registry = PaneRegistry.init(allocator, .{});
