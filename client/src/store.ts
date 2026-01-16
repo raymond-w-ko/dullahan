@@ -270,19 +270,32 @@ export function setLayout(layout: LayoutUpdate) {
     });
   }
 
-  // Create pane states for any new panes we haven't seen
+  // Collect all pane IDs from the new layout
+  const activePaneIds = new Set<number>();
   for (const win of layout.windows) {
     for (const paneId of win.panes) {
-      if (!store.panes.has(paneId)) {
-        store.panes.set(paneId, {
-          id: paneId,
-          title: `Pane ${paneId}`,
-          snapshot: null,
-          syncStats: { deltas: 0, resyncs: 0, gen: 0 },
-          isReadOnly: false,
-          dimensions: { cols: 80, rows: 24 },
-        });
-      }
+      activePaneIds.add(paneId);
+    }
+  }
+
+  // Remove panes that are no longer in any window
+  for (const paneId of store.panes.keys()) {
+    if (!activePaneIds.has(paneId)) {
+      store.panes.delete(paneId);
+    }
+  }
+
+  // Create pane states for any new panes we haven't seen
+  for (const paneId of activePaneIds) {
+    if (!store.panes.has(paneId)) {
+      store.panes.set(paneId, {
+        id: paneId,
+        title: `Pane ${paneId}`,
+        snapshot: null,
+        syncStats: { deltas: 0, resyncs: 0, gen: 0 },
+        isReadOnly: false,
+        dimensions: { cols: 80, rows: 24 },
+      });
     }
   }
 
