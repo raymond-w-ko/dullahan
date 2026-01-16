@@ -1,5 +1,6 @@
 import { h } from "preact";
 import { useState, useEffect, useRef } from "preact/hooks";
+import { useModalBehavior } from "../hooks/useModalBehavior";
 import { useSettings } from "../hooks/useSettings";
 import type { SettingsState } from "../hooks/useSettings";
 import { THEMES } from "../themes";
@@ -11,6 +12,9 @@ interface SettingsModalProps {
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { settings, setSetting } = useSettings();
+
+  // Modal behavior (escape key, scroll prevention)
+  useModalBehavior({ isOpen, onClose });
 
   // Drag state
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -60,29 +64,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
     e.preventDefault();
   };
-
-  // Close on escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
-
-  // Prevent body scroll when modal is open
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
 

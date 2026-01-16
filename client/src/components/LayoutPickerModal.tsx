@@ -2,8 +2,8 @@
 // Allows user to pick a layout when creating a new window
 
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useModalBehavior } from "../hooks/useModalBehavior";
 import {
   getStore,
   setLayoutPickerOpen,
@@ -62,6 +62,12 @@ export function LayoutPickerModal() {
   const store = getStore();
   const { layoutPickerOpen, layoutTemplates } = store;
 
+  // Modal behavior (escape key, scroll prevention)
+  useModalBehavior({
+    isOpen: layoutPickerOpen,
+    onClose: () => setLayoutPickerOpen(false),
+  });
+
   if (!layoutPickerOpen) {
     return null;
   }
@@ -69,17 +75,6 @@ export function LayoutPickerModal() {
   const handleSelect = (templateId: string) => {
     createWindowWithTemplate(templateId);
   };
-
-  // Close on escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setLayoutPickerOpen(false);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   return (
     <div
