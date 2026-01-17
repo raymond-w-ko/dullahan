@@ -1790,8 +1790,14 @@ pub const EventLoop = struct {
 
                 // Check if terminal has mouse reporting enabled
                 const mouse_events = pane.getMouseEvents();
-                if (mouse_events == .none) {
-                    // Terminal not using mouse - handle selection instead
+
+                // Terminal selection is used when:
+                // 1. App doesn't have mouse mode enabled (mouse_events == .none), OR
+                // 2. Shift is held (shift-click bypasses app mouse handling)
+                const do_terminal_selection = mouse_events == .none or mouse_msg.shift;
+
+                if (do_terminal_selection) {
+                    // Handle terminal selection (bypasses app when shift held)
                     // Only left button (0) triggers selection
                     if (mouse_msg.button == 0) {
                         const is_down = std.mem.eql(u8, mouse_msg.state, "down");
