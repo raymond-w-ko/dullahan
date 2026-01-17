@@ -136,6 +136,17 @@ export interface ClearSelectionMessage {
   paneId: number;
 }
 
+/**
+ * Clipboard response from client (for OSC 52 GET requests).
+ * Sent when the client responds to a clipboard GET request from the terminal.
+ */
+export interface ClipboardResponseMessage {
+  type: "clipboard_response";
+  paneId: number;
+  clipboard: string; // 'c', 's', or 'p'
+  data: string; // base64-encoded clipboard contents
+}
+
 /** Union of all client → server message types */
 export type ClientMessage =
   | KeyMessage
@@ -151,7 +162,8 @@ export type ClientMessage =
   | CloseWindowMessage
   | PingMessage
   | SelectAllMessage
-  | ClearSelectionMessage;
+  | ClearSelectionMessage
+  | ClipboardResponseMessage;
 
 // =============================================================================
 // Server → Client Messages
@@ -235,6 +247,18 @@ export interface BellMessage {
   type: "bell";
 }
 
+/**
+ * Clipboard operation notification (OSC 52).
+ * Sent when the terminal requests clipboard access.
+ */
+export interface ClipboardMessage {
+  type: "clipboard";
+  paneId: number;
+  operation: "set" | "get"; // SET = terminal writing to clipboard, GET = terminal reading
+  clipboard: string; // 'c' (clipboard), 's' (selection), 'p' (primary)
+  data?: string; // base64-encoded data for SET, absent for GET
+}
+
 /** Focus change notification from server */
 export interface FocusServerMessage {
   type: "focus";
@@ -294,6 +318,7 @@ export type ServerMessage =
   | BinaryDelta
   | TitleMessage
   | BellMessage
+  | ClipboardMessage
   | FocusServerMessage
   | MasterChangedMessage
   | LayoutMessage

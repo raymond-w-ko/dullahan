@@ -81,6 +81,14 @@ pub const Pane = struct {
     /// Reset by clearBell(), used for push notifications to clients
     bell_pending: bool = false,
 
+    /// Pending OSC 52 clipboard SET operation
+    /// Contains base64-encoded data to send to clients
+    clipboard_pending_set: ?ClipboardOp = null,
+
+    /// Pending OSC 52 clipboard GET request
+    /// The value is the clipboard kind ('c', 's', 'p')
+    clipboard_pending_get: ?u8 = null,
+
     /// Generation of the last broadcast delta
     last_broadcast_gen: u64 = 0,
 
@@ -107,6 +115,16 @@ pub const Pane = struct {
         cols: u16 = 80,
         rows: u16 = 24,
         id: u16 = 0,
+    };
+
+    /// OSC 52 clipboard operation data
+    pub const ClipboardOp = struct {
+        kind: u8, // 'c' (clipboard), 's' (selection), 'p' (primary)
+        data: []const u8, // base64-encoded, owned by pane
+
+        pub fn deinit(self: ClipboardOp, allocator: std.mem.Allocator) void {
+            allocator.free(self.data);
+        }
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
@@ -158,6 +176,11 @@ pub const Pane = struct {
         // Free cached broadcast delta
         if (self.cached_delta) |delta| {
             self.allocator.free(delta);
+        }
+
+        // Free pending clipboard data
+        if (self.clipboard_pending_set) |op| {
+            op.deinit(self.allocator);
         }
 
         self.dirty_rows.deinit();
@@ -424,9 +447,10 @@ pub const Pane = struct {
         dlog.missing("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
     }
 
-    /// Parse OSC (Operating System Command) sequences for title changes.
+    /// Parse OSC (Operating System Command) sequences.
     /// OSC 0 = set icon name and window title
     /// OSC 2 = set window title only
+    /// OSC 52 = clipboard operations
     /// Format: ESC ] <cmd> ; <text> (BEL | ST)
     /// BEL = 0x07, ST = ESC \ (0x1b 0x5c)
     fn handleOscSequences(self: *Pane, data: []const u8) void {
@@ -437,16 +461,13 @@ pub const Pane = struct {
                 const osc_start = i + 2;
                 if (osc_start >= data.len) break;
 
-                // Parse OSC number (0 or 2 for title)
-                var cmd: u8 = 0;
+                // Parse OSC number (u16 to support OSC 52+)
+                var cmd: u16 = 0;
                 var param_end = osc_start;
                 while (param_end < data.len and data[param_end] >= '0' and data[param_end] <= '9') {
-                    cmd = cmd * 10 + (data[param_end] - '0');
+                    cmd = cmd *| 10 +| (data[param_end] - '0');
                     param_end += 1;
                 }
-
-                // Skip if not OSC 0 or 2
-                if (cmd != 0 and cmd != 2) continue;
 
                 // Expect semicolon after command number
                 if (param_end >= data.len or data[param_end] != ';') continue;
@@ -470,16 +491,113 @@ pub const Pane = struct {
 
                 if (!found_term) continue;
 
-                // Extract title text
-                const title_text = data[text_start..text_end];
-                if (title_text.len > 0) {
-                    self.setTitle(title_text);
+                // Extract payload text
+                const payload = data[text_start..text_end];
+
+                // Handle based on OSC number
+                switch (cmd) {
+                    0, 2 => {
+                        // Title: OSC 0/2 ; <title> ST
+                        if (payload.len > 0) {
+                            self.setTitle(payload);
+                        }
+                    },
+                    52 => {
+                        // Clipboard: OSC 52 ; <kind> ; <data> ST
+                        self.handleOsc52(payload);
+                    },
+                    else => {},
                 }
 
                 // Skip past this OSC sequence
                 i = text_end;
             }
         }
+    }
+
+    /// Handle OSC 52 clipboard operations
+    /// Format: <clipboard-kind> ; <base64-data>
+    /// clipboard-kind: 'c' (clipboard), 's' (selection), 'p' (primary), or combinations
+    /// base64-data: '?' for GET, base64-encoded data for SET
+    fn handleOsc52(self: *Pane, payload: []const u8) void {
+        // Find semicolon separator between kind and data
+        var sep_idx: ?usize = null;
+        for (payload, 0..) |c, idx| {
+            if (c == ';') {
+                sep_idx = idx;
+                break;
+            }
+        }
+
+        if (sep_idx == null) {
+            log.debug("OSC 52: missing semicolon separator", .{});
+            return;
+        }
+
+        const kind_str = payload[0..sep_idx.?];
+        const data_str = payload[sep_idx.? + 1 ..];
+
+        // Parse clipboard kind - default to 'c' (system clipboard) if empty
+        // Multiple kinds can be specified (e.g., "pc" for primary+clipboard)
+        // We select the first one we find in priority order: 'c' > 'p' > 's'
+        var kind: u8 = 'c'; // Default if none specified
+        if (kind_str.len > 0) {
+            // Look for preferred kinds in priority order
+            var found_c = false;
+            var found_p = false;
+            var found_s = false;
+
+            for (kind_str) |k| {
+                switch (k) {
+                    'c' => found_c = true,
+                    'p' => found_p = true,
+                    's' => found_s = true,
+                    else => {},
+                }
+            }
+
+            // Select by priority: c > p > s
+            if (found_c) {
+                kind = 'c';
+            } else if (found_p) {
+                kind = 'p';
+            } else if (found_s) {
+                kind = 's';
+            }
+            // If none of c/p/s found, keep default 'c'
+        }
+
+        // Check for GET request
+        if (data_str.len == 1 and data_str[0] == '?') {
+            log.debug("OSC 52 GET request: kind={c}", .{kind});
+            self.clipboard_pending_get = kind;
+            return;
+        }
+
+        // SET request - data_str contains base64-encoded content
+        if (data_str.len == 0) {
+            log.debug("OSC 52 SET: empty data (clear clipboard)", .{});
+            // Empty data means clear clipboard - still send to client
+        }
+
+        // Free any existing pending set operation
+        if (self.clipboard_pending_set) |old| {
+            old.deinit(self.allocator);
+        }
+
+        // Copy the base64 data (we own it)
+        const data_copy = self.allocator.dupe(u8, data_str) catch |e| {
+            log.warn("OSC 52: failed to allocate clipboard data: {any}", .{e});
+            self.clipboard_pending_set = null;
+            return;
+        };
+
+        self.clipboard_pending_set = .{
+            .kind = kind,
+            .data = data_copy,
+        };
+
+        log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ kind, data_str.len });
     }
 
     /// Set the terminal title, allocating a copy of the string
@@ -555,6 +673,62 @@ pub const Pane = struct {
     /// Clear the bell pending flag
     pub fn clearBell(self: *Pane) void {
         self.bell_pending = false;
+    }
+
+    // ========================================================================
+    // Clipboard API (OSC 52)
+    // ========================================================================
+
+    /// Check if there's a pending clipboard SET operation
+    pub fn hasClipboardSet(self: *const Pane) bool {
+        return self.clipboard_pending_set != null;
+    }
+
+    /// Get the pending clipboard SET operation (if any)
+    pub fn getClipboardSet(self: *const Pane) ?ClipboardOp {
+        return self.clipboard_pending_set;
+    }
+
+    /// Clear the clipboard SET operation
+    pub fn clearClipboardSet(self: *Pane) void {
+        if (self.clipboard_pending_set) |op| {
+            op.deinit(self.allocator);
+        }
+        self.clipboard_pending_set = null;
+    }
+
+    /// Check if there's a pending clipboard GET request
+    pub fn hasClipboardGet(self: *const Pane) bool {
+        return self.clipboard_pending_get != null;
+    }
+
+    /// Get the clipboard kind for GET request (if any)
+    pub fn getClipboardGetKind(self: *const Pane) ?u8 {
+        return self.clipboard_pending_get;
+    }
+
+    /// Clear the clipboard GET request
+    pub fn clearClipboardGet(self: *Pane) void {
+        self.clipboard_pending_get = null;
+    }
+
+    /// Send OSC 52 clipboard response back to the terminal.
+    /// Called when the client responds to a GET request.
+    /// kind: 'c', 's', or 'p'
+    /// data: base64-encoded clipboard contents
+    pub fn sendClipboardResponse(self: *Pane, kind: u8, data: []const u8) void {
+        // Format: ESC ] 52 ; <kind> ; <base64-data> ESC \
+        // Maximum clipboard size is 64KB base64 ≈ 87KB encoded
+        var buf: [100000]u8 = undefined;
+        const response = std.fmt.bufPrint(&buf, "\x1b]52;{c};{s}\x1b\\", .{ kind, data }) catch |e| {
+            log.warn("OSC 52 response too large: {any}", .{e});
+            return;
+        };
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send OSC 52 response: {any}", .{e});
+        };
+        log.debug("Sent OSC 52 response: kind={c}, data_len={d}", .{ kind, data.len });
     }
 
     /// Get a plain string representation of the terminal contents
@@ -1136,4 +1310,84 @@ test "mouse mode accessors" {
     try pane.feed("\x1b[?1003l");
     try std.testing.expectEqual(MouseEvents.none, pane.getMouseEvents());
     try std.testing.expect(!pane.isMouseEnabled());
+}
+
+test "OSC 52 clipboard SET" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Initially no clipboard operations pending
+    try std.testing.expect(!pane.hasClipboardSet());
+    try std.testing.expect(!pane.hasClipboardGet());
+
+    // Feed OSC 52 SET with BEL terminator: ESC ] 52 ; c ; SGVsbG8gV29ybGQ= BEL
+    // Base64 "SGVsbG8gV29ybGQ=" decodes to "Hello World"
+    try pane.feed("\x1b]52;c;SGVsbG8gV29ybGQ=\x07");
+
+    // Should have pending SET operation
+    try std.testing.expect(pane.hasClipboardSet());
+    try std.testing.expect(!pane.hasClipboardGet());
+
+    // Verify SET data
+    const op = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'c'), op.kind);
+    try std.testing.expectEqualStrings("SGVsbG8gV29ybGQ=", op.data);
+
+    // Clear and verify
+    pane.clearClipboardSet();
+    try std.testing.expect(!pane.hasClipboardSet());
+}
+
+test "OSC 52 clipboard GET" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Feed OSC 52 GET with ST terminator: ESC ] 52 ; c ; ? ESC \
+    try pane.feed("\x1b]52;c;?\x1b\\");
+
+    // Should have pending GET request
+    try std.testing.expect(!pane.hasClipboardSet());
+    try std.testing.expect(pane.hasClipboardGet());
+
+    // Verify GET kind
+    try std.testing.expectEqual(@as(u8, 'c'), pane.getClipboardGetKind().?);
+
+    // Clear and verify
+    pane.clearClipboardGet();
+    try std.testing.expect(!pane.hasClipboardGet());
+}
+
+test "OSC 52 clipboard with default kind" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Feed OSC 52 with empty kind (defaults to 'c')
+    try pane.feed("\x1b]52;;SGVsbG8=\x07");
+
+    try std.testing.expect(pane.hasClipboardSet());
+    const op = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'c'), op.kind);
+    try std.testing.expectEqualStrings("SGVsbG8=", op.data);
+    pane.clearClipboardSet();
+}
+
+test "OSC 52 clipboard with multiple kinds" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Feed OSC 52 with "pc" (primary + clipboard), should prefer 'c'
+    try pane.feed("\x1b]52;pc;SGVsbG8=\x07");
+
+    try std.testing.expect(pane.hasClipboardSet());
+    const op = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'c'), op.kind);
+    pane.clearClipboardSet();
+
+    // Feed OSC 52 with "sp" (selection + primary), should prefer 'p'
+    try pane.feed("\x1b]52;sp;SGVsbG8=\x07");
+
+    try std.testing.expect(pane.hasClipboardSet());
+    const op2 = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'p'), op2.kind);
+    pane.clearClipboardSet();
 }

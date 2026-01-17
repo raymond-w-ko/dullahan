@@ -133,6 +133,13 @@ const CloseWindowMessage = struct {
     windowId: u16,
 };
 
+const ClipboardResponseMessage = struct {
+    type: []const u8,
+    paneId: u16,
+    clipboard: []const u8,
+    data: []const u8,
+};
+
 const MessageType = struct {
     type: []const u8,
 };
@@ -158,6 +165,7 @@ const ParsedMessage = union(enum) {
     mouse: ParsedMouse,
     select_all: ParsedSelectAll,
     clear_selection: ParsedClearSelection,
+    clipboard_response: ParsedClipboardResponse,
     unknown: void,
 };
 
@@ -231,6 +239,12 @@ const ParsedClearSelection = struct {
     paneId: u16,
 };
 
+const ParsedClipboardResponse = struct {
+    paneId: u16,
+    clipboard: []const u8,
+    data: []const u8,
+};
+
 /// Cleanup helper for JSON parsed messages.
 /// Holds references to parsed JSON that need to be freed after message handling.
 const JsonCleanup = union(enum) {
@@ -240,6 +254,7 @@ const JsonCleanup = union(enum) {
     json_hello: std.json.Parsed(HelloMessage),
     json_new_window: std.json.Parsed(NewWindowMessage),
     json_mouse: std.json.Parsed(MouseMessage),
+    json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
 
     pub fn deinit(self: *JsonCleanup) void {
         switch (self.*) {
@@ -249,6 +264,7 @@ const JsonCleanup = union(enum) {
             .json_hello => |*p| p.deinit(),
             .json_new_window => |*p| p.deinit(),
             .json_mouse => |*p| p.deinit(),
+            .json_clipboard_response => |*p| p.deinit(),
         }
     }
 };
@@ -1126,6 +1142,38 @@ pub const EventLoop = struct {
             }
         }
 
+        // Check for clipboard SET operation (OSC 52)
+        if (pane.hasClipboardSet()) {
+            if (pane.getClipboardSet()) |op| {
+                const msg = try snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "set",
+                    op.kind,
+                    op.data,
+                );
+                defer pane.allocator.free(msg);
+                try client.ws.sendBinary(msg);
+            }
+            pane.clearClipboardSet();
+        }
+
+        // Check for clipboard GET request (OSC 52)
+        if (pane.hasClipboardGet()) {
+            if (pane.getClipboardGetKind()) |kind| {
+                const msg = try snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "get",
+                    kind,
+                    null, // no data for GET request
+                );
+                defer pane.allocator.free(msg);
+                try client.ws.sendBinary(msg);
+            }
+            pane.clearClipboardGet();
+        }
+
         const result = try pane.getBroadcastDelta();
         defer pane.allocator.free(result.delta);
 
@@ -1296,6 +1344,18 @@ pub const EventLoop = struct {
             return .{
                 .msg = .{ .clear_selection = .{ .paneId = parsed.value.paneId } },
                 .cleanup = .{ .none = {} },
+            };
+        } else if (std.mem.eql(u8, type_str, "clipboard_response")) {
+            const parsed = std.json.parseFromSlice(ClipboardResponseMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            return .{
+                .msg = .{ .clipboard_response = .{
+                    .paneId = parsed.value.paneId,
+                    .clipboard = parsed.value.clipboard,
+                    .data = parsed.value.data,
+                } },
+                .cleanup = .{ .json_clipboard_response = parsed },
             };
         }
 
@@ -1807,6 +1867,24 @@ pub const EventLoop = struct {
                 self.broadcastPaneUpdate(pane) catch |e| {
                     logRecoverable("broadcast clear_selection", e);
                 };
+            },
+            .clipboard_response => |clip_msg| {
+                // Client responding to an OSC 52 GET request
+                const pane = self.session.getPaneById(clip_msg.paneId) orelse {
+                    log.warn("clipboard_response for unknown pane {d}", .{clip_msg.paneId});
+                    return;
+                };
+
+                // Extract clipboard kind (first char of string, default 'c')
+                const kind: u8 = if (clip_msg.clipboard.len > 0) clip_msg.clipboard[0] else 'c';
+
+                // Send the OSC 52 response back to the terminal
+                pane.sendClipboardResponse(kind, clip_msg.data);
+                log.debug("Forwarded clipboard response to pane {d}: kind={c}, data_len={d}", .{
+                    clip_msg.paneId,
+                    kind,
+                    clip_msg.data.len,
+                });
             },
             .unknown => {},
         }
