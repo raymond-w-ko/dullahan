@@ -1071,8 +1071,10 @@ pub const Pane = struct {
     }
 
     /// End the selection drag. The selection remains active until cleared.
+    /// Increments generation to trigger client update with final selection state.
     pub fn endSelection(self: *Pane) void {
         self.selection_active = false;
+        self.generation +%= 1;
         log.debug("Selection ended", .{});
     }
 
