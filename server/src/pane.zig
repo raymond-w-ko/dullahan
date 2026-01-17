@@ -89,6 +89,12 @@ pub const Pane = struct {
     /// The value is the clipboard kind ('c', 's', 'p')
     clipboard_pending_get: ?u8 = null,
 
+    /// Timestamp (ms) when clipboard GET was requested, for timeout handling
+    clipboard_get_timestamp_ms: ?i64 = null,
+
+    /// Whether the GET request has been sent to the client (awaiting response)
+    clipboard_get_sent: bool = false,
+
     /// Generation of the last broadcast delta
     last_broadcast_gen: u64 = 0,
 
@@ -571,6 +577,7 @@ pub const Pane = struct {
         if (data_str.len == 1 and data_str[0] == '?') {
             log.debug("OSC 52 GET request: kind={c}", .{kind});
             self.clipboard_pending_get = kind;
+            self.clipboard_get_timestamp_ms = std.time.milliTimestamp();
             return;
         }
 
@@ -707,9 +714,43 @@ pub const Pane = struct {
         return self.clipboard_pending_get;
     }
 
-    /// Clear the clipboard GET request
+    /// Clear the clipboard GET request (called when response received or timed out)
     pub fn clearClipboardGet(self: *Pane) void {
         self.clipboard_pending_get = null;
+        self.clipboard_get_timestamp_ms = null;
+        self.clipboard_get_sent = false;
+    }
+
+    /// Check if clipboard GET request needs to be sent to client
+    pub fn needsClipboardGetSend(self: *const Pane) bool {
+        return self.clipboard_pending_get != null and !self.clipboard_get_sent;
+    }
+
+    /// Mark clipboard GET as sent to client
+    pub fn markClipboardGetSent(self: *Pane) void {
+        self.clipboard_get_sent = true;
+    }
+
+    /// Clipboard GET timeout in milliseconds (5 seconds)
+    pub const clipboard_get_timeout_ms: i64 = 5000;
+
+    /// Check if a clipboard GET request has timed out
+    pub fn hasClipboardGetTimedOut(self: *const Pane) bool {
+        if (self.clipboard_get_timestamp_ms) |ts| {
+            const now = std.time.milliTimestamp();
+            return (now - ts) > clipboard_get_timeout_ms;
+        }
+        return false;
+    }
+
+    /// Handle clipboard GET timeout - send empty response and clear pending state
+    pub fn handleClipboardGetTimeout(self: *Pane) void {
+        if (self.clipboard_pending_get) |kind| {
+            log.warn("Clipboard GET timed out for kind={c}, sending empty response", .{kind});
+            // Send empty response to unblock the terminal
+            self.sendClipboardResponse(kind, "");
+            self.clearClipboardGet();
+        }
     }
 
     /// Send OSC 52 clipboard response back to the terminal.

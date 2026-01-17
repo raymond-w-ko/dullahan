@@ -1127,7 +1127,8 @@ pub const EventLoop = struct {
         }
 
         // Handle clipboard GET request (OSC 52) - send to master client only
-        if (pane.hasClipboardGet()) {
+        // Only send if not already sent (we keep pending until response or timeout)
+        if (pane.needsClipboardGetSend()) {
             if (pane.getClipboardGetKind()) |kind| {
                 const msg = snapshot.generateClipboardMessage(
                     pane.allocator,
@@ -1148,11 +1149,17 @@ pub const EventLoop = struct {
                         client.ws.sendBinary(msg) catch |e| {
                             logClientError("send clipboard GET to master", e);
                         };
+                        pane.markClipboardGetSent();
                         break;
                     }
                 }
             }
-            pane.clearClipboardGet();
+            // Note: Don't clear here - wait for response or timeout
+        }
+
+        // Check for clipboard GET timeout
+        if (pane.hasClipboardGetTimedOut()) {
+            pane.handleClipboardGetTimeout();
         }
 
         // Now broadcast pane state updates to all clients
@@ -1907,6 +1914,10 @@ pub const EventLoop = struct {
 
                 // Send the OSC 52 response back to the terminal
                 pane.sendClipboardResponse(kind, clip_msg.data);
+
+                // Clear the pending GET state (response received)
+                pane.clearClipboardGet();
+
                 log.debug("Forwarded clipboard response to pane {d}: kind={c}, data_len={d}", .{
                     clip_msg.paneId,
                     kind,
