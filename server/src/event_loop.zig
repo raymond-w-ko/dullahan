@@ -1822,7 +1822,9 @@ pub const EventLoop = struct {
                                 pane.clearSelection();
                                 log.debug("Single click - cleared empty selection", .{});
                             } else {
-                                // Real drag - end selection normally
+                                // Real drag - update selection to final position before ending
+                                // This is important when mouseMove events are disabled on client
+                                pane.updateSelection(mouse_msg.x, mouse_msg.y, mouse_msg.alt);
                                 pane.endSelection();
                             }
                             // Final broadcast
