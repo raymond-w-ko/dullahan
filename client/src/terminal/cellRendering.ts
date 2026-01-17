@@ -1,7 +1,7 @@
 // Cell rendering utilities
 // Converts terminal cells to styled text runs for rendering
 
-import { cellToChar, ContentTag } from "../../../protocol/schema/cell";
+import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag } from "../../../protocol/schema/style";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { Style, StyleTable, Color } from "../../../protocol/schema/style";
@@ -123,6 +123,12 @@ export function cellsToRuns(
     for (let x = 0; x < cols; x++) {
       const idx = y * cols + x;
       const cell = cells[idx];
+
+      // Skip spacer cells (second half of wide characters)
+      if (cell && (cell.wide === Wide.SPACER_TAIL || cell.wide === Wide.SPACER_HEAD)) {
+        continue;
+      }
+
       const char = cell ? cellToChar(cell) : " ";
       const styleId = cell?.styleId ?? 0;
       const selected = selection ? isCellInSelection(x, y, selection) : false;
