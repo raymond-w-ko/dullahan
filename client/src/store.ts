@@ -6,6 +6,7 @@ import { TerminalConnection } from "./terminal/connection";
 import { AUDIO } from "./constants";
 import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
+import { copyToClipboard, pasteFromClipboard } from "./terminal/clipboard";
 
 export interface WindowState {
   id: number;
@@ -398,6 +399,37 @@ export function initConnection() {
 
   conn.on("layout", (layout) => {
     setLayout(layout);
+  });
+
+  // OSC 52 clipboard handlers
+  conn.on("clipboardSet", async (paneId, clipboard, base64Data) => {
+    // Terminal wants to write to system clipboard
+    try {
+      const text = atob(base64Data);
+      await copyToClipboard(text);
+      debug.log(`Clipboard SET from pane ${paneId}: ${text.length} chars to '${clipboard}'`);
+    } catch (err) {
+      debug.warn("Clipboard SET failed:", err);
+    }
+  });
+
+  conn.on("clipboardGet", async (paneId, clipboard) => {
+    // Terminal wants to read from system clipboard
+    // Only master should respond to avoid race conditions
+    if (!conn.isMaster) {
+      debug.log(`Clipboard GET ignored (not master) for pane ${paneId}`);
+      return;
+    }
+    try {
+      const text = await pasteFromClipboard();
+      const base64Data = btoa(text);
+      conn.sendClipboardResponse(paneId, clipboard, base64Data);
+      debug.log(`Clipboard GET for pane ${paneId}: sent ${text.length} chars from '${clipboard}'`);
+    } catch (err) {
+      debug.warn("Clipboard GET failed:", err);
+      // Send empty response on failure so terminal doesn't hang
+      conn.sendClipboardResponse(paneId, clipboard, "");
+    }
   });
 
   conn.connect();

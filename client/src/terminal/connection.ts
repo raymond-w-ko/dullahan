@@ -125,6 +125,8 @@ export type ConnectionEvents = {
   error: (error: string) => void;
   masterChanged: (masterId: string | null, isMaster: boolean) => void;
   layout: (layout: LayoutUpdate) => void;
+  clipboardSet: (paneId: number, clipboard: string, data: string) => void;
+  clipboardGet: (paneId: number, clipboard: string) => void;
 };
 
 // ============================================================================
@@ -532,6 +534,16 @@ export class TerminalConnection {
       case "pong":
         // Ignore pong
         break;
+      case "clipboard":
+        // OSC 52 clipboard operation from terminal
+        if (msg.operation === "set") {
+          // Terminal wants to write to system clipboard
+          this.emit("clipboardSet", msg.paneId, msg.clipboard, msg.data ?? "");
+        } else {
+          // Terminal wants to read from system clipboard
+          this.emit("clipboardGet", msg.paneId, msg.clipboard);
+        }
+        break;
     }
   }
 
@@ -854,6 +866,16 @@ export class TerminalConnection {
 
   sendPing(): void {
     this.send({ type: "ping" });
+  }
+
+  /**
+   * Send clipboard data back to server (for OSC 52 GET requests).
+   * @param paneId Target pane that requested clipboard
+   * @param clipboard Clipboard kind ('c', 's', or 'p')
+   * @param data Base64-encoded clipboard contents
+   */
+  sendClipboardResponse(paneId: number, clipboard: string, data: string): void {
+    this.send({ type: "clipboard_response", paneId, clipboard, data });
   }
 
   /**
