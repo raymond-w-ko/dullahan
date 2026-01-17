@@ -48,20 +48,20 @@ pub const CliArgs = struct {
                     // No subcommand given, show help
                     args.test_command = .help;
                 }
-            } else if (std.mem.eql(u8, arg, "send")) {
-                // send <pane_id> [text...] - if no text, will read from stdin
-                args.command = .send;
-                // Collect remaining args (pane_id + optional text)
+            } else if (std.mem.eql(u8, arg, "send") or
+                std.mem.eql(u8, arg, "clipboard-set") or
+                std.mem.eql(u8, arg, "clipboard-get"))
+            {
+                // Commands that take arguments: collect remaining args
+                args.command = ipc.Command.fromString(arg);
                 var data_parts: std.ArrayListUnmanaged([]const u8) = .{};
                 defer data_parts.deinit(allocator);
                 while (arg_iter.next()) |data_arg| {
                     data_parts.append(allocator, data_arg) catch {};
                 }
                 if (data_parts.items.len > 0) {
-                    // Join with spaces: "pane_id text..."
                     args.send_data = std.mem.join(allocator, " ", data_parts.items) catch null;
                 }
-                // If only pane_id provided (no text), we'll read from stdin in runClient
             } else if (std.mem.startsWith(u8, arg, "--timeout=")) {
                 const val = arg["--timeout=".len..];
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch constants.timeout.cli_default_ms;
@@ -97,6 +97,8 @@ pub fn printUsage() void {
         \\  panes                      List all pane IDs
         \\  windows                    List windows with pane IDs (JSON)
         \\  send <pane_id> [text]      Send text to pane (reads stdin if no text)
+        \\  clipboard-set <c|p> <text> Set internal clipboard (c=clipboard, p=primary)
+        \\  clipboard-get <c|p>        Get internal clipboard content
         \\  test                       Run test utilities (see 'dullahan test help')
         \\
         \\Options:

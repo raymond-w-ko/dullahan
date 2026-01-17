@@ -24,6 +24,12 @@ export interface PaneState {
   dimensions: { cols: number; rows: number };
 }
 
+/** Internal clipboard entry (for 'c' and 'p' clipboards) */
+export interface ClipboardEntry {
+  text: string;
+  timestamp: number; // Date.now()
+}
+
 export interface Store {
   // Connection state
   connection: TerminalConnection | null;
@@ -43,6 +49,10 @@ export interface Store {
   // Layout templates (from server)
   layoutTemplates: LayoutTemplate[];
   layoutPickerOpen: boolean;
+
+  // Internal clipboards (OSC 52)
+  clipboardC: ClipboardEntry | null; // 'c' = system clipboard
+  clipboardP: ClipboardEntry | null; // 'p' = primary selection
 
   // UI state
   bellActive: boolean;
@@ -93,6 +103,9 @@ const store: Store = {
 
   layoutTemplates: [],
   layoutPickerOpen: false,
+
+  clipboardC: null,
+  clipboardP: null,
 
   bellActive: false,
   settingsOpen: false,
@@ -350,6 +363,70 @@ export function syncConfig() {
   notify();
 }
 
+// ============================================================================
+// Clipboard helpers (internal OSC 52 clipboards)
+// ============================================================================
+
+/** Set the 'c' (system clipboard) internal buffer */
+export function setClipboardC(text: string) {
+  store.clipboardC = { text, timestamp: Date.now() };
+  notify();
+}
+
+/** Set the 'p' (primary selection) internal buffer */
+export function setClipboardP(text: string) {
+  store.clipboardP = { text, timestamp: Date.now() };
+  notify();
+}
+
+/** Get the most recently modified clipboard ('c' or 'p') */
+export function getMostRecentClipboard(): ClipboardEntry | null {
+  const c = store.clipboardC;
+  const p = store.clipboardP;
+  if (!c && !p) return null;
+  if (!c) return p;
+  if (!p) return c;
+  return c.timestamp >= p.timestamp ? c : p;
+}
+
+/** Get clipboard by kind */
+export function getClipboardByKind(kind: string): ClipboardEntry | null {
+  if (kind === "c") return store.clipboardC;
+  if (kind === "p") return store.clipboardP;
+  return null;
+}
+
+/** Copy internal clipboard to navigator.clipboard */
+export async function copyInternalToSystem(kind: "c" | "p"): Promise<boolean> {
+  const entry = kind === "c" ? store.clipboardC : store.clipboardP;
+  if (!entry) return false;
+  try {
+    await copyToClipboard(entry.text);
+    debug.log(`Copied internal '${kind}' to system clipboard: ${entry.text.length} chars`);
+    return true;
+  } catch (err) {
+    debug.warn(`Failed to copy '${kind}' to system clipboard:`, err);
+    return false;
+  }
+}
+
+/** Copy navigator.clipboard to internal clipboard */
+export async function copySystemToInternal(kind: "c" | "p"): Promise<boolean> {
+  try {
+    const text = await pasteFromClipboard();
+    if (kind === "c") {
+      setClipboardC(text);
+    } else {
+      setClipboardP(text);
+    }
+    debug.log(`Copied system clipboard to internal '${kind}': ${text.length} chars`);
+    return true;
+  } catch (err) {
+    debug.warn(`Failed to copy system clipboard to '${kind}':`, err);
+    return false;
+  }
+}
+
 // Initialize connection and wire up handlers
 export function initConnection() {
   if (store.connection) return;
@@ -403,10 +480,21 @@ export function initConnection() {
 
   // OSC 52 clipboard handlers
   conn.on("clipboardSet", async (paneId, clipboard, base64Data) => {
-    // Terminal wants to write to system clipboard
+    // Terminal wants to write to clipboard
     try {
       const text = atob(base64Data);
-      await copyToClipboard(text);
+      const kind = clipboard.charAt(0) as "c" | "p";
+
+      // Store in internal clipboard
+      if (kind === "c") {
+        setClipboardC(text);
+      } else if (kind === "p") {
+        setClipboardP(text);
+      } else {
+        // Unknown kind, default to 'c'
+        setClipboardC(text);
+      }
+
       debug.log(`Clipboard SET from pane ${paneId}: ${text.length} chars to '${clipboard}'`);
     } catch (err) {
       debug.warn("Clipboard SET failed:", err);
@@ -414,21 +502,33 @@ export function initConnection() {
   });
 
   conn.on("clipboardGet", async (paneId, clipboard) => {
-    // Terminal wants to read from system clipboard
+    // Terminal wants to read from clipboard
     // Only master should respond to avoid race conditions
     if (!conn.isMaster) {
       debug.log(`Clipboard GET ignored (not master) for pane ${paneId}`);
       return;
     }
-    try {
-      const text = await pasteFromClipboard();
-      const base64Data = btoa(text);
+
+    const kind = clipboard.charAt(0);
+    const entry = getClipboardByKind(kind);
+
+    if (entry) {
+      // Return from internal clipboard
+      const base64Data = btoa(entry.text);
       conn.sendClipboardResponse(paneId, clipboard, base64Data);
-      debug.log(`Clipboard GET for pane ${paneId}: sent ${text.length} chars from '${clipboard}'`);
-    } catch (err) {
-      debug.warn("Clipboard GET failed:", err);
-      // Send empty response on failure so terminal doesn't hang
-      conn.sendClipboardResponse(paneId, clipboard, "");
+      debug.log(`Clipboard GET for pane ${paneId}: sent ${entry.text.length} chars from internal '${kind}'`);
+    } else {
+      // Internal clipboard empty, try system clipboard as fallback
+      try {
+        const text = await pasteFromClipboard();
+        const base64Data = btoa(text);
+        conn.sendClipboardResponse(paneId, clipboard, base64Data);
+        debug.log(`Clipboard GET for pane ${paneId}: sent ${text.length} chars from system clipboard (fallback)`);
+      } catch (err) {
+        debug.warn("Clipboard GET failed:", err);
+        // Send empty response on failure so terminal doesn't hang
+        conn.sendClipboardResponse(paneId, clipboard, "");
+      }
     }
   });
 

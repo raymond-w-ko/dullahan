@@ -153,8 +153,13 @@ pub const PaneRegistry = struct {
         return pane_id;
     }
 
-    /// Resize all panes
+    /// Resize all panes (silently ignores if dimensions unchanged)
     pub fn resizeAll(self: *PaneRegistry, cols: u16, rows: u16) !void {
+        // Skip if dimensions haven't changed
+        if (cols == self.default_cols and rows == self.default_rows) {
+            return;
+        }
+
         self.default_cols = cols;
         self.default_rows = rows;
 

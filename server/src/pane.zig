@@ -653,6 +653,9 @@ pub const Pane = struct {
         // Check for GET request
         if (data_str.len == 1 and data_str[0] == '?') {
             log.debug("OSC 52 GET request: kind={c}", .{kind});
+            if (log_config.log_clipboard) {
+                dlog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ self.id, kind });
+            }
             self.clipboard_pending_get = kind;
             self.clipboard_get_timestamp_ms = std.time.milliTimestamp();
             return;
@@ -682,6 +685,9 @@ pub const Pane = struct {
         };
 
         log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ kind, data_str.len });
+        if (log_config.log_clipboard) {
+            dlog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ self.id, kind, data_str.len });
+        }
     }
 
     /// Set the terminal title, allocating a copy of the string
@@ -866,6 +872,9 @@ pub const Pane = struct {
             log.warn("Failed to send OSC 52 response: {any}", .{e});
         };
         log.debug("Sent OSC 52 response: kind={c}, data_len={d}", .{ kind, data.len });
+        if (log_config.log_clipboard) {
+            dlog.debug("OSC 52 response sent: pane={d} kind='{c}' data_len={d}", .{ self.id, kind, data.len });
+        }
     }
 
     /// Get a plain string representation of the terminal contents

@@ -26,6 +26,8 @@ import {
   closeWindow,
   setFocusedPane,
   toggleFullscreen,
+  getMostRecentClipboard,
+  setClipboardC,
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
@@ -63,6 +65,10 @@ export function TerminalView({
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
   const mouseRef = useRef<MouseHandler | null>(null);
+
+  // Keep current snapshot in a ref so getSelection closure always accesses latest
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
 
   // Setup keyboard and IME handlers
   useEffect(() => {
@@ -111,15 +117,31 @@ export function TerminalView({
       },
       getSelection: () => {
         // First check for terminal selection (from server)
-        if (snapshot.selection) {
-          return getTerminalSelectionText(cells, cols, snapshot.selection);
+        // Use ref to always get current snapshot (avoids stale closure)
+        const currentSnapshot = snapshotRef.current;
+        if (currentSnapshot.selection) {
+          return getTerminalSelectionText(
+            currentSnapshot.cells,
+            currentSnapshot.cols,
+            currentSnapshot.selection
+          );
         }
         // Fall back to DOM selection
         return getDOMSelection();
       },
-      readClipboard: () => pasteFromClipboard(),
+      readClipboard: async () => {
+        // Use most recent internal clipboard if available
+        const recent = getMostRecentClipboard();
+        if (recent) {
+          return recent.text;
+        }
+        // Fall back to system clipboard
+        return pasteFromClipboard();
+      },
       writeClipboard: async (text: string) => {
         await copyToClipboard(text);
+        // Also update internal clipboard so ClipboardBar shows it
+        setClipboardC(text);
         // Clear selection after copy if configured
         if (config.get("selectionClearOnCopy")) {
           clearSelection();

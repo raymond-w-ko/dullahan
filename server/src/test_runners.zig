@@ -27,6 +27,9 @@ pub const TestCommand = enum {
     @"keytest-bytes",
     @"delta-gen",
     @"shell-delta",
+    @"osc52-set",
+    @"osc52-get",
+    @"osc52-interactive",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -35,6 +38,9 @@ pub const TestCommand = enum {
             .{ "keytest-bytes", .@"keytest-bytes" },
             .{ "delta-gen", .@"delta-gen" },
             .{ "shell-delta", .@"shell-delta" },
+            .{ "osc52-set", .@"osc52-set" },
+            .{ "osc52-get", .@"osc52-get" },
+            .{ "osc52-interactive", .@"osc52-interactive" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -46,6 +52,9 @@ pub const TestCommand = enum {
             .@"keytest-bytes" => "Byte coverage tester - 256-byte grid (press 'q' to exit)",
             .@"delta-gen" => "Generate delta sync test fixtures in test_fixtures/delta/",
             .@"shell-delta" => "Spawn shell, test delta sync with arrow keys",
+            .@"osc52-set" => "Send OSC 52 SET to clipboard (usage: osc52-set [c|p] [text])",
+            .@"osc52-get" => "Send OSC 52 GET to read clipboard (usage: osc52-get [c|p])",
+            .@"osc52-interactive" => "Interactive OSC 52 clipboard tester",
             .help => "Show available test commands",
         };
     }
@@ -56,15 +65,21 @@ pub fn printTestUsage() void {
         \\Usage: dullahan test <SUBCOMMAND>
         \\
         \\Test Commands:
-        \\  keytest-kitty   Kitty keyboard protocol tester (ESC twice to exit)
-        \\  keytest-bytes   Byte coverage tester - 256-byte grid (press 'q' to exit)
-        \\  delta-gen       Generate delta sync test fixtures
-        \\  shell-delta     Shell delta sync test
-        \\  help            Show this help
+        \\  keytest-kitty     Kitty keyboard protocol tester (ESC twice to exit)
+        \\  keytest-bytes     Byte coverage tester - 256-byte grid (press 'q' to exit)
+        \\  delta-gen         Generate delta sync test fixtures
+        \\  shell-delta       Shell delta sync test
+        \\  osc52-set         Send OSC 52 SET sequence (run in terminal pane)
+        \\  osc52-get         Send OSC 52 GET sequence (run in terminal pane)
+        \\  osc52-interactive Interactive clipboard tester (run in terminal pane)
+        \\  help              Show this help
         \\
         \\Examples:
-        \\  dullahan test keytest-kitty    # Test keyboard input with Kitty protocol
-        \\  dullahan test delta-gen        # Generate test fixtures
+        \\  dullahan test keytest-kitty         # Test keyboard input with Kitty protocol
+        \\  dullahan test osc52-set c hello     # Set clipboard 'c' to "hello"
+        \\  dullahan test osc52-set p primary   # Set primary selection to "primary"
+        \\  dullahan test osc52-get c           # Request clipboard 'c' content
+        \\  dullahan test osc52-interactive     # Interactive mode (run in dullahan pane)
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -77,6 +92,9 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"keytest-bytes" => try runKeytestBytes(),
         .@"delta-gen" => try runDeltaGen(allocator),
         .@"shell-delta" => try runShellDelta(allocator),
+        .@"osc52-set" => try runOsc52Set(),
+        .@"osc52-get" => try runOsc52Get(),
+        .@"osc52-interactive" => try runOsc52Interactive(),
         .help => printTestUsage(),
     }
 }
@@ -1337,4 +1355,169 @@ fn shellSkipMsgpackValue(data: []const u8, start: usize) usize {
     if (byte >= 0xe0) return start + 1;
 
     return start + 1;
+}
+
+// =============================================================================
+// OSC 52 Clipboard Testers
+// =============================================================================
+
+// OSC 52 format:
+// SET: ESC ] 52 ; <kind> ; <base64-data> BEL
+// GET: ESC ] 52 ; <kind> ; ? BEL
+// kind: 'c' (clipboard), 'p' (primary), 's' (selection)
+
+const OSC_START = "\x1b]52;";
+const OSC_END_BEL = "\x07";
+const OSC_END_ST = "\x1b\\";
+
+/// Send a few preset OSC 52 SET sequences to test clipboard functionality
+fn runOsc52Set() !void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    std.debug.print("OSC 52 SET Test - Sending clipboard sequences...\n\n", .{});
+
+    // Test 1: Set clipboard 'c' with simple text
+    const test1_text = "Hello from OSC 52!";
+    const test1_b64 = "SGVsbG8gZnJvbSBPU0MgNTIh"; // base64 of "Hello from OSC 52!"
+    std.debug.print("1. Setting clipboard 'c' to: \"{s}\"\n", .{test1_text});
+    _ = posix.write(stdout_fd, OSC_START ++ "c;" ++ test1_b64 ++ OSC_END_BEL) catch {};
+    std.debug.print("   Sent: ESC]52;c;<base64>BEL\n\n", .{});
+
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+
+    // Test 2: Set primary 'p' with different text
+    const test2_text = "Primary selection test";
+    const test2_b64 = "UHJpbWFyeSBzZWxlY3Rpb24gdGVzdA=="; // base64 of "Primary selection test"
+    std.debug.print("2. Setting primary 'p' to: \"{s}\"\n", .{test2_text});
+    _ = posix.write(stdout_fd, OSC_START ++ "p;" ++ test2_b64 ++ OSC_END_BEL) catch {};
+    std.debug.print("   Sent: ESC]52;p;<base64>BEL\n\n", .{});
+
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+
+    // Test 3: Set clipboard with ST terminator instead of BEL
+    const test3_text = "ST terminator test";
+    const test3_b64 = "U1QgdGVybWluYXRvciB0ZXN0"; // base64 of "ST terminator test"
+    std.debug.print("3. Setting clipboard 'c' with ST terminator: \"{s}\"\n", .{test3_text});
+    _ = posix.write(stdout_fd, OSC_START ++ "c;" ++ test3_b64 ++ OSC_END_ST) catch {};
+    std.debug.print("   Sent: ESC]52;c;<base64>ESC\\\n\n", .{});
+
+    std.debug.print("Done! Check the ClipboardBar in the client.\n", .{});
+    std.debug.print("Clipboard 'c' should show: \"{s}\"\n", .{test3_text});
+    std.debug.print("Primary 'p' should show: \"{s}\"\n", .{test2_text});
+}
+
+/// Send OSC 52 GET sequences to request clipboard content
+fn runOsc52Get() !void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    std.debug.print("OSC 52 GET Test - Requesting clipboard content...\n\n", .{});
+
+    // Request clipboard 'c'
+    std.debug.print("1. Requesting clipboard 'c'...\n", .{});
+    _ = posix.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
+    std.debug.print("   Sent: ESC]52;c;?BEL\n", .{});
+    std.debug.print("   (Response will be sent back as OSC 52 sequence)\n\n", .{});
+
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+
+    // Request primary 'p'
+    std.debug.print("2. Requesting primary 'p'...\n", .{});
+    _ = posix.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
+    std.debug.print("   Sent: ESC]52;p;?BEL\n", .{});
+    std.debug.print("   (Response will be sent back as OSC 52 sequence)\n\n", .{});
+
+    std.debug.print("Done! The terminal should receive OSC 52 responses.\n", .{});
+    std.debug.print("Note: The response data will be sent to the PTY as escape sequences.\n", .{});
+}
+
+/// Interactive OSC 52 tester - allows user to set/get clipboard interactively
+fn runOsc52Interactive() !void {
+    const stdin_fd = posix.STDIN_FILENO;
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    std.debug.print("OSC 52 Interactive Clipboard Tester\n", .{});
+    std.debug.print("====================================\n\n", .{});
+    std.debug.print("Commands:\n", .{});
+    std.debug.print("  sc <text>  - Set clipboard 'c' to <text>\n", .{});
+    std.debug.print("  sp <text>  - Set primary 'p' to <text>\n", .{});
+    std.debug.print("  gc         - Get clipboard 'c'\n", .{});
+    std.debug.print("  gp         - Get primary 'p'\n", .{});
+    std.debug.print("  q          - Quit\n\n", .{});
+
+    var buf: [1024]u8 = undefined;
+
+    while (true) {
+        std.debug.print("> ", .{});
+
+        const n = posix.read(stdin_fd, &buf) catch break;
+        if (n == 0) break;
+
+        // Trim trailing newline
+        var input = buf[0..n];
+        while (input.len > 0 and (input[input.len - 1] == '\n' or input[input.len - 1] == '\r')) {
+            input = input[0 .. input.len - 1];
+        }
+
+        if (input.len == 0) continue;
+
+        // Parse command
+        if (std.mem.eql(u8, input, "q") or std.mem.eql(u8, input, "quit")) {
+            std.debug.print("Bye!\n", .{});
+            break;
+        } else if (std.mem.eql(u8, input, "gc")) {
+            std.debug.print("Requesting clipboard 'c'...\n", .{});
+            _ = posix.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
+        } else if (std.mem.eql(u8, input, "gp")) {
+            std.debug.print("Requesting primary 'p'...\n", .{});
+            _ = posix.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
+        } else if (std.mem.startsWith(u8, input, "sc ")) {
+            const text = input[3..];
+            if (text.len > 0) {
+                osc52SetClipboard(stdout_fd, 'c', text);
+                std.debug.print("Set clipboard 'c' to: \"{s}\"\n", .{text});
+            } else {
+                std.debug.print("Usage: sc <text>\n", .{});
+            }
+        } else if (std.mem.startsWith(u8, input, "sp ")) {
+            const text = input[3..];
+            if (text.len > 0) {
+                osc52SetClipboard(stdout_fd, 'p', text);
+                std.debug.print("Set primary 'p' to: \"{s}\"\n", .{text});
+            } else {
+                std.debug.print("Usage: sp <text>\n", .{});
+            }
+        } else {
+            std.debug.print("Unknown command: {s}\n", .{input});
+            std.debug.print("Use 'sc <text>', 'sp <text>', 'gc', 'gp', or 'q'\n", .{});
+        }
+    }
+}
+
+/// Helper to send OSC 52 SET with runtime base64 encoding
+fn osc52SetClipboard(fd: posix.fd_t, kind: u8, text: []const u8) void {
+    // Build OSC 52 SET sequence with base64-encoded text
+    var out_buf: [2048]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&out_buf);
+    const w = fbs.writer();
+
+    // ESC ] 52 ; <kind> ;
+    w.writeAll("\x1b]52;") catch return;
+    w.writeByte(kind) catch return;
+    w.writeByte(';') catch return;
+
+    // Base64 encode the text
+    const b64_len = std.base64.standard.Encoder.calcSize(text.len);
+    if (b64_len > 1500) {
+        std.debug.print("Text too long for buffer\n", .{});
+        return;
+    }
+
+    var b64_buf: [1500]u8 = undefined;
+    _ = std.base64.standard.Encoder.encode(&b64_buf, text);
+    w.writeAll(b64_buf[0..b64_len]) catch return;
+
+    // BEL terminator
+    w.writeByte(0x07) catch return;
+
+    _ = posix.write(fd, fbs.getWritten()) catch {};
 }

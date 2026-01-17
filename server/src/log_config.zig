@@ -20,3 +20,6 @@ pub const log_pane_resize: bool = true;
 
 /// Log client join and client ID events
 pub const log_client_join: bool = true;
+
+/// Log clipboard operations (OSC 52 SET/GET)
+pub const log_clipboard: bool = true;

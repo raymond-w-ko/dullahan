@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
 import { WindowSwitcher } from "./WindowSwitcher";
+import { ClipboardBar } from "./ClipboardBar";
 import { LayoutPickerModal } from "./LayoutPickerModal";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
@@ -46,6 +47,18 @@ export function App() {
 
   return (
     <div class="app" data-theme={theme}>
+      <ErrorBoundary>
+        <main class="main">
+          {error && <div class="error">Error: {error}</div>}
+          <TerminalGrid windowId={activeWindowId} />
+        </main>
+
+        <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <LayoutPickerModal />
+      </ErrorBoundary>
+
+      <ClipboardBar />
+
       <aside class="bottombar">
         <div class="bottombar-logo" title="Dullahan">
           D
@@ -73,16 +86,6 @@ export function App() {
           {"\u2699"}
         </button>
       </aside>
-
-      <ErrorBoundary>
-        <main class="main">
-          {error && <div class="error">Error: {error}</div>}
-          <TerminalGrid windowId={activeWindowId} />
-        </main>
-
-        <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        <LayoutPickerModal />
-      </ErrorBoundary>
     </div>
   );
 }

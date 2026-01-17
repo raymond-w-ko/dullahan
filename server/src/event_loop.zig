@@ -355,6 +355,10 @@ pub const EventLoop = struct {
     // Layout database (templates for window creation)
     layouts: layout_db.LayoutDb,
 
+    // IPC clipboard storage (for clipboard-set/clipboard-get testing)
+    ipc_clipboard_c: ?[]const u8 = null,
+    ipc_clipboard_p: ?[]const u8 = null,
+
     const IPC_FD_INDEX = 0;
     const HTTP_FD_INDEX = 1;
     const FIXED_FD_COUNT = 2;
@@ -388,6 +392,13 @@ pub const EventLoop = struct {
         // Free master_id if allocated
         if (self.master_id) |id| {
             self.allocator.free(id);
+        }
+        // Free clipboard storage
+        if (self.ipc_clipboard_c) |c| {
+            self.allocator.free(c);
+        }
+        if (self.ipc_clipboard_p) |p| {
+            self.allocator.free(p);
         }
         self.layouts.deinit();
     }
@@ -564,6 +575,10 @@ pub const EventLoop = struct {
         };
 
         if (result) |cmd_result| {
+            // Free the IPC buffer when done (parsed.data points into this buffer)
+            var mutable_result = cmd_result;
+            defer mutable_result.deinit(self.allocator);
+
             self.commands_processed += 1;
 
             // Use arena allocator per-request to avoid leaking response data
@@ -862,6 +877,90 @@ pub const EventLoop = struct {
                 const msg = std.fmt.bufPrint(&msg_buf, "Sent {d} bytes to pane {d}", .{ send_text.len, pane.id }) catch "Sent";
                 break :blk ipc.Response.ok(msg);
             },
+
+            .@"clipboard-set" => blk: {
+                const args = data orelse
+                    break :blk ipc.Response.err("Usage: clipboard-set <c|p> <text>");
+
+                // Parse kind (c or p) from first argument
+                const space_idx = std.mem.indexOf(u8, args, " ");
+                const kind_str = if (space_idx) |idx| args[0..idx] else args;
+                const text = if (space_idx) |idx| args[idx + 1 ..] else null;
+
+                if (kind_str.len != 1 or (kind_str[0] != 'c' and kind_str[0] != 'p'))
+                    break :blk ipc.Response.err("Invalid kind. Use 'c' (clipboard) or 'p' (primary)");
+
+                const kind = kind_str[0];
+                const clipboard_text = text orelse
+                    break :blk ipc.Response.err("No text provided. Usage: clipboard-set <c|p> <text>");
+
+                // Store locally for clipboard-get (use self.allocator for persistent storage)
+                const text_copy = self.allocator.dupe(u8, clipboard_text) catch
+                    break :blk ipc.Response.err("Out of memory");
+
+                if (kind == 'c') {
+                    if (self.ipc_clipboard_c) |old| {
+                        self.allocator.free(old);
+                    }
+                    self.ipc_clipboard_c = text_copy;
+                } else {
+                    if (self.ipc_clipboard_p) |old| {
+                        self.allocator.free(old);
+                    }
+                    self.ipc_clipboard_p = text_copy;
+                }
+
+                // Encode text as base64 for the clipboard message
+                const encoded_len = std.base64.standard.Encoder.calcSize(clipboard_text.len);
+                const base64_data = alloc.alloc(u8, encoded_len) catch
+                    break :blk ipc.Response.err("Out of memory for base64");
+                defer alloc.free(base64_data);
+                _ = std.base64.standard.Encoder.encode(base64_data, clipboard_text);
+
+                // Generate clipboard SET message and broadcast to all clients
+                // Use pane ID 0 (debug pane) as a placeholder
+                const clipboard_msg = snapshot.generateClipboardMessage(
+                    alloc,
+                    0, // pane_id (not important for SET broadcast)
+                    "set",
+                    kind,
+                    base64_data,
+                ) catch break :blk ipc.Response.err("Failed to generate clipboard message");
+                defer alloc.free(clipboard_msg);
+
+                // Broadcast to all clients
+                for (self.clients.items) |*client| {
+                    client.ws.sendBinary(clipboard_msg) catch |e| {
+                        logClientError("broadcast clipboard SET", e);
+                    };
+                }
+
+                var resp_buf: [128]u8 = undefined;
+                const resp_msg = std.fmt.bufPrint(&resp_buf, "Set '{c}' clipboard: {d} bytes, broadcast to {d} clients", .{
+                    kind,
+                    clipboard_text.len,
+                    self.clients.items.len,
+                }) catch "Set clipboard";
+                break :blk ipc.Response.ok(resp_msg);
+            },
+
+            .@"clipboard-get" => blk: {
+                const args = data orelse
+                    break :blk ipc.Response.err("Usage: clipboard-get <c|p>");
+
+                const kind_str = std.mem.trim(u8, args, &std.ascii.whitespace);
+                if (kind_str.len != 1 or (kind_str[0] != 'c' and kind_str[0] != 'p'))
+                    break :blk ipc.Response.err("Invalid kind. Use 'c' (clipboard) or 'p' (primary)");
+
+                const kind = kind_str[0];
+                const stored = if (kind == 'c') self.ipc_clipboard_c else self.ipc_clipboard_p;
+
+                if (stored) |text| {
+                    break :blk ipc.Response.okWithData("Clipboard content", text);
+                } else {
+                    break :blk ipc.Response.ok("(empty)");
+                }
+            },
         };
     }
 
@@ -988,6 +1087,10 @@ pub const EventLoop = struct {
                 self.session.logPtyRecv(pane.id, buf[0..n]);
                 try pane.feed(buf[0..n]);
 
+                // Handle clipboard operations (OSC 52) BEFORE sending pane updates
+                // This ensures clipboard messages are broadcast to all clients immediately
+                self.handlePaneClipboard(pane);
+
                 // Send updates for both the PTY pane and the debug pane
                 // (debug pane was updated by logPtyRecv)
                 const debug_pane = self.session.getDebugPane();
@@ -1108,69 +1211,12 @@ pub const EventLoop = struct {
     /// Broadcast pane update (snapshot/delta) to all connected clients.
     /// Used for selection changes and other immediate updates.
     fn broadcastPaneUpdate(self: *EventLoop, pane: *Pane) !void {
-        const pane_id = pane.id;
+        // Handle any pending clipboard operations first
+        // Note: This is typically handled in handlePtyData(), but included here
+        // for completeness in case broadcastPaneUpdate is called from other paths.
+        self.handlePaneClipboard(pane);
 
-        // Handle clipboard SET operation (OSC 52) - must broadcast to ALL clients before clearing
-        if (pane.hasClipboardSet()) {
-            if (pane.getClipboardSet()) |op| {
-                const msg = snapshot.generateClipboardMessage(
-                    pane.allocator,
-                    pane_id,
-                    "set",
-                    op.kind,
-                    op.data,
-                ) catch |e| {
-                    logRecoverable("generate clipboard SET message", e);
-                    return;
-                };
-                defer pane.allocator.free(msg);
-
-                for (self.clients.items) |*client| {
-                    client.ws.sendBinary(msg) catch |e| {
-                        logClientError("broadcast clipboard SET", e);
-                    };
-                }
-            }
-            pane.clearClipboardSet();
-        }
-
-        // Handle clipboard GET request (OSC 52) - send to master client only
-        // Only send if not already sent (we keep pending until response or timeout)
-        if (pane.needsClipboardGetSend()) {
-            if (pane.getClipboardGetKind()) |kind| {
-                const msg = snapshot.generateClipboardMessage(
-                    pane.allocator,
-                    pane_id,
-                    "get",
-                    kind,
-                    null, // no data for GET request
-                ) catch |e| {
-                    logRecoverable("generate clipboard GET message", e);
-                    return;
-                };
-                defer pane.allocator.free(msg);
-
-                // GET should only go to master client (they respond with clipboard content)
-                for (self.clients.items) |*client| {
-                    const is_master = if (client.client_id) |id| self.isMaster(id) else false;
-                    if (is_master) {
-                        client.ws.sendBinary(msg) catch |e| {
-                            logClientError("send clipboard GET to master", e);
-                        };
-                        pane.markClipboardGetSent();
-                        break;
-                    }
-                }
-            }
-            // Note: Don't clear here - wait for response or timeout
-        }
-
-        // Check for clipboard GET timeout
-        if (pane.hasClipboardGetTimedOut()) {
-            pane.handleClipboardGetTimeout();
-        }
-
-        // Now broadcast pane state updates to all clients
+        // Broadcast pane state updates to all clients
         for (self.clients.items) |*client| {
             self.sendPaneUpdate(client, pane) catch |e| {
                 logClientError("broadcast pane update", e);
@@ -1240,6 +1286,157 @@ pub const EventLoop = struct {
         const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
         defer pane.allocator.free(snap);
         try ws.sendBinary(snap);
+    }
+
+    /// Send current IPC clipboard state to a client.
+    /// Called when a client first connects (after hello) to sync clipboard state.
+    fn sendIpcClipboardState(self: *EventLoop, client: *ClientState) !void {
+        // Send clipboard 'c' if set
+        if (self.ipc_clipboard_c) |text| {
+            const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
+            const base64_data = try self.allocator.alloc(u8, encoded_len);
+            defer self.allocator.free(base64_data);
+            _ = std.base64.standard.Encoder.encode(base64_data, text);
+
+            const msg = try snapshot.generateClipboardMessage(
+                self.allocator,
+                0, // pane_id doesn't matter for IPC clipboard
+                "set",
+                'c',
+                base64_data,
+            );
+            defer self.allocator.free(msg);
+
+            try client.ws.sendBinary(msg);
+            if (log_config.log_clipboard) {
+                dlog.info("Sent IPC clipboard 'c' to new client: {d} bytes", .{text.len});
+            }
+        }
+
+        // Send clipboard 'p' if set
+        if (self.ipc_clipboard_p) |text| {
+            const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
+            const base64_data = try self.allocator.alloc(u8, encoded_len);
+            defer self.allocator.free(base64_data);
+            _ = std.base64.standard.Encoder.encode(base64_data, text);
+
+            const msg = try snapshot.generateClipboardMessage(
+                self.allocator,
+                0,
+                "set",
+                'p',
+                base64_data,
+            );
+            defer self.allocator.free(msg);
+
+            try client.ws.sendBinary(msg);
+            if (log_config.log_clipboard) {
+                dlog.info("Sent IPC clipboard 'p' to new client: {d} bytes", .{text.len});
+            }
+        }
+    }
+
+    /// Update IPC clipboard storage from base64-encoded data.
+    /// Called when OSC 52 SET is received from a pane.
+    fn updateIpcClipboardFromBase64(self: *EventLoop, kind: u8, base64_data: []const u8) void {
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(base64_data) catch return;
+        if (decoded_len == 0) return;
+
+        const buf = self.allocator.alloc(u8, decoded_len) catch return;
+        defer self.allocator.free(buf);
+
+        std.base64.standard.Decoder.decode(buf, base64_data) catch return;
+
+        const text_copy = self.allocator.dupe(u8, buf[0..decoded_len]) catch return;
+
+        if (kind == 'c') {
+            if (self.ipc_clipboard_c) |old| self.allocator.free(old);
+            self.ipc_clipboard_c = text_copy;
+        } else if (kind == 'p') {
+            if (self.ipc_clipboard_p) |old| self.allocator.free(old);
+            self.ipc_clipboard_p = text_copy;
+        } else {
+            self.allocator.free(text_copy);
+        }
+    }
+
+    /// Handle clipboard operations (OSC 52) for a pane.
+    /// This checks for pending SET/GET and broadcasts to appropriate clients.
+    /// Called after pane.feed() to ensure clipboard messages are sent immediately.
+    fn handlePaneClipboard(self: *EventLoop, pane: *Pane) void {
+        const pane_id = pane.id;
+
+        // Handle clipboard SET operation - broadcast to ALL clients
+        if (pane.hasClipboardSet()) {
+            if (pane.getClipboardSet()) |op| {
+                if (log_config.log_clipboard) {
+                    dlog.info("Clipboard SET: pane={d} kind='{c}' data_len={d}", .{ pane_id, op.kind, op.data.len });
+                }
+
+                // Also update IPC clipboard storage so clipboard-get works
+                // op.data is base64-encoded, decode it for storage
+                self.updateIpcClipboardFromBase64(op.kind, op.data);
+
+                const msg = snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "set",
+                    op.kind,
+                    op.data,
+                ) catch |e| {
+                    logRecoverable("generate clipboard SET message", e);
+                    return;
+                };
+                defer pane.allocator.free(msg);
+
+                for (self.clients.items) |*client| {
+                    client.ws.sendBinary(msg) catch |e| {
+                        logClientError("broadcast clipboard SET", e);
+                    };
+                }
+            }
+            pane.clearClipboardSet();
+        }
+
+        // Handle clipboard GET request - send to master client only
+        if (pane.needsClipboardGetSend()) {
+            if (pane.getClipboardGetKind()) |kind| {
+                if (log_config.log_clipboard) {
+                    dlog.info("Clipboard GET request: pane={d} kind='{c}'", .{ pane_id, kind });
+                }
+
+                const msg = snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "get",
+                    kind,
+                    null,
+                ) catch |e| {
+                    logRecoverable("generate clipboard GET message", e);
+                    return;
+                };
+                defer pane.allocator.free(msg);
+
+                for (self.clients.items) |*client| {
+                    const is_master = if (client.client_id) |id| self.isMaster(id) else false;
+                    if (is_master) {
+                        client.ws.sendBinary(msg) catch |e| {
+                            logClientError("send clipboard GET to master", e);
+                        };
+                        pane.markClipboardGetSent();
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Check for clipboard GET timeout
+        if (pane.hasClipboardGetTimedOut()) {
+            if (log_config.log_clipboard) {
+                dlog.warn("Clipboard GET timeout: pane={d}", .{pane_id});
+            }
+            pane.handleClipboardGetTimeout();
+        }
     }
 
     // ========================================================================
@@ -1681,6 +1878,11 @@ pub const EventLoop = struct {
                         };
                     }
                 }
+
+                // Send current IPC clipboard state to the new client
+                self.sendIpcClipboardState(client) catch |e| {
+                    logRecoverable("send IPC clipboard state", e);
+                };
             },
             .request_master => {
                 // Client is requesting to become master
@@ -1977,6 +2179,14 @@ pub const EventLoop = struct {
 
                 // Extract clipboard kind (first char of string, default 'c')
                 const kind: u8 = if (clip_msg.clipboard.len > 0) clip_msg.clipboard[0] else 'c';
+
+                if (log_config.log_clipboard) {
+                    dlog.info("Clipboard response: pane={d} kind='{c}' data_len={d}", .{
+                        clip_msg.paneId,
+                        kind,
+                        clip_msg.data.len,
+                    });
+                }
 
                 // Send the OSC 52 response back to the terminal
                 pane.sendClipboardResponse(kind, clip_msg.data);

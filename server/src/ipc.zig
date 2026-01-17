@@ -44,6 +44,8 @@ pub const Command = enum {
     panes,
     windows,
     send,
+    @"clipboard-set",
+    @"clipboard-get",
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -63,6 +65,8 @@ pub const Command = enum {
             .{ "panes", .panes },
             .{ "windows", .windows },
             .{ "send", .send },
+            .{ "clipboard-set", .@"clipboard-set" },
+            .{ "clipboard-get", .@"clipboard-get" },
         });
         return map.get(s);
     }
@@ -85,6 +89,8 @@ pub const Command = enum {
             .panes => "List all pane IDs",
             .windows => "List windows with their pane IDs (JSON)",
             .send => "Send text to pane: send <pane_id> [text] (reads stdin if no text)",
+            .@"clipboard-set" => "Set clipboard: clipboard-set <c|p> <text>",
+            .@"clipboard-get" => "Get clipboard: clipboard-get <c|p>",
         };
     }
 };
@@ -248,10 +254,22 @@ pub const Server = struct {
         return .{ .conn = conn, .parsed = parsed };
     }
 
+    /// Result of accepting a command - includes buffer that must be freed
+    pub const AcceptResult = struct {
+        conn: posix.socket_t,
+        parsed: ParsedCommand,
+        buffer: []u8, // Heap-allocated buffer that parsed.data points into
+
+        pub fn deinit(self: *AcceptResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.buffer);
+        }
+    };
+
     /// Accept a connection with timeout (non-blocking with poll)
     /// Returns null if timeout expires, otherwise returns the parsed command
     /// timeout_ms: timeout in milliseconds (-1 for infinite)
-    pub fn acceptCommandTimeout(self: *Server, allocator: std.mem.Allocator, timeout_ms: i32) !?struct { conn: posix.socket_t, parsed: ParsedCommand } {
+    /// IMPORTANT: Caller must call result.deinit(allocator) when done!
+    pub fn acceptCommandTimeout(self: *Server, allocator: std.mem.Allocator, timeout_ms: i32) !?AcceptResult {
         // Poll the socket with timeout
         var poll_fds = [_]posix.pollfd{
             .{ .fd = self.socket, .events = posix.POLL.IN, .revents = 0 },
@@ -276,21 +294,26 @@ pub const Server = struct {
             const conn = try posix.accept(self.socket, null, null, 0);
             errdefer posix.close(conn);
 
-            var buf: [constants.buffer.general]u8 = undefined;
-            const n = try posix.read(conn, &buf);
+            var stack_buf: [constants.buffer.general]u8 = undefined;
+            const n = try posix.read(conn, &stack_buf);
             if (n == 0) return error.ConnectionClosed;
 
-            const parsed = ParsedCommand.parse(buf[0..n]) orelse {
+            // Allocate heap buffer and copy data so it outlives this function
+            const heap_buf = try allocator.dupe(u8, stack_buf[0..n]);
+            errdefer allocator.free(heap_buf);
+
+            const parsed = ParsedCommand.parse(heap_buf) orelse {
                 // Send error response for unknown command
                 const resp = Response.err("Unknown command. Use 'help' for available commands.");
                 const formatted = try resp.format(allocator);
                 defer allocator.free(formatted);
                 _ = posix.write(conn, formatted) catch {};
                 posix.close(conn);
+                allocator.free(heap_buf);
                 return error.UnknownCommand;
             };
 
-            return .{ .conn = conn, .parsed = parsed };
+            return .{ .conn = conn, .parsed = parsed, .buffer = heap_buf };
         }
 
         return null;

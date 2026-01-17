@@ -83,7 +83,6 @@ html, body {
   padding: 0 var(--space-2);
   gap: var(--space-2);
   flex-shrink: 0;
-  order: 1; /* Move to bottom */
 }
 
 .bottombar-logo {
@@ -141,6 +140,109 @@ html, body {
 .bottombar-btn--slave {
   color: var(--c8);  /* gray - someone else is master */
   opacity: 0.8;
+}
+
+/* ==========================================================================
+   Clipboard Bar
+   ========================================================================== */
+
+.clipboard-bar {
+  height: 28px;
+  background: rgba(0, 0, 0, 0.1);
+  display: flex;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: var(--term-font);
+  font-size: 0.7rem;
+}
+
+.clipboard-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 6px;
+  min-width: 0; /* Allow shrinking */
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.clipboard-panel:last-child {
+  border-right: none;
+}
+
+.clipboard-panel--recent {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.clipboard-panel--recent .clipboard-panel-label {
+  color: var(--c3); /* yellow for most recent */
+}
+
+.clipboard-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 12px;
+}
+
+.clipboard-panel-label {
+  color: var(--c8);
+  font-size: 0.6rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+}
+
+.clipboard-panel-time {
+  color: var(--c8);
+  font-size: 0.55rem;
+  opacity: 0.7;
+}
+
+.clipboard-panel-buttons {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.clipboard-btn {
+  width: 14px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  color: var(--c8);
+  font-size: 0.6rem;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+  padding: 0;
+}
+
+.clipboard-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.clipboard-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.clipboard-panel-content {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--term-fg);
+  font-size: 0.65rem;
+  line-height: 14px;
+}
+
+.clipboard-panel-empty {
+  color: var(--c8);
+  opacity: 0.5;
+  font-style: italic;
 }
 
 /* ==========================================================================
