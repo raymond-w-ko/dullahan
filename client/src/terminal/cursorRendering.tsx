@@ -8,6 +8,7 @@ import {
   getCellColor,
   colorToCss,
 } from "./terminalStyle";
+import { handleHyperlinkClick } from "./hyperlink";
 import type { StyledRun } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
 import { ColorTag } from "../../../protocol/schema/style";
@@ -63,6 +64,44 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
   return baseStyle;
 }
 
+/**
+ * Render a run element, either as a hyperlink (<a>) or a plain span.
+ * Hyperlinks get special styling and click handling.
+ */
+function renderRunElement(
+  run: StyledRun,
+  key: string | number,
+  text: string,
+  extraClass?: string,
+  extraStyle?: h.JSX.CSSProperties
+): preact.JSX.Element {
+  const classes = extraClass
+    ? `${runClasses(run)} ${extraClass}`.trim()
+    : runClasses(run);
+  const style = extraStyle || runInlineStyle(run);
+
+  if (run.hyperlink) {
+    return (
+      <a
+        key={key}
+        class={`${classes} hyperlink`.trim()}
+        style={style}
+        href={run.hyperlink}
+        title={run.hyperlink}
+        onClick={(e: MouseEvent) => handleHyperlinkClick(e, run.hyperlink!)}
+      >
+        {text}
+      </a>
+    );
+  }
+
+  return (
+    <span key={key} class={classes} style={style}>
+      {text}
+    </span>
+  );
+}
+
 /** Render a line of runs, inserting cursor if needed */
 export function renderLine(
   runs: StyledRun[],
@@ -75,15 +114,7 @@ export function renderLine(
   if (!isActive || !cursor.visible || cursor.y !== y) {
     return (
       <>
-        {runs.map((run, i) => (
-          <span
-            key={i}
-            class={runClasses(run)}
-            style={runInlineStyle(run)}
-          >
-            {run.text}
-          </span>
-        ))}
+        {runs.map((run, i) => renderRunElement(run, i, run.text))}
       </>
     );
   }
@@ -114,15 +145,7 @@ export function renderLine(
       const after = run.text.slice(offset + 1);
 
       if (before) {
-        elements.push(
-          <span
-            key={`${i}-before`}
-            class={runClasses(run)}
-            style={runInlineStyle(run)}
-          >
-            {before}
-          </span>
-        );
+        elements.push(renderRunElement(run, `${i}-before`, before));
       }
 
       // Build cursor style
@@ -166,26 +189,10 @@ export function renderLine(
       );
 
       if (after) {
-        elements.push(
-          <span
-            key={`${i}-after`}
-            class={runClasses(run)}
-            style={runInlineStyle(run)}
-          >
-            {after}
-          </span>
-        );
+        elements.push(renderRunElement(run, `${i}-after`, after));
       }
     } else {
-      elements.push(
-        <span
-          key={i}
-          class={runClasses(run)}
-          style={runInlineStyle(run)}
-        >
-          {run.text}
-        </span>
-      );
+      elements.push(renderRunElement(run, i, run.text));
     }
 
     x = runEnd;

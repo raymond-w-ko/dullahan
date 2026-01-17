@@ -25,8 +25,8 @@ function readSnappyLength(data: Uint8Array): number {
   }
   throw new Error("Invalid varint in Snappy data");
 }
-import { cellToChar, ContentTag, Wide, decodeGraphemes } from "../../../protocol/schema/cell";
-import type { Cell, CellContent, WideValue, GraphemeTable } from "../../../protocol/schema/cell";
+import { cellToChar, ContentTag, Wide, decodeGraphemes, decodeHyperlinks } from "../../../protocol/schema/cell";
+import type { Cell, CellContent, WideValue, GraphemeTable, HyperlinkTable } from "../../../protocol/schema/cell";
 import { ColorTag, Underline, decodeColor } from "../../../protocol/schema/style";
 import { calculateTerminalSize } from "./dimensions";
 import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
@@ -64,6 +64,7 @@ export type {
   ScrollbackInfo,
   SelectionBounds,
   GraphemeTable,
+  HyperlinkTable,
 };
 
 // ============================================================================
@@ -152,6 +153,7 @@ export interface TerminalSnapshot {
   styles: StyleTable; // Decoded style table
   rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
   graphemes: GraphemeTable; // Grapheme data for multi-codepoint characters
+  hyperlinks: HyperlinkTable; // Hyperlink data for OSC 8 links
   selection?: SelectionBounds; // Current selection (if any)
 }
 
@@ -161,11 +163,13 @@ interface PaneState {
   minRowId: bigint;
   rowCache: Map<bigint, Cell[]>;
   rowGraphemes: Map<bigint, GraphemeTable>; // Graphemes per row (row-relative indices)
+  rowHyperlinks: Map<bigint, HyperlinkTable>; // Hyperlinks per row (row-relative indices)
   cols: number;
   rows: number;
   lastStyles: StyleTable | null;
   lastRowIds: bigint[] | null;
   lastGraphemes: GraphemeTable | null; // Last snapshot's graphemes (global indices)
+  lastHyperlinks: HyperlinkTable | null; // Last snapshot's hyperlinks (global indices)
   deltaCount: number;
   resyncCount: number;
 }
@@ -271,11 +275,13 @@ export class TerminalConnection {
         minRowId: 0n,
         rowCache: new Map(),
         rowGraphemes: new Map(),
+        rowHyperlinks: new Map(),
         cols: 80,
         rows: 24,
         lastStyles: null,
         lastRowIds: null,
         lastGraphemes: null,
+        lastHyperlinks: null,
         deltaCount: 0,
         resyncCount: 0,
       };
@@ -397,11 +403,12 @@ export class TerminalConnection {
         debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
-        // Decode cells, styles, row IDs, and graphemes from raw bytes
+        // Decode cells, styles, row IDs, graphemes, and hyperlinks from raw bytes
         const cells = this.decodeCellsFromBytes(msg.cells);
         const styles = this.decodeStyleTableFromBytes(msg.styles);
         const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
         const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
+        const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
         const snapshot: TerminalSnapshot = {
           paneId,
           gen: msg.gen,
@@ -420,6 +427,7 @@ export class TerminalConnection {
           styles,
           rowIds,
           graphemes,
+          hyperlinks,
           selection: msg.selection,
         };
 
@@ -429,11 +437,12 @@ export class TerminalConnection {
         paneState.rows = msg.rows;
         paneState.resyncCount++;
 
-        // Rebuild row cache and graphemes from snapshot
+        // Rebuild row cache, graphemes, and hyperlinks from snapshot
         // NOTE: rowId=0 IS valid (page serial 0, row index 0)
         // Only undefined means the row wasn't sent
         paneState.rowCache.clear();
         paneState.rowGraphemes.clear();
+        paneState.rowHyperlinks.clear();
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
@@ -457,6 +466,17 @@ export class TerminalConnection {
             if (rowGraphemes.size > 0) {
               paneState.rowGraphemes.set(rowId, rowGraphemes);
             }
+
+            // Extract per-row hyperlinks (convert global cell indices to row-relative)
+            const rowHyperlinks: HyperlinkTable = new Map();
+            for (const [cellIndex, url] of hyperlinks) {
+              if (cellIndex >= rowStart && cellIndex < rowEnd) {
+                rowHyperlinks.set(cellIndex - rowStart, url);
+              }
+            }
+            if (rowHyperlinks.size > 0) {
+              paneState.rowHyperlinks.set(rowId, rowHyperlinks);
+            }
           }
         }
         if (minSeen >= 0n) {
@@ -467,8 +487,9 @@ export class TerminalConnection {
         paneState.lastStyles = styles;
         paneState.lastRowIds = rowIds;
         paneState.lastGraphemes = graphemes;
+        paneState.lastHyperlinks = hyperlinks;
 
-        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, ${graphemes.size} graphemes, rowIds:`, rowIds.map(String));
+        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks, rowIds:`, rowIds.map(String));
 
         this.emit("snapshot", snapshot);
 
@@ -979,6 +1000,19 @@ export class TerminalConnection {
         paneState.rowGraphemes.delete(rowId);
       }
 
+      // Decode and cache hyperlinks for this row (row-relative indices)
+      if (row.hyperlinks) {
+        const rowHyperlinks = decodeHyperlinks(row.hyperlinks);
+        if (rowHyperlinks.size > 0) {
+          paneState.rowHyperlinks.set(rowId, rowHyperlinks);
+        } else {
+          paneState.rowHyperlinks.delete(rowId);
+        }
+      } else {
+        // No hyperlinks in this row, clear any cached hyperlinks
+        paneState.rowHyperlinks.delete(rowId);
+      }
+
       // Update min row ID tracking
       if (paneState.minRowId === 0n || rowId < paneState.minRowId) {
         paneState.minRowId = rowId;
@@ -1022,11 +1056,12 @@ export class TerminalConnection {
       debug.log(`Pane ${paneId}: Cache has:`, [...paneState.rowCache.keys()].map(String));
     }
 
-    // Build cells array and grapheme table from cache for current viewport
+    // Build cells array, grapheme table, and hyperlink table from cache for current viewport
     // This requires knowing which row IDs are in the viewport
     // NOTE: rowId=0 IS valid, only undefined means "no row"
     const cells: Cell[] = [];
     const graphemes: GraphemeTable = new Map();
+    const hyperlinks: HyperlinkTable = new Map();
     let fromCache = 0;
     let filled = 0;
     for (let y = 0; y < delta.rows; y++) {
@@ -1039,12 +1074,21 @@ export class TerminalConnection {
           }
           cells.push(...rowCells);
 
+          const rowStart = y * delta.cols;
+
           // Convert row-relative grapheme indices to global cell indices
           const rowGraphemes = paneState.rowGraphemes.get(rowId);
           if (rowGraphemes) {
-            const rowStart = y * delta.cols;
             for (const [colIndex, cps] of rowGraphemes) {
               graphemes.set(rowStart + colIndex, cps);
+            }
+          }
+
+          // Convert row-relative hyperlink indices to global cell indices
+          const rowHyperlinks = paneState.rowHyperlinks.get(rowId);
+          if (rowHyperlinks) {
+            for (const [colIndex, url] of rowHyperlinks) {
+              hyperlinks.set(rowStart + colIndex, url);
             }
           }
 
@@ -1064,10 +1108,11 @@ export class TerminalConnection {
         });
       }
     }
-    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty, ${graphemes.size} graphemes`);
+    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks`);
 
-    // Update last graphemes for future merging
+    // Update last graphemes and hyperlinks for future merging
     paneState.lastGraphemes = graphemes;
+    paneState.lastHyperlinks = hyperlinks;
 
     // Build merged snapshot
     const snapshot: TerminalSnapshot = {
@@ -1091,6 +1136,7 @@ export class TerminalConnection {
       styles,
       rowIds,
       graphemes,
+      hyperlinks,
       selection: delta.selection,
     };
 

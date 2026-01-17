@@ -66,6 +66,7 @@ function createMockSnapshot(overrides: Partial<TerminalSnapshot> & { paneId: num
     styles: overrides.styles ?? new Map(),
     rowIds: overrides.rowIds ?? [],
     graphemes: overrides.graphemes ?? new Map(),
+    hyperlinks: overrides.hyperlinks ?? new Map(),
   };
 }
 

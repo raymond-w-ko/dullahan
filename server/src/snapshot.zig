@@ -241,12 +241,14 @@ const CellsAndStyles = struct {
     style_bytes: []u8,
     row_ids: []u64, // Stable row IDs for delta sync
     grapheme_bytes: []u8, // Grapheme cluster data for multi-codepoint characters
+    hyperlink_bytes: []u8, // Hyperlink data for OSC 8 links
 
     pub fn deinit(self: *CellsAndStyles, allocator: std.mem.Allocator) void {
         allocator.free(self.cell_bytes);
         allocator.free(self.style_bytes);
         allocator.free(self.row_ids);
         allocator.free(self.grapheme_bytes);
+        allocator.free(self.hyperlink_bytes);
     }
 };
 
@@ -277,6 +279,15 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
     // Reserve 4 bytes for the count (will fill in later)
     try grapheme_list.appendNTimes(allocator, 0, 4);
+
+    // Collect hyperlink data for cells with OSC 8 links
+    // Format: [count: u32 LE] [cell_index: u32 LE, url_len: u16 LE, url: url_len bytes UTF-8]...
+    var hyperlink_list: std.ArrayListUnmanaged(u8) = .{};
+    defer hyperlink_list.deinit(allocator);
+    var hyperlink_count: u32 = 0;
+
+    // Reserve 4 bytes for the count (will fill in later)
+    try hyperlink_list.appendNTimes(allocator, 0, 4);
 
     // Get the pages from the terminal
     const pages = &pane.terminal.screens.active.pages;
@@ -344,6 +355,32 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
                 }
             }
 
+            // Check for hyperlinks (OSC 8)
+            if (cell.hyperlink) {
+                if (page.lookupHyperlink(&cell)) |hyperlink_id| {
+                    const entry = page.hyperlink_set.get(page.memory, hyperlink_id);
+                    const uri = entry.uri.slice(page.memory);
+                    if (uri.len > 0 and uri.len <= 65535) {
+                        // Write: cell_index (u32 LE), url_len (u16 LE), url bytes
+                        // Cell index (little-endian u32)
+                        try hyperlink_list.append(allocator, @truncate(cell_index & 0xFF));
+                        try hyperlink_list.append(allocator, @truncate((cell_index >> 8) & 0xFF));
+                        try hyperlink_list.append(allocator, @truncate((cell_index >> 16) & 0xFF));
+                        try hyperlink_list.append(allocator, @truncate((cell_index >> 24) & 0xFF));
+
+                        // URL length (little-endian u16)
+                        const url_len: u16 = @intCast(uri.len);
+                        try hyperlink_list.append(allocator, @truncate(url_len & 0xFF));
+                        try hyperlink_list.append(allocator, @truncate((url_len >> 8) & 0xFF));
+
+                        // URL bytes
+                        try hyperlink_list.appendSlice(allocator, uri);
+
+                        hyperlink_count += 1;
+                    }
+                }
+            }
+
             cell_index += 1;
         }
 
@@ -362,6 +399,12 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     grapheme_list.items[1] = @truncate((grapheme_count >> 8) & 0xFF);
     grapheme_list.items[2] = @truncate((grapheme_count >> 16) & 0xFF);
     grapheme_list.items[3] = @truncate((grapheme_count >> 24) & 0xFF);
+
+    // Fill in the hyperlink count at the start (little-endian u32)
+    hyperlink_list.items[0] = @truncate(hyperlink_count & 0xFF);
+    hyperlink_list.items[1] = @truncate((hyperlink_count >> 8) & 0xFF);
+    hyperlink_list.items[2] = @truncate((hyperlink_count >> 16) & 0xFF);
+    hyperlink_list.items[3] = @truncate((hyperlink_count >> 24) & 0xFF);
 
     // Now build the style table from collected styles
     // Format: [count: u16] [id: u16, style: 14 bytes] ...
@@ -393,11 +436,15 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     // Convert grapheme list to owned slice
     const grapheme_bytes = try grapheme_list.toOwnedSlice(allocator);
 
+    // Convert hyperlink list to owned slice
+    const hyperlink_bytes = try hyperlink_list.toOwnedSlice(allocator);
+
     return .{
         .cell_bytes = cell_bytes,
         .style_bytes = style_bytes,
         .row_ids = row_ids,
         .grapheme_bytes = grapheme_bytes,
+        .hyperlink_bytes = hyperlink_bytes,
     };
 }
 
@@ -532,6 +579,9 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
 
     // Grapheme data for multi-codepoint characters (emoji, combining marks, etc.)
     try payload.mapPut("graphemes", try msgpack.Payload.binToPayload(cells_and_styles.grapheme_bytes, allocator));
+
+    // Hyperlink data for OSC 8 links
+    try payload.mapPut("hyperlinks", try msgpack.Payload.binToPayload(cells_and_styles.hyperlink_bytes, allocator));
 
     // Row IDs for delta sync (as binary packed u64 array, little-endian)
     const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
@@ -929,6 +979,14 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         // Reserve 4 bytes for the count (will fill in later)
         try row_grapheme_list.appendNTimes(allocator, 0, 4);
 
+        // Collect hyperlinks for this row (row-relative indices: 0 to cols-1)
+        var row_hyperlink_list: std.ArrayListUnmanaged(u8) = .{};
+        defer row_hyperlink_list.deinit(allocator);
+        var row_hyperlink_count: u32 = 0;
+
+        // Reserve 4 bytes for the count (will fill in later)
+        try row_hyperlink_list.appendNTimes(allocator, 0, 4);
+
         // Copy actual cells
         for (cells, 0..) |cell, i| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
@@ -967,6 +1025,33 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
                     }
                 }
             }
+
+            // Collect hyperlinks (row-relative column index)
+            if (cell.hyperlink) {
+                if (page.lookupHyperlink(&cell)) |hyperlink_id| {
+                    const entry = page.hyperlink_set.get(page.memory, hyperlink_id);
+                    const uri = entry.uri.slice(page.memory);
+                    if (uri.len > 0 and uri.len <= 65535) {
+                        const col_index: u32 = @intCast(i);
+
+                        // Write: cell_index (u32 LE), url_len (u16 LE), url bytes
+                        try row_hyperlink_list.append(allocator, @truncate(col_index & 0xFF));
+                        try row_hyperlink_list.append(allocator, @truncate((col_index >> 8) & 0xFF));
+                        try row_hyperlink_list.append(allocator, @truncate((col_index >> 16) & 0xFF));
+                        try row_hyperlink_list.append(allocator, @truncate((col_index >> 24) & 0xFF));
+
+                        // URL length (little-endian u16)
+                        const url_len: u16 = @intCast(uri.len);
+                        try row_hyperlink_list.append(allocator, @truncate(url_len & 0xFF));
+                        try row_hyperlink_list.append(allocator, @truncate((url_len >> 8) & 0xFF));
+
+                        // URL bytes
+                        try row_hyperlink_list.appendSlice(allocator, uri);
+
+                        row_hyperlink_count += 1;
+                    }
+                }
+            }
         }
 
         // Fill in the grapheme count at the start (little-endian u32)
@@ -974,6 +1059,12 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         row_grapheme_list.items[1] = @truncate((row_grapheme_count >> 8) & 0xFF);
         row_grapheme_list.items[2] = @truncate((row_grapheme_count >> 16) & 0xFF);
         row_grapheme_list.items[3] = @truncate((row_grapheme_count >> 24) & 0xFF);
+
+        // Fill in the hyperlink count at the start (little-endian u32)
+        row_hyperlink_list.items[0] = @truncate(row_hyperlink_count & 0xFF);
+        row_hyperlink_list.items[1] = @truncate((row_hyperlink_count >> 8) & 0xFF);
+        row_hyperlink_list.items[2] = @truncate((row_hyperlink_count >> 16) & 0xFF);
+        row_hyperlink_list.items[3] = @truncate((row_hyperlink_count >> 24) & 0xFF);
 
         // Pad remaining columns with zeros (empty cells)
         if (cells.len < pane.cols) {
@@ -986,6 +1077,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         // Add graphemes if any were found
         if (row_grapheme_count > 0) {
             try row_map.mapPut("graphemes", try msgpack.Payload.binToPayload(row_grapheme_list.items, allocator));
+        }
+
+        // Add hyperlinks if any were found
+        if (row_hyperlink_count > 0) {
+            try row_map.mapPut("hyperlinks", try msgpack.Payload.binToPayload(row_hyperlink_list.items, allocator));
         }
 
         try row_payloads.append(allocator, row_map);

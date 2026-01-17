@@ -205,6 +205,68 @@ export function encodeCells(cells: Cell[]): ArrayBuffer {
 /** Grapheme table: maps cell index to additional codepoints */
 export type GraphemeTable = Map<number, number[]>;
 
+/** Hyperlink table: maps cell index to URL string */
+export type HyperlinkTable = Map<number, string>;
+
+/**
+ * Decode hyperlink table from binary format.
+ *
+ * Binary format:
+ * [count: u32 LE]
+ * For each entry:
+ *   [cell_index: u32 LE]
+ *   [url_len: u16 LE]
+ *   [url: url_len bytes UTF-8]
+ *
+ * @param data - The binary hyperlink data
+ * @returns Map from cell index to URL string
+ */
+export function decodeHyperlinks(data: Uint8Array): HyperlinkTable {
+  const hyperlinks: HyperlinkTable = new Map();
+
+  if (!data || data.length < 4) {
+    return hyperlinks;
+  }
+
+  // Read count (u32 LE)
+  const count =
+    (data[0] ?? 0) |
+    ((data[1] ?? 0) << 8) |
+    ((data[2] ?? 0) << 16) |
+    ((data[3] ?? 0) << 24);
+
+  let offset = 4;
+  for (let i = 0; i < count && offset + 6 <= data.length; i++) {
+    // Read cell index (u32 LE)
+    const cellIndex =
+      (data[offset] ?? 0) |
+      ((data[offset + 1] ?? 0) << 8) |
+      ((data[offset + 2] ?? 0) << 16) |
+      ((data[offset + 3] ?? 0) << 24);
+    offset += 4;
+
+    // Read URL length (u16 LE)
+    const urlLen = (data[offset] ?? 0) | ((data[offset + 1] ?? 0) << 8);
+    offset += 2;
+
+    // Bounds check for URL
+    if (offset + urlLen > data.length) {
+      break;
+    }
+
+    // Read URL bytes and decode as UTF-8
+    const urlBytes = data.slice(offset, offset + urlLen);
+    const url = new TextDecoder().decode(urlBytes);
+    offset += urlLen;
+
+    if (url.length > 0) {
+      hyperlinks.set(cellIndex, url);
+    }
+  }
+
+  return hyperlinks;
+}
+
 /**
  * Decode grapheme table from binary format.
  *

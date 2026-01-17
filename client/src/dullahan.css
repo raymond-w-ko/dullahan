@@ -727,6 +727,21 @@ html, body {
 }
 
 /* ==========================================================================
+   Hyperlinks (OSC 8)
+   ========================================================================== */
+
+.terminal a.hyperlink {
+  text-decoration: underline dotted var(--c4);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.terminal a.hyperlink:hover {
+  text-decoration-style: solid;
+}
+
+/* ==========================================================================
    Settings Modal - Liquid Glass Effect
    ========================================================================== */
 

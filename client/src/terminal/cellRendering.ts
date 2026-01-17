@@ -3,7 +3,7 @@
 
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag } from "../../../protocol/schema/style";
-import type { Cell } from "../../../protocol/schema/cell";
+import type { Cell, HyperlinkTable } from "../../../protocol/schema/cell";
 import type { Style, StyleTable, Color } from "../../../protocol/schema/style";
 import {
   normalizeSelectionBounds,
@@ -17,6 +17,7 @@ export interface StyledRun {
   style: Style;
   selected?: boolean; // True if this run is within selection
   bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
+  hyperlink?: string; // URL for OSC 8 hyperlinks
 }
 
 /**
@@ -106,13 +107,15 @@ export function isCellInSelection(
  * Convert cells to lines of styled runs.
  * If selection is provided, runs will be split at selection boundaries
  * and have their `selected` property set accordingly.
+ * If hyperlinks is provided, runs will be split at hyperlink boundaries.
  */
 export function cellsToRuns(
   cells: Cell[],
   styles: StyleTable,
   cols: number,
   rows: number,
-  selection?: SelectionBounds
+  selection?: SelectionBounds,
+  hyperlinks?: HyperlinkTable
 ): StyledRun[][] {
   const lines: StyledRun[][] = [];
 
@@ -134,18 +137,21 @@ export function cellsToRuns(
       const selected = selection ? isCellInSelection(x, y, selection) : false;
       // Extract content-based bg color (for bg-only cells like htop headers)
       const bgOverride = cell ? getCellContentBgColor(cell) : undefined;
+      // Get hyperlink URL if this cell is part of a hyperlink
+      const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
 
-      // Start a new run if style, selection, or bgOverride changes
+      // Start a new run if style, selection, bgOverride, or hyperlink changes
       if (
         currentRun &&
         currentRun.styleId === styleId &&
         currentRun.selected === selected &&
-        colorsEqual(currentRun.bgOverride, bgOverride)
+        colorsEqual(currentRun.bgOverride, bgOverride) &&
+        currentRun.hyperlink === hyperlink
       ) {
         currentRun.text += char;
       } else {
         const style = getStyle(styles, styleId);
-        currentRun = { text: char, styleId, style, selected, bgOverride };
+        currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
         runs.push(currentRun);
       }
     }

@@ -279,8 +279,8 @@ export function TerminalView({
     imeRef.current?.focus();
   }, []);
 
-  // Convert cells to styled runs (with selection highlighting if active)
-  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection);
+  // Convert cells to styled runs (with selection highlighting and hyperlinks if active)
+  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection, snapshot.hyperlinks);
 
   // Build cursor config object
   const cursorConfig: CursorConfig = {
