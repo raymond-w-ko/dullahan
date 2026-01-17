@@ -1842,6 +1842,17 @@ pub const EventLoop = struct {
                     return;
                 }
 
+                // Sending to app - clear any existing terminal selection on mousedown
+                // This prevents "fighting" between terminal selection and app selection
+                const is_press = std.mem.eql(u8, mouse_msg.state, "down");
+                if (is_press and pane.hasSelection()) {
+                    pane.clearSelection();
+                    log.debug("Cleared terminal selection (app mouse mode active)", .{});
+                    self.broadcastPaneUpdate(pane) catch |e| {
+                        logRecoverable("broadcast selection clear for app", e);
+                    };
+                }
+
                 // Check if this event type should be reported
                 const is_motion = std.mem.eql(u8, mouse_msg.state, "move");
                 if (is_motion and !mouse_events.motion()) {

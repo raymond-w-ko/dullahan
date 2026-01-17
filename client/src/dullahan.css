@@ -484,6 +484,9 @@ html, body {
   flex: 1 1 0; /* Don't grow based on content, shrink to fit */
   min-height: 0;
   max-height: 100%; /* Constrain to parent */
+  /* Disable browser native selection - we use server-side selection (.selected class) */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .terminal:focus-visible {
