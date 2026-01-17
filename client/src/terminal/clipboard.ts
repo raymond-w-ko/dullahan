@@ -147,6 +147,30 @@ export function getTerminalSelectionText(
   cols: number,
   selection: SelectionBounds
 ): string {
+  // Validate input
+  if (!cells.length || cols <= 0) {
+    return "";
+  }
+
+  const rows = Math.ceil(cells.length / cols);
+
+  // Validate selection bounds are within terminal dimensions
+  if (
+    selection.startX < 0 ||
+    selection.startY < 0 ||
+    selection.endX < 0 ||
+    selection.endY < 0 ||
+    selection.startX >= cols ||
+    selection.endX >= cols ||
+    selection.startY >= rows ||
+    selection.endY >= rows
+  ) {
+    debug.warn(
+      `Selection bounds out of range: (${selection.startX},${selection.startY})-(${selection.endX},${selection.endY}) for ${cols}x${rows} terminal`
+    );
+    return "";
+  }
+
   // Normalize so start is before end
   let startX = selection.startX;
   let startY = selection.startY;
