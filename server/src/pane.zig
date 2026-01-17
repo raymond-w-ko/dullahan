@@ -753,16 +753,35 @@ pub const Pane = struct {
         }
     }
 
+    /// Maximum allowed clipboard response size (100KB)
+    const max_clipboard_response_size: usize = 100_000;
+
     /// Send OSC 52 clipboard response back to the terminal.
     /// Called when the client responds to a GET request.
     /// kind: 'c', 's', or 'p'
     /// data: base64-encoded clipboard contents
     pub fn sendClipboardResponse(self: *Pane, kind: u8, data: []const u8) void {
         // Format: ESC ] 52 ; <kind> ; <base64-data> ESC \
-        // Maximum clipboard size is 64KB base64 ≈ 87KB encoded
-        var buf: [100000]u8 = undefined;
-        const response = std.fmt.bufPrint(&buf, "\x1b]52;{c};{s}\x1b\\", .{ kind, data }) catch |e| {
-            log.warn("OSC 52 response too large: {any}", .{e});
+        // Size: ESC ] 52 ; = 5, kind = 1, ; = 1, data = data.len, ESC \ = 2 = 9 + data.len
+        const required_size: usize = 9 + data.len;
+
+        if (required_size > max_clipboard_response_size) {
+            log.warn("OSC 52 response too large: {d} bytes (max {d})", .{
+                required_size,
+                max_clipboard_response_size,
+            });
+            return;
+        }
+
+        // Use heap allocation instead of stack to avoid stack overflow
+        const buf = self.allocator.alloc(u8, required_size) catch |e| {
+            log.warn("Failed to allocate OSC 52 response buffer: {any}", .{e});
+            return;
+        };
+        defer self.allocator.free(buf);
+
+        const response = std.fmt.bufPrint(buf, "\x1b]52;{c};{s}\x1b\\", .{ kind, data }) catch |e| {
+            log.warn("OSC 52 response format error: {any}", .{e});
             return;
         };
 
