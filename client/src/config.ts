@@ -41,7 +41,7 @@ export interface ConfigSchema {
   selectionClearOnCopy: boolean;
 
   // Mouse
-  mouseMove: boolean;  // Send mouse move events (noisy, disable for WebSocket debugging)
+  mouseMove: boolean;  // Send mouse move events (filtered to cell-level changes)
 
   // Bell (matches ghostty's bell-features)
   // Comma-separated list: "audio", "attention", "title"
@@ -82,7 +82,7 @@ export const DEFAULTS: ConfigSchema = {
   selectionClearOnCopy: true,
 
   // Mouse
-  mouseMove: false,  // Disabled by default to reduce WebSocket noise
+  mouseMove: true,  // Send mouse move events (already filtered to cell-level changes only)
 
   // Bell (all enabled by default, matches ghostty)
   bellFeatures: 'audio,attention,title',
