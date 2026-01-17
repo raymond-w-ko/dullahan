@@ -25,8 +25,8 @@ function readSnappyLength(data: Uint8Array): number {
   }
   throw new Error("Invalid varint in Snappy data");
 }
-import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
-import type { Cell, CellContent, WideValue } from "../../../protocol/schema/cell";
+import { cellToChar, ContentTag, Wide, decodeGraphemes } from "../../../protocol/schema/cell";
+import type { Cell, CellContent, WideValue, GraphemeTable } from "../../../protocol/schema/cell";
 import { ColorTag, Underline, decodeColor } from "../../../protocol/schema/style";
 import { calculateTerminalSize } from "./dimensions";
 import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
@@ -63,6 +63,7 @@ export type {
   DeltaUpdate,
   ScrollbackInfo,
   SelectionBounds,
+  GraphemeTable,
 };
 
 // ============================================================================
@@ -150,6 +151,7 @@ export interface TerminalSnapshot {
   cells: Cell[]; // Decoded cell data
   styles: StyleTable; // Decoded style table
   rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
+  graphemes: GraphemeTable; // Grapheme data for multi-codepoint characters
   selection?: SelectionBounds; // Current selection (if any)
 }
 
@@ -158,10 +160,12 @@ interface PaneState {
   generation: number;
   minRowId: bigint;
   rowCache: Map<bigint, Cell[]>;
+  rowGraphemes: Map<bigint, GraphemeTable>; // Graphemes per row (row-relative indices)
   cols: number;
   rows: number;
   lastStyles: StyleTable | null;
   lastRowIds: bigint[] | null;
+  lastGraphemes: GraphemeTable | null; // Last snapshot's graphemes (global indices)
   deltaCount: number;
   resyncCount: number;
 }
@@ -266,10 +270,12 @@ export class TerminalConnection {
         generation: 0,
         minRowId: 0n,
         rowCache: new Map(),
+        rowGraphemes: new Map(),
         cols: 80,
         rows: 24,
         lastStyles: null,
         lastRowIds: null,
+        lastGraphemes: null,
         deltaCount: 0,
         resyncCount: 0,
       };
@@ -391,10 +397,11 @@ export class TerminalConnection {
         debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
-        // Decode cells, styles, and row IDs from raw bytes
+        // Decode cells, styles, row IDs, and graphemes from raw bytes
         const cells = this.decodeCellsFromBytes(msg.cells);
         const styles = this.decodeStyleTableFromBytes(msg.styles);
         const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
+        const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
         const snapshot: TerminalSnapshot = {
           paneId,
           gen: msg.gen,
@@ -412,6 +419,7 @@ export class TerminalConnection {
           cells,
           styles,
           rowIds,
+          graphemes,
           selection: msg.selection,
         };
 
@@ -421,10 +429,11 @@ export class TerminalConnection {
         paneState.rows = msg.rows;
         paneState.resyncCount++;
 
-        // Rebuild row cache from snapshot
+        // Rebuild row cache and graphemes from snapshot
         // NOTE: rowId=0 IS valid (page serial 0, row index 0)
         // Only undefined means the row wasn't sent
         paneState.rowCache.clear();
+        paneState.rowGraphemes.clear();
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
@@ -435,6 +444,19 @@ export class TerminalConnection {
             if (minSeen < 0n || rowId < minSeen) {
               minSeen = rowId;
             }
+
+            // Extract per-row graphemes (convert global cell indices to row-relative)
+            const rowGraphemes: GraphemeTable = new Map();
+            const rowStart = y * msg.cols;
+            const rowEnd = rowStart + msg.cols;
+            for (const [cellIndex, cps] of graphemes) {
+              if (cellIndex >= rowStart && cellIndex < rowEnd) {
+                rowGraphemes.set(cellIndex - rowStart, cps);
+              }
+            }
+            if (rowGraphemes.size > 0) {
+              paneState.rowGraphemes.set(rowId, rowGraphemes);
+            }
           }
         }
         if (minSeen >= 0n) {
@@ -444,8 +466,9 @@ export class TerminalConnection {
         // Save for delta merging
         paneState.lastStyles = styles;
         paneState.lastRowIds = rowIds;
+        paneState.lastGraphemes = graphemes;
 
-        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, rowIds:`, rowIds.map(String));
+        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, ${graphemes.size} graphemes, rowIds:`, rowIds.map(String));
 
         this.emit("snapshot", snapshot);
 
@@ -936,12 +959,25 @@ export class TerminalConnection {
     paneState.cols = delta.cols;
     paneState.rows = delta.rows;
 
-    // Apply each dirty row to cache
+    // Apply each dirty row to cache (including graphemes)
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
       const cells = this.decodeCellsFromBytes(row.cells);
 
       paneState.rowCache.set(rowId, cells);
+
+      // Decode and cache graphemes for this row (row-relative indices)
+      if (row.graphemes) {
+        const rowGraphemes = decodeGraphemes(row.graphemes);
+        if (rowGraphemes.size > 0) {
+          paneState.rowGraphemes.set(rowId, rowGraphemes);
+        } else {
+          paneState.rowGraphemes.delete(rowId);
+        }
+      } else {
+        // No graphemes in this row, clear any cached graphemes
+        paneState.rowGraphemes.delete(rowId);
+      }
 
       // Update min row ID tracking
       if (paneState.minRowId === 0n || rowId < paneState.minRowId) {
@@ -986,10 +1022,11 @@ export class TerminalConnection {
       debug.log(`Pane ${paneId}: Cache has:`, [...paneState.rowCache.keys()].map(String));
     }
 
-    // Build cells array from cache for current viewport
+    // Build cells array and grapheme table from cache for current viewport
     // This requires knowing which row IDs are in the viewport
     // NOTE: rowId=0 IS valid, only undefined means "no row"
     const cells: Cell[] = [];
+    const graphemes: GraphemeTable = new Map();
     let fromCache = 0;
     let filled = 0;
     for (let y = 0; y < delta.rows; y++) {
@@ -1001,6 +1038,16 @@ export class TerminalConnection {
             debug.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
           }
           cells.push(...rowCells);
+
+          // Convert row-relative grapheme indices to global cell indices
+          const rowGraphemes = paneState.rowGraphemes.get(rowId);
+          if (rowGraphemes) {
+            const rowStart = y * delta.cols;
+            for (const [colIndex, cps] of rowGraphemes) {
+              graphemes.set(rowStart + colIndex, cps);
+            }
+          }
+
           fromCache++;
           continue;
         }
@@ -1017,7 +1064,10 @@ export class TerminalConnection {
         });
       }
     }
-    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty`);
+    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty, ${graphemes.size} graphemes`);
+
+    // Update last graphemes for future merging
+    paneState.lastGraphemes = graphemes;
 
     // Build merged snapshot
     const snapshot: TerminalSnapshot = {
@@ -1040,6 +1090,7 @@ export class TerminalConnection {
       cells,
       styles,
       rowIds,
+      graphemes,
       selection: delta.selection,
     };
 
@@ -1080,15 +1131,24 @@ export class TerminalConnection {
 
 /**
  * Convert cells to lines of text (for simple rendering).
+ * @param cells - Array of cells
+ * @param cols - Number of columns
+ * @param rows - Number of rows
+ * @param graphemes - Optional grapheme table for multi-codepoint characters
  */
-export function cellsToLines(cells: Cell[], cols: number, rows: number): string[] {
+export function cellsToLines(
+  cells: Cell[],
+  cols: number,
+  rows: number,
+  graphemes?: GraphemeTable
+): string[] {
   const lines: string[] = [];
   for (let y = 0; y < rows; y++) {
     let line = "";
     for (let x = 0; x < cols; x++) {
       const idx = y * cols + x;
       const cell = cells[idx];
-      line += cell ? cellToChar(cell) : " ";
+      line += cell ? cellToChar(cell, graphemes, idx) : " ";
     }
     lines.push(line.trimEnd());
   }

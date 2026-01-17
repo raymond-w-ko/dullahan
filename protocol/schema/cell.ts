@@ -202,16 +202,102 @@ export function encodeCells(cells: Cell[]): ArrayBuffer {
   return buffer;
 }
 
+/** Grapheme table: maps cell index to additional codepoints */
+export type GraphemeTable = Map<number, number[]>;
+
+/**
+ * Decode grapheme table from binary format.
+ *
+ * Binary format:
+ * [count: u32 LE]
+ * For each entry:
+ *   [cell_index: u32 LE]
+ *   [num_codepoints: u8]
+ *   [codepoints: 3 bytes LE per u21]...
+ *
+ * @param data - The binary grapheme data
+ * @returns Map from cell index to array of additional codepoints
+ */
+export function decodeGraphemes(data: Uint8Array): GraphemeTable {
+  const graphemes: GraphemeTable = new Map();
+
+  if (!data || data.length < 4) {
+    return graphemes;
+  }
+
+  // Read count (u32 LE)
+  const count =
+    (data[0] ?? 0) |
+    ((data[1] ?? 0) << 8) |
+    ((data[2] ?? 0) << 16) |
+    ((data[3] ?? 0) << 24);
+
+  let offset = 4;
+  for (let i = 0; i < count && offset + 5 <= data.length; i++) {
+    // Read cell index (u32 LE)
+    const cellIndex =
+      (data[offset] ?? 0) |
+      ((data[offset + 1] ?? 0) << 8) |
+      ((data[offset + 2] ?? 0) << 16) |
+      ((data[offset + 3] ?? 0) << 24);
+    offset += 4;
+
+    // Read number of codepoints (u8)
+    const numCodepoints = data[offset] ?? 0;
+    offset += 1;
+
+    // Read codepoints (3 bytes each, LE)
+    const codepoints: number[] = [];
+    for (let j = 0; j < numCodepoints && offset + 3 <= data.length; j++) {
+      const cp =
+        (data[offset] ?? 0) |
+        ((data[offset + 1] ?? 0) << 8) |
+        ((data[offset + 2] ?? 0) << 16);
+      codepoints.push(cp);
+      offset += 3;
+    }
+
+    if (codepoints.length > 0) {
+      graphemes.set(cellIndex, codepoints);
+    }
+  }
+
+  return graphemes;
+}
+
 /**
  * Get the character for a cell, or empty string if no text.
+ * If grapheme data is provided, combines the base codepoint with additional codepoints.
+ *
+ * @param cell - The cell to get the character from
+ * @param graphemes - Optional grapheme table (maps cell index to additional codepoints)
+ * @param cellIndex - Cell index for grapheme lookup (required if graphemes is provided)
  */
-export function cellToChar(cell: Cell): string {
+export function cellToChar(
+  cell: Cell,
+  graphemes?: GraphemeTable,
+  cellIndex?: number
+): string {
   if (
     cell.content.tag === ContentTag.CODEPOINT ||
     cell.content.tag === ContentTag.CODEPOINT_GRAPHEME
   ) {
     const cp = cell.content.codepoint;
     if (cp === 0) return " ";
+
+    // If this is a grapheme cell and we have grapheme data, combine codepoints
+    if (
+      cell.content.tag === ContentTag.CODEPOINT_GRAPHEME &&
+      graphemes &&
+      cellIndex !== undefined
+    ) {
+      const extraCps = graphemes.get(cellIndex);
+      if (extraCps && extraCps.length > 0) {
+        // Combine base codepoint with additional codepoints
+        return String.fromCodePoint(cp, ...extraCps);
+      }
+    }
+
     return String.fromCodePoint(cp);
   }
   return " ";

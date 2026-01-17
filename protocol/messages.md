@@ -57,6 +57,7 @@ Sent on initial connection and when client is too far behind for delta.
   cells: Uint8Array,     // Raw cell bytes (cols × rows × 8)
   styles: Uint8Array,    // Style table
   rowIds: Uint8Array,    // Packed u64 row IDs (rows × 8 bytes)
+  graphemes?: Uint8Array, // Grapheme data (see format below)
 }
 ```
 
@@ -77,6 +78,7 @@ Sent in response to sync request when client has recent state.
   dirtyRows: Array<{
     id: number,          // Stable row ID
     cells: Uint8Array,   // Cell bytes for this row
+    graphemes?: Uint8Array, // Grapheme data (row-relative indices)
   }>,
 }
 ```
@@ -210,6 +212,34 @@ bits 46-63: padding
 ```
 
 Color tags: 0=none, 1=palette, 2=RGB
+
+## Grapheme Binary Format
+
+Grapheme data encodes additional codepoints for cells marked with `content_tag=1`
+(CODEPOINT_GRAPHEME). Used for emoji (👨‍👩‍👧‍👦), combining marks (é̈), etc.
+
+```
+[count: u32 LE]              // Number of grapheme entries
+For each entry:
+  [cell_index: u32 LE]       // Cell position (y*cols+x for snapshot, x for delta row)
+  [num_codepoints: u8]       // Additional codepoint count (1-255)
+  [codepoints: 3 bytes LE × num]  // Each u21 as 3 bytes, little-endian
+```
+
+**Example:** Thumbs up with skin tone (👍🏻) at cell (5, 3) in 80-col terminal:
+- Base codepoint U+1F44D is in the cell's content field
+- Extra codepoint U+1F3FB (skin tone) is in the grapheme table:
+
+```
+01 00 00 00        // count = 1
+F5 00 00 00        // index = 245 (3*80+5)
+01                 // 1 extra codepoint
+FB F3 01           // U+1F3FB (little-endian: 0x01F3FB)
+```
+
+**Snapshot vs Delta:**
+- Snapshot: cell_index is global (y × cols + x)
+- Delta: cell_index is row-relative (x only, 0 to cols-1)
 
 ## Row ID Format
 

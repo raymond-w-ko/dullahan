@@ -259,6 +259,7 @@ export interface BinarySnapshot {
   cells: Uint8Array; // Raw cell bytes
   styles: Uint8Array; // Raw style bytes
   rowIds: Uint8Array; // Packed u64 row IDs (little-endian)
+  graphemes?: Uint8Array; // Grapheme cluster data for multi-codepoint characters
   selection?: SelectionBounds; // Current selection (if any)
 }
 
@@ -279,6 +280,7 @@ export interface BinaryDelta {
   dirtyRows: Array<{
     id: number; // Row ID (as number, fits in 53 bits)
     cells: Uint8Array; // Raw cell bytes for this row
+    graphemes?: Uint8Array; // Grapheme data for this row (row-relative indices)
   }>;
   rowIds: Uint8Array; // Packed u64 row IDs for viewport (little-endian)
   styles: Uint8Array; // Raw style bytes for dirty rows

@@ -240,15 +240,17 @@ const CellsAndStyles = struct {
     cell_bytes: []u8,
     style_bytes: []u8,
     row_ids: []u64, // Stable row IDs for delta sync
+    grapheme_bytes: []u8, // Grapheme cluster data for multi-codepoint characters
 
     pub fn deinit(self: *CellsAndStyles, allocator: std.mem.Allocator) void {
         allocator.free(self.cell_bytes);
         allocator.free(self.style_bytes);
         allocator.free(self.row_ids);
+        allocator.free(self.grapheme_bytes);
     }
 };
 
-/// Get raw cell bytes, style table, and row IDs for the visible screen area
+/// Get raw cell bytes, style table, row IDs, and grapheme data for the visible screen area
 fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndStyles {
     const cols = pane.cols;
     const rows = pane.rows;
@@ -267,11 +269,21 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
     defer styles_map.deinit();
 
+    // Collect grapheme data for cells with multi-codepoint characters
+    // We use a dynamic list since graphemes are typically sparse
+    var grapheme_list: std.ArrayListUnmanaged(u8) = .{};
+    defer grapheme_list.deinit(allocator);
+    var grapheme_count: u32 = 0;
+
+    // Reserve 4 bytes for the count (will fill in later)
+    try grapheme_list.appendNTimes(allocator, 0, 4);
+
     // Get the pages from the terminal
     const pages = &pane.terminal.screens.active.pages;
 
     // Iterate over each row in the visible screen
     var byte_offset: usize = 0;
+    var cell_index: u32 = 0;
     var y: usize = 0;
     while (y < rows) : (y += 1) {
         // Get a pin at the start of this row (viewport-relative coordinates)
@@ -280,6 +292,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
             @memset(cell_bytes[byte_offset .. byte_offset + cols * 8], 0);
             row_ids[y] = 0; // Invalid row_id for non-existent rows
             byte_offset += cols * 8;
+            cell_index += @intCast(cols);
             continue;
         };
 
@@ -289,10 +302,10 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         // Get cells for this row
         const cells = row_pin.cells(.all);
 
-        // Get page for style lookups (must use THIS row's page, not first row's)
+        // Get page for style and grapheme lookups (must use THIS row's page)
         const page = &row_pin.node.data;
 
-        // Copy each cell as raw bytes and collect styles
+        // Copy each cell as raw bytes and collect styles and graphemes
         for (cells) |cell| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
             @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
@@ -304,6 +317,34 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
                 const encoded = encodeStyle(style);
                 try styles_map.put(cell.style_id, encoded);
             }
+
+            // Check for grapheme clusters (additional codepoints beyond the first)
+            if (cell.hasGrapheme()) {
+                if (page.lookupGrapheme(&cell)) |extra_cps| {
+                    if (extra_cps.len > 0 and extra_cps.len <= 255) {
+                        // Write: cell_index (u32 LE), num_codepoints (u8), codepoints (3 bytes each)
+                        // Cell index (little-endian u32)
+                        try grapheme_list.append(allocator, @truncate(cell_index & 0xFF));
+                        try grapheme_list.append(allocator, @truncate((cell_index >> 8) & 0xFF));
+                        try grapheme_list.append(allocator, @truncate((cell_index >> 16) & 0xFF));
+                        try grapheme_list.append(allocator, @truncate((cell_index >> 24) & 0xFF));
+
+                        // Number of extra codepoints (u8)
+                        try grapheme_list.append(allocator, @truncate(extra_cps.len));
+
+                        // Each codepoint as 3 bytes (u21 fits in 21 bits, we use 24 bits / 3 bytes LE)
+                        for (extra_cps) |cp| {
+                            try grapheme_list.append(allocator, @truncate(cp & 0xFF));
+                            try grapheme_list.append(allocator, @truncate((cp >> 8) & 0xFF));
+                            try grapheme_list.append(allocator, @truncate((cp >> 16) & 0xFF));
+                        }
+
+                        grapheme_count += 1;
+                    }
+                }
+            }
+
+            cell_index += 1;
         }
 
         // If row is shorter than expected cols, pad with zeros
@@ -312,8 +353,15 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
             const padding = (cols - cells_copied) * 8;
             @memset(cell_bytes[byte_offset .. byte_offset + padding], 0);
             byte_offset += padding;
+            cell_index += @intCast(cols - cells_copied);
         }
     }
+
+    // Fill in the grapheme count at the start (little-endian u32)
+    grapheme_list.items[0] = @truncate(grapheme_count & 0xFF);
+    grapheme_list.items[1] = @truncate((grapheme_count >> 8) & 0xFF);
+    grapheme_list.items[2] = @truncate((grapheme_count >> 16) & 0xFF);
+    grapheme_list.items[3] = @truncate((grapheme_count >> 24) & 0xFF);
 
     // Now build the style table from collected styles
     // Format: [count: u16] [id: u16, style: 14 bytes] ...
@@ -342,10 +390,14 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         style_offset += 14;
     }
 
+    // Convert grapheme list to owned slice
+    const grapheme_bytes = try grapheme_list.toOwnedSlice(allocator);
+
     return .{
         .cell_bytes = cell_bytes,
         .style_bytes = style_bytes,
         .row_ids = row_ids,
+        .grapheme_bytes = grapheme_bytes,
     };
 }
 
@@ -477,6 +529,9 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     // Raw binary cell data (no base64!)
     try payload.mapPut("cells", try msgpack.Payload.binToPayload(cells_and_styles.cell_bytes, allocator));
     try payload.mapPut("styles", try msgpack.Payload.binToPayload(cells_and_styles.style_bytes, allocator));
+
+    // Grapheme data for multi-codepoint characters (emoji, combining marks, etc.)
+    try payload.mapPut("graphemes", try msgpack.Payload.binToPayload(cells_and_styles.grapheme_bytes, allocator));
 
     // Row IDs for delta sync (as binary packed u64 array, little-endian)
     const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
@@ -853,7 +908,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     for (viewport_dirty.items) |item| {
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
 
-        // Get page for style lookups (must use THIS row's page)
+        // Get page for style and grapheme lookups (must use THIS row's page)
         const page = &pin.node.data;
 
         // Encode the row
@@ -866,6 +921,14 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         const cell_bytes = try allocator.alloc(u8, row_byte_size);
         defer allocator.free(cell_bytes);
 
+        // Collect graphemes for this row (row-relative indices: 0 to cols-1)
+        var row_grapheme_list: std.ArrayListUnmanaged(u8) = .{};
+        defer row_grapheme_list.deinit(allocator);
+        var row_grapheme_count: u32 = 0;
+
+        // Reserve 4 bytes for the count (will fill in later)
+        try row_grapheme_list.appendNTimes(allocator, 0, 4);
+
         // Copy actual cells
         for (cells, 0..) |cell, i| {
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
@@ -877,7 +940,40 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
                 const encoded = encodeStyle(style);
                 try styles_map.put(cell.style_id, encoded);
             }
+
+            // Collect graphemes (row-relative column index)
+            if (cell.hasGrapheme()) {
+                if (page.lookupGrapheme(&cell)) |extra_cps| {
+                    if (extra_cps.len > 0 and extra_cps.len <= 255) {
+                        const col_index: u32 = @intCast(i);
+
+                        // Write: cell_index (u32 LE), num_codepoints (u8), codepoints (3 bytes each)
+                        try row_grapheme_list.append(allocator, @truncate(col_index & 0xFF));
+                        try row_grapheme_list.append(allocator, @truncate((col_index >> 8) & 0xFF));
+                        try row_grapheme_list.append(allocator, @truncate((col_index >> 16) & 0xFF));
+                        try row_grapheme_list.append(allocator, @truncate((col_index >> 24) & 0xFF));
+
+                        // Number of extra codepoints (u8)
+                        try row_grapheme_list.append(allocator, @truncate(extra_cps.len));
+
+                        // Each codepoint as 3 bytes (u21 fits in 21 bits, we use 24 bits / 3 bytes LE)
+                        for (extra_cps) |cp| {
+                            try row_grapheme_list.append(allocator, @truncate(cp & 0xFF));
+                            try row_grapheme_list.append(allocator, @truncate((cp >> 8) & 0xFF));
+                            try row_grapheme_list.append(allocator, @truncate((cp >> 16) & 0xFF));
+                        }
+
+                        row_grapheme_count += 1;
+                    }
+                }
+            }
         }
+
+        // Fill in the grapheme count at the start (little-endian u32)
+        row_grapheme_list.items[0] = @truncate(row_grapheme_count & 0xFF);
+        row_grapheme_list.items[1] = @truncate((row_grapheme_count >> 8) & 0xFF);
+        row_grapheme_list.items[2] = @truncate((row_grapheme_count >> 16) & 0xFF);
+        row_grapheme_list.items[3] = @truncate((row_grapheme_count >> 24) & 0xFF);
 
         // Pad remaining columns with zeros (empty cells)
         if (cells.len < pane.cols) {
@@ -886,6 +982,12 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         }
 
         try row_map.mapPut("cells", try msgpack.Payload.binToPayload(cell_bytes, allocator));
+
+        // Add graphemes if any were found
+        if (row_grapheme_count > 0) {
+            try row_map.mapPut("graphemes", try msgpack.Payload.binToPayload(row_grapheme_list.items, allocator));
+        }
+
         try row_payloads.append(allocator, row_map);
     }
 

@@ -13,6 +13,7 @@ import {
   encodeCells,
   cellToChar,
   decodeCellsFromBase64,
+  decodeGraphemes,
 } from "./cell";
 
 describe("cell encoding/decoding", () => {
@@ -344,5 +345,139 @@ describe("CJK wide character handling", () => {
     expect(decoded[0].wide).toBe(Wide.WIDE);
     expect(decoded[1].wide).toBe(Wide.SPACER_TAIL);
     expect(cellToChar(decoded[0])).toBe("中");
+  });
+});
+
+describe("grapheme decoding", () => {
+  test("empty grapheme data", () => {
+    // Empty data should return empty map
+    const graphemes = decodeGraphemes(new Uint8Array([]));
+    expect(graphemes.size).toBe(0);
+
+    // Count of 0 should return empty map
+    const graphemes2 = decodeGraphemes(new Uint8Array([0, 0, 0, 0]));
+    expect(graphemes2.size).toBe(0);
+  });
+
+  test("single grapheme entry - thumbs up with skin tone", () => {
+    // Thumbs up 👍 (U+1F44D) with skin tone modifier U+1F3FB
+    // Binary format: [count: u32 LE] [cell_index: u32 LE, num_cps: u8, cps: 3 bytes LE each]
+    const data = new Uint8Array([
+      // count = 1
+      0x01, 0x00, 0x00, 0x00,
+      // cell_index = 5
+      0x05, 0x00, 0x00, 0x00,
+      // num_codepoints = 1
+      0x01,
+      // U+1F3FB (skin tone) = 0x01F3FB in little-endian 3 bytes
+      0xfb, 0xf3, 0x01,
+    ]);
+
+    const graphemes = decodeGraphemes(data);
+    expect(graphemes.size).toBe(1);
+    expect(graphemes.has(5)).toBe(true);
+    expect(graphemes.get(5)).toEqual([0x1f3fb]);
+  });
+
+  test("grapheme with multiple extra codepoints - family emoji", () => {
+    // Family emoji 👨‍👩‍👧‍👦 is: U+1F468 + ZWJ + U+1F469 + ZWJ + U+1F467 + ZWJ + U+1F466
+    // The base codepoint (U+1F468) is in the cell, extras are in grapheme table
+    // Extra codepoints: ZWJ (U+200D), U+1F469, ZWJ, U+1F467, ZWJ, U+1F466
+    const data = new Uint8Array([
+      // count = 1
+      0x01, 0x00, 0x00, 0x00,
+      // cell_index = 10
+      0x0a, 0x00, 0x00, 0x00,
+      // num_codepoints = 6
+      0x06,
+      // ZWJ U+200D
+      0x0d, 0x20, 0x00,
+      // U+1F469 (woman)
+      0x69, 0xf4, 0x01,
+      // ZWJ U+200D
+      0x0d, 0x20, 0x00,
+      // U+1F467 (girl)
+      0x67, 0xf4, 0x01,
+      // ZWJ U+200D
+      0x0d, 0x20, 0x00,
+      // U+1F466 (boy)
+      0x66, 0xf4, 0x01,
+    ]);
+
+    const graphemes = decodeGraphemes(data);
+    expect(graphemes.size).toBe(1);
+    expect(graphemes.has(10)).toBe(true);
+    const cps = graphemes.get(10);
+    expect(cps?.length).toBe(6);
+    expect(cps).toEqual([0x200d, 0x1f469, 0x200d, 0x1f467, 0x200d, 0x1f466]);
+  });
+
+  test("multiple grapheme entries", () => {
+    const data = new Uint8Array([
+      // count = 2
+      0x02, 0x00, 0x00, 0x00,
+      // First entry: cell_index = 0, 1 codepoint (skin tone)
+      0x00, 0x00, 0x00, 0x00,
+      0x01,
+      0xfb, 0xf3, 0x01, // U+1F3FB
+      // Second entry: cell_index = 20, 1 codepoint (combining acute)
+      0x14, 0x00, 0x00, 0x00,
+      0x01,
+      0x01, 0x03, 0x00, // U+0301 (combining acute accent)
+    ]);
+
+    const graphemes = decodeGraphemes(data);
+    expect(graphemes.size).toBe(2);
+    expect(graphemes.get(0)).toEqual([0x1f3fb]);
+    expect(graphemes.get(20)).toEqual([0x0301]);
+  });
+
+  test("cellToChar with grapheme data", () => {
+    // Create a cell with CODEPOINT_GRAPHEME tag
+    const cell: Cell = {
+      content: { tag: ContentTag.CODEPOINT_GRAPHEME, codepoint: 0x1f44d }, // 👍
+      styleId: 0,
+      wide: Wide.WIDE,
+      protected: false,
+      hyperlink: false,
+    };
+
+    // Grapheme table with skin tone modifier
+    const graphemes = new Map<number, number[]>();
+    graphemes.set(0, [0x1f3fb]); // Skin tone at cell index 0
+
+    // Without grapheme data, just the base
+    expect(cellToChar(cell)).toBe("👍");
+
+    // With grapheme data, combines the codepoints
+    const result = cellToChar(cell, graphemes, 0);
+    expect(result).toBe("👍🏻");
+  });
+
+  test("cellToChar with combining marks", () => {
+    // e + combining acute accent = é (decomposed form)
+    const cell: Cell = {
+      content: { tag: ContentTag.CODEPOINT_GRAPHEME, codepoint: 0x65 }, // 'e'
+      styleId: 0,
+      wide: Wide.NARROW,
+      protected: false,
+      hyperlink: false,
+    };
+
+    const graphemes = new Map<number, number[]>();
+    graphemes.set(5, [0x0301]); // Combining acute at cell index 5
+
+    // Without grapheme, just 'e'
+    expect(cellToChar(cell)).toBe("e");
+
+    // With grapheme at different index, still just 'e'
+    expect(cellToChar(cell, graphemes, 0)).toBe("e");
+
+    // With grapheme at correct index, combines to 'e' + combining acute
+    // String.fromCodePoint(0x65, 0x0301) produces the decomposed form
+    const result = cellToChar(cell, graphemes, 5);
+    const expected = String.fromCodePoint(0x65, 0x0301); // e + combining acute (NFD form)
+    expect(result).toBe(expected);
+    expect(result.length).toBe(2); // Two code units: 'e' and combining mark
   });
 });
