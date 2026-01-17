@@ -1557,6 +1557,15 @@ pub const EventLoop = struct {
                 if (!std.mem.eql(u8, key_msg.state, "down")) return;
 
                 const pane = self.session.activePane() orelse return;
+
+                // Clear selection on any keyboard input
+                if (pane.hasSelection()) {
+                    pane.clearSelection();
+                    self.broadcastPaneUpdate(pane) catch |e| {
+                        logRecoverable("broadcast selection clear on keypress", e);
+                    };
+                }
+
                 var output_buf: [32]u8 = undefined;
                 const cursor_key_app = pane.isCursorKeyApplication();
 
@@ -1585,6 +1594,15 @@ pub const EventLoop = struct {
             },
             .text => |text_msg| {
                 const pane = self.session.activePane() orelse return;
+
+                // Clear selection on any text input
+                if (pane.hasSelection()) {
+                    pane.clearSelection();
+                    self.broadcastPaneUpdate(pane) catch |e| {
+                        logRecoverable("broadcast selection clear on text", e);
+                    };
+                }
+
                 self.session.logPtySend(pane.id, text_msg.data);
                 pane.writeInput(text_msg.data) catch |e| {
                     logRecoverable("write text to PTY", e);
@@ -1798,8 +1816,15 @@ pub const EventLoop = struct {
                                 logRecoverable("broadcast selection update", e);
                             };
                         } else if (is_up and pane.isSelectionActive()) {
-                            // End selection drag
-                            pane.endSelection();
+                            // Check if this was a single click (no drag)
+                            if (pane.isSelectionAtStart(mouse_msg.x, mouse_msg.y)) {
+                                // Single click - clear selection instead of keeping empty one
+                                pane.clearSelection();
+                                log.debug("Single click - cleared empty selection", .{});
+                            } else {
+                                // Real drag - end selection normally
+                                pane.endSelection();
+                            }
                             // Final broadcast
                             self.broadcastPaneUpdate(pane) catch |e| {
                                 logRecoverable("broadcast selection end", e);

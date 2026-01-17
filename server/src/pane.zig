@@ -1078,6 +1078,13 @@ pub const Pane = struct {
         log.debug("Selection ended", .{});
     }
 
+    /// Check if the given position matches the selection start (single click, no drag).
+    /// Returns true if this would be a zero-size selection.
+    pub fn isSelectionAtStart(self: *const Pane, x: u16, y: u16) bool {
+        const start = self.selection_start orelse return false;
+        return start.x == x and start.y == y;
+    }
+
     /// Clear the current selection.
     pub fn clearSelection(self: *Pane) void {
         terminal_mod.clearSelection(&self.terminal);
