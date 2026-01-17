@@ -20,6 +20,7 @@ import type {
   // Server → Client
   CursorState,
   ScrollbackInfo,
+  SelectionBounds,
   BinarySnapshot,
   BinaryDelta,
   TitleMessage,
@@ -33,7 +34,11 @@ import type {
   ServerMessage,
   DeltaUpdate,
 } from "./messages";
-import { decodeRowIdsFromBytes, encodeRowIdsToBytes } from "./messages";
+import {
+  decodeRowIdsFromBytes,
+  encodeRowIdsToBytes,
+  normalizeSelectionBounds,
+} from "./messages";
 
 // =============================================================================
 // Client → Server Messages
@@ -1015,6 +1020,283 @@ describe("Message Discrimination", () => {
         expect(msg.gen).toBe(15);
         expect(msg.dirtyRows.length).toBe(1);
       }
+    });
+  });
+});
+
+// =============================================================================
+// Selection Bounds
+// =============================================================================
+
+describe("Selection Bounds", () => {
+  describe("SelectionBounds interface", () => {
+    test("normal selection", () => {
+      const sel: SelectionBounds = {
+        startX: 0,
+        startY: 0,
+        endX: 10,
+        endY: 5,
+        isRectangle: false,
+      };
+
+      expect(sel.startX).toBe(0);
+      expect(sel.startY).toBe(0);
+      expect(sel.endX).toBe(10);
+      expect(sel.endY).toBe(5);
+      expect(sel.isRectangle).toBe(false);
+    });
+
+    test("rectangular selection", () => {
+      const sel: SelectionBounds = {
+        startX: 5,
+        startY: 2,
+        endX: 15,
+        endY: 8,
+        isRectangle: true,
+      };
+
+      expect(sel.isRectangle).toBe(true);
+    });
+
+    test("single cell selection (start equals end)", () => {
+      const sel: SelectionBounds = {
+        startX: 5,
+        startY: 3,
+        endX: 5,
+        endY: 3,
+        isRectangle: false,
+      };
+
+      expect(sel.startX).toBe(sel.endX);
+      expect(sel.startY).toBe(sel.endY);
+    });
+
+    test("selection at terminal edge", () => {
+      const sel: SelectionBounds = {
+        startX: 0,
+        startY: 0,
+        endX: 79,
+        endY: 23,
+        isRectangle: false,
+      };
+
+      expect(sel.startX).toBe(0);
+      expect(sel.startY).toBe(0);
+      expect(sel.endX).toBe(79);
+      expect(sel.endY).toBe(23);
+    });
+  });
+
+  describe("normalizeSelectionBounds", () => {
+    test("already normalized selection (start before end)", () => {
+      const sel: SelectionBounds = {
+        startX: 0,
+        startY: 0,
+        endX: 10,
+        endY: 5,
+        isRectangle: false,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.startX).toBe(0);
+      expect(normalized.startY).toBe(0);
+      expect(normalized.endX).toBe(10);
+      expect(normalized.endY).toBe(5);
+      expect(normalized.isRectangle).toBe(false);
+    });
+
+    test("reversed selection (end Y before start Y)", () => {
+      const sel: SelectionBounds = {
+        startX: 10,
+        startY: 5,
+        endX: 0,
+        endY: 0,
+        isRectangle: false,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.startX).toBe(0);
+      expect(normalized.startY).toBe(0);
+      expect(normalized.endX).toBe(10);
+      expect(normalized.endY).toBe(5);
+    });
+
+    test("reversed selection on same row (end X before start X)", () => {
+      const sel: SelectionBounds = {
+        startX: 20,
+        startY: 3,
+        endX: 5,
+        endY: 3,
+        isRectangle: false,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.startX).toBe(5);
+      expect(normalized.startY).toBe(3);
+      expect(normalized.endX).toBe(20);
+      expect(normalized.endY).toBe(3);
+    });
+
+    test("preserves isRectangle flag", () => {
+      const sel: SelectionBounds = {
+        startX: 10,
+        startY: 5,
+        endX: 0,
+        endY: 0,
+        isRectangle: true,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.isRectangle).toBe(true);
+    });
+
+    test("single cell selection unchanged", () => {
+      const sel: SelectionBounds = {
+        startX: 5,
+        startY: 3,
+        endX: 5,
+        endY: 3,
+        isRectangle: false,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.startX).toBe(5);
+      expect(normalized.startY).toBe(3);
+      expect(normalized.endX).toBe(5);
+      expect(normalized.endY).toBe(3);
+    });
+
+    test("same row selection already normalized", () => {
+      const sel: SelectionBounds = {
+        startX: 5,
+        startY: 3,
+        endX: 20,
+        endY: 3,
+        isRectangle: false,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      expect(normalized.startX).toBe(5);
+      expect(normalized.endX).toBe(20);
+    });
+
+    test("rectangular selection normalization", () => {
+      const sel: SelectionBounds = {
+        startX: 30,
+        startY: 10,
+        endX: 10,
+        endY: 2,
+        isRectangle: true,
+      };
+
+      const normalized = normalizeSelectionBounds(sel);
+
+      // Y values swapped because startY > endY
+      expect(normalized.startY).toBe(2);
+      expect(normalized.endY).toBe(10);
+      // X values also swapped in the swap operation
+      expect(normalized.startX).toBe(10);
+      expect(normalized.endX).toBe(30);
+    });
+
+    test("does not mutate original selection", () => {
+      const original: SelectionBounds = {
+        startX: 10,
+        startY: 5,
+        endX: 0,
+        endY: 0,
+        isRectangle: false,
+      };
+
+      normalizeSelectionBounds(original);
+
+      // Original should be unchanged
+      expect(original.startX).toBe(10);
+      expect(original.startY).toBe(5);
+      expect(original.endX).toBe(0);
+      expect(original.endY).toBe(0);
+    });
+  });
+
+  describe("SelectionBounds in snapshots", () => {
+    test("snapshot with selection", () => {
+      const msg: BinarySnapshot = {
+        type: "snapshot",
+        paneId: 1,
+        gen: 1,
+        cols: 80,
+        rows: 24,
+        cursor: { x: 0, y: 0, visible: true, style: "block" },
+        altScreen: false,
+        scrollback: { totalRows: 24, viewportTop: 0 },
+        cells: new Uint8Array(0),
+        styles: new Uint8Array(0),
+        rowIds: new Uint8Array(0),
+        selection: {
+          startX: 5,
+          startY: 2,
+          endX: 15,
+          endY: 2,
+          isRectangle: false,
+        },
+      };
+
+      expect(msg.selection).toBeDefined();
+      expect(msg.selection?.startX).toBe(5);
+      expect(msg.selection?.endX).toBe(15);
+    });
+
+    test("snapshot without selection", () => {
+      const msg: BinarySnapshot = {
+        type: "snapshot",
+        paneId: 1,
+        gen: 1,
+        cols: 80,
+        rows: 24,
+        cursor: { x: 0, y: 0, visible: true, style: "block" },
+        altScreen: false,
+        scrollback: { totalRows: 24, viewportTop: 0 },
+        cells: new Uint8Array(0),
+        styles: new Uint8Array(0),
+        rowIds: new Uint8Array(0),
+      };
+
+      expect(msg.selection).toBeUndefined();
+    });
+  });
+
+  describe("SelectionBounds in deltas", () => {
+    test("delta with selection", () => {
+      const msg: BinaryDelta = {
+        type: "delta",
+        paneId: 1,
+        fromGen: 1,
+        gen: 2,
+        cols: 80,
+        rows: 24,
+        cursor: { x: 0, y: 0, visible: true, style: "block" },
+        altScreen: false,
+        vp: { totalRows: 24, viewportTop: 0 },
+        dirtyRows: [],
+        rowIds: new Uint8Array(0),
+        styles: new Uint8Array(0),
+        selection: {
+          startX: 0,
+          startY: 0,
+          endX: 79,
+          endY: 23,
+          isRectangle: true,
+        },
+      };
+
+      expect(msg.selection).toBeDefined();
+      expect(msg.selection?.isRectangle).toBe(true);
     });
   });
 });
