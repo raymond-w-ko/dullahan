@@ -27,6 +27,8 @@ const MouseEvents = pane_mod.MouseEvents;
 const MouseFormat = pane_mod.MouseFormat;
 const signal = @import("signal.zig");
 const mouse = @import("mouse.zig");
+const log_config = @import("log_config.zig");
+const dlog = @import("dlog.zig");
 
 const log = std.log.scoped(.event_loop);
 
@@ -923,7 +925,10 @@ pub const EventLoop = struct {
         client.ws.setTimeouts(100);
 
         try self.clients.append(self.allocator, client);
-        log.info("Client connected, total clients: {d}", .{self.clients.items.len});
+        if (log_config.log_client_join) {
+            log.info("Client connected, total clients: {d}", .{self.clients.items.len});
+            dlog.info("Client connected, total clients: {d}", .{self.clients.items.len});
+        }
     }
 
     fn handleWsClient(self: *EventLoop, client_idx: usize) !void {
@@ -1005,7 +1010,10 @@ pub const EventLoop = struct {
     fn removeClient(self: *EventLoop, idx: usize) void {
         var client = self.clients.orderedRemove(idx);
         const was_master = if (client.client_id) |id| self.isMaster(id) else false;
-        log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
+        if (log_config.log_client_join) {
+            log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
+            dlog.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
+        }
         client.deinit();
 
         // If disconnecting client was master, clear master and broadcast
@@ -1656,12 +1664,18 @@ pub const EventLoop = struct {
                     logClientError("set client ID", e);
                     return;
                 };
-                log.info("Client identified: {s}", .{client.shortId()});
+                if (log_config.log_client_join) {
+                    log.info("Client identified: {s}", .{client.shortId()});
+                    dlog.info("Client identified: {s}", .{client.shortId()});
+                }
 
                 // Auto-assign as master if no master exists
                 if (self.master_id == null) {
                     if (client.client_id) |cid| {
-                        log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                        if (log_config.log_client_join) {
+                            log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                            dlog.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                        }
                         self.setMaster(cid) catch |e| {
                             logRecoverable("auto-set master", e);
                         };
@@ -1702,7 +1716,10 @@ pub const EventLoop = struct {
 
                 // Count panes needed for this template
                 const pane_count = template.countPanes();
-                log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+                if (log_config.log_window_creation) {
+                    log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+                    dlog.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+                }
 
                 // Create new window with the required number of panes
                 const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
@@ -1711,7 +1728,10 @@ pub const EventLoop = struct {
                 };
                 defer self.allocator.free(result.pane_ids);
 
-                log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+                if (log_config.log_window_creation) {
+                    log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+                    dlog.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+                }
 
                 // Assign layout to the new window
                 if (self.session.getWindow(result.window_id)) |window| {

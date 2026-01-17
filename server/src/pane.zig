@@ -21,6 +21,7 @@ const process = @import("process.zig");
 const dlog = @import("dlog.zig");
 const shell = @import("shell.zig");
 const terminal_mod = @import("terminal.zig");
+const log_config = @import("log_config.zig");
 
 const log = std.log.scoped(.pane);
 
@@ -436,7 +437,9 @@ pub const Pane = struct {
         self.writeInput(response) catch |e| {
             log.warn("Failed to send DSR status response: {any}", .{e});
         };
-        dlog.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
+        if (log_config.log_dsr) {
+            dlog.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
+        }
     }
 
     /// Send DSR (Device Status Report) cursor position response (CSI 6 n)
@@ -457,12 +460,16 @@ pub const Pane = struct {
         self.writeInput(response) catch |e| {
             log.warn("Failed to send DSR cursor response: {any}", .{e});
         };
-        dlog.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
+        if (log_config.log_dsr) {
+            dlog.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
+        }
     }
 
     /// Log unimplemented DSR request
     fn logUnknownDSR(self: *Pane, param: u8) void {
-        dlog.missing("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
+        if (log_config.log_dsr) {
+            dlog.missing("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
+        }
     }
 
     /// Parse OSC (Operating System Command) sequences.
@@ -868,6 +875,10 @@ pub const Pane = struct {
 
     /// Resize the pane
     pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
+        if (log_config.log_pane_resize) {
+            dlog.debug("Pane {d}: Resize {d}x{d} -> {d}x{d}", .{ self.id, self.cols, self.rows, cols, rows });
+        }
+
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
