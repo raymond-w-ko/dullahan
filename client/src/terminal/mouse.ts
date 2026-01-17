@@ -7,6 +7,7 @@
 
 import { debug } from "../debug";
 import { getCellDimensions, getPadding } from "./dimensions";
+import { get as getConfig } from "../config";
 import type { MouseMessage } from "../../../protocol/schema/messages";
 import type { InputHandler } from "./handler";
 
@@ -243,6 +244,11 @@ export class MouseHandler implements InputHandler<MouseCallback> {
   }
 
   private handleMouseMove(e: MouseEvent): void {
+    // Check if mouse move events are enabled (disabled by default to reduce WebSocket noise)
+    if (!getConfig("mouseMove")) {
+      return;
+    }
+
     // Only send motion events when a button is pressed (drag)
     // Mode 1003 (any-event) wants all motion, but we can't know client-side
     // what mode the server has enabled, so we send all motion and let the

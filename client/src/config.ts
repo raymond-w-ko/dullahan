@@ -40,6 +40,9 @@ export interface ConfigSchema {
   // Selection
   selectionClearOnCopy: boolean;
 
+  // Mouse
+  mouseMove: boolean;  // Send mouse move events (noisy, disable for WebSocket debugging)
+
   // Bell (matches ghostty's bell-features)
   // Comma-separated list: "audio", "attention", "title"
   bellFeatures: string;
@@ -77,6 +80,9 @@ export const DEFAULTS: ConfigSchema = {
   
   // Selection
   selectionClearOnCopy: true,
+
+  // Mouse
+  mouseMove: false,  // Disabled by default to reduce WebSocket noise
 
   // Bell (all enabled by default, matches ghostty)
   bellFeatures: 'audio,attention,title',
