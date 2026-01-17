@@ -230,6 +230,12 @@ export function TerminalView({
       }
     });
 
+    // Set focus target to IME textarea so keyboard input works after mouse selection
+    const imeElement = imeRef.current?.getElement();
+    if (imeElement) {
+      mouse.setFocusTarget(imeElement);
+    }
+
     // Update cell dimensions when fonts load
     document.fonts.ready.then(() => {
       mouse.updateCellDimensions();

@@ -40,6 +40,9 @@ export class MouseHandler implements InputHandler<MouseCallback> {
   private motionThrottleId: number | null = null; // requestAnimationFrame ID
   private pendingMotionEvent: MouseEvent | null = null; // Pending motion to send
 
+  // Focus target - element to focus after mouseup (e.g., IME textarea)
+  private focusTarget: HTMLElement | null = null;
+
   constructor() {
     this.boundMouseDown = this.handleMouseDown.bind(this);
     this.boundMouseUp = this.handleMouseUp.bind(this);
@@ -103,6 +106,15 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       this.motionThrottleId = null;
     }
     this.pendingMotionEvent = null;
+    this.focusTarget = null;
+  }
+
+  /**
+   * Set an element to focus after mouseup events.
+   * This is used to restore focus to the IME textarea after mouse selection.
+   */
+  setFocusTarget(element: HTMLElement | null): void {
+    this.focusTarget = element;
   }
 
   /**
@@ -241,6 +253,12 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     );
 
     this.callback?.(message);
+
+    // Restore focus to the target element (e.g., IME textarea) after mouseup
+    // This ensures keyboard input continues to work after mouse selection
+    if (this.focusTarget) {
+      this.focusTarget.focus();
+    }
   }
 
   private handleMouseMove(e: MouseEvent): void {
