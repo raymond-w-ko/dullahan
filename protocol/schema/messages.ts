@@ -184,12 +184,37 @@ export interface ScrollbackInfo {
   viewportTop: number;
 }
 
-/** Selection bounds in viewport coordinates */
+/**
+ * Selection bounds in viewport coordinates.
+ *
+ * All coordinates are **inclusive** - both the start and end cells are
+ * part of the selection. For example, a selection from (0,0) to (4,0)
+ * includes 5 cells: columns 0, 1, 2, 3, and 4 on row 0.
+ *
+ * For normal (line) selections:
+ * - First row: from startX to end of row
+ * - Middle rows: entire row is selected
+ * - Last row: from start of row to endX
+ * - Single row: from startX to endX
+ *
+ * For rectangular selections (isRectangle=true):
+ * - Each row: only cells between startX and endX are selected
+ *
+ * Coordinates are 0-indexed and relative to the viewport (not scrollback).
+ *
+ * Client implementations should normalize reversed selections where
+ * end comes before start (swap if startY > endY or same row with startX > endX).
+ */
 export interface SelectionBounds {
-  startX: number; // u16 - column
-  startY: number; // u32 - viewport row
-  endX: number; // u16 - column
-  endY: number; // u32 - viewport row
+  /** Start column (0-indexed, inclusive) */
+  startX: number;
+  /** Start row in viewport (0-indexed, inclusive) */
+  startY: number;
+  /** End column (0-indexed, inclusive) */
+  endX: number;
+  /** End row in viewport (0-indexed, inclusive) */
+  endY: number;
+  /** True for rectangular/block selection, false for normal line selection */
   isRectangle: boolean;
 }
 
