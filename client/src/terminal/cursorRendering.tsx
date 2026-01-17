@@ -2,9 +2,15 @@
 // Handles cursor insertion and styling within terminal lines
 
 import { h } from "preact";
-import { styleToClasses, styleToInline, getCellColor } from "./terminalStyle";
+import {
+  styleToClasses,
+  styleToInline,
+  getCellColor,
+  colorToCss,
+} from "./terminalStyle";
 import type { StyledRun } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
+import { ColorTag } from "../../../protocol/schema/style";
 
 /** Cursor configuration from user settings */
 export interface CursorConfig {
@@ -34,10 +40,27 @@ function resolveCursorColor(
   return setting; // Custom color value
 }
 
-/** Build class string for a run, including selection state */
+/** Build class string for a run, including selection state and bgOverride palette */
 function runClasses(run: StyledRun): string {
-  const classes = styleToClasses(run.style);
+  let classes = styleToClasses(run.style);
+  // Add palette bg class for bgOverride (content-based bg color)
+  if (run.bgOverride?.tag === ColorTag.PALETTE) {
+    classes = `${classes} bg${run.bgOverride.index}`.trim();
+  }
   return run.selected ? `${classes} selected`.trim() : classes;
+}
+
+/** Get inline style for a run, including bgOverride RGB colors */
+function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
+  const baseStyle = styleToInline(run.style);
+  // Add RGB background for bgOverride (content-based bg color)
+  if (run.bgOverride?.tag === ColorTag.RGB) {
+    const bgCss = colorToCss(run.bgOverride);
+    if (bgCss) {
+      return { ...baseStyle, backgroundColor: bgCss };
+    }
+  }
+  return baseStyle;
 }
 
 /** Render a line of runs, inserting cursor if needed */
@@ -56,7 +79,7 @@ export function renderLine(
           <span
             key={i}
             class={runClasses(run)}
-            style={styleToInline(run.style)}
+            style={runInlineStyle(run)}
           >
             {run.text}
           </span>
@@ -95,7 +118,7 @@ export function renderLine(
           <span
             key={`${i}-before`}
             class={runClasses(run)}
-            style={styleToInline(run.style)}
+            style={runInlineStyle(run)}
           >
             {before}
           </span>
@@ -103,7 +126,7 @@ export function renderLine(
       }
 
       // Build cursor style
-      const baseStyle = preserveStyle ? styleToInline(run.style) || {} : {};
+      const baseStyle = preserveStyle ? runInlineStyle(run) || {} : {};
       const cursorBg = resolveCursorColor(
         cursorConfig.color,
         run.style,
@@ -147,7 +170,7 @@ export function renderLine(
           <span
             key={`${i}-after`}
             class={runClasses(run)}
-            style={styleToInline(run.style)}
+            style={runInlineStyle(run)}
           >
             {after}
           </span>
@@ -158,7 +181,7 @@ export function renderLine(
         <span
           key={i}
           class={runClasses(run)}
-          style={styleToInline(run.style)}
+          style={runInlineStyle(run)}
         >
           {run.text}
         </span>

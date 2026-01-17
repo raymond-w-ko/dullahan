@@ -3,11 +3,21 @@
 
 import { h } from "preact";
 import { ColorTag, Underline } from "../../../protocol/schema/style";
-import type { Style } from "../../../protocol/schema/style";
+import type { Style, Color } from "../../../protocol/schema/style";
 
 /** Get cell color as CSS value */
 export function getCellColor(style: Style, type: "fg" | "bg"): string | undefined {
   const color = type === "fg" ? style.fgColor : style.bgColor;
+  if (color.tag === ColorTag.RGB) {
+    return `rgb(${color.r},${color.g},${color.b})`;
+  } else if (color.tag === ColorTag.PALETTE) {
+    return `var(--c${color.index})`;
+  }
+  return undefined;
+}
+
+/** Convert a Color to CSS value, or undefined if NONE */
+export function colorToCss(color: Color): string | undefined {
   if (color.tag === ColorTag.RGB) {
     return `rgb(${color.r},${color.g},${color.b})`;
   } else if (color.tag === ColorTag.PALETTE) {

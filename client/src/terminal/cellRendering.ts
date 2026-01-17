@@ -1,10 +1,10 @@
 // Cell rendering utilities
 // Converts terminal cells to styled text runs for rendering
 
-import { cellToChar } from "../../../protocol/schema/cell";
-import { getStyle } from "../../../protocol/schema/style";
+import { cellToChar, ContentTag } from "../../../protocol/schema/cell";
+import { getStyle, ColorTag } from "../../../protocol/schema/style";
 import type { Cell } from "../../../protocol/schema/cell";
-import type { Style, StyleTable } from "../../../protocol/schema/style";
+import type { Style, StyleTable, Color } from "../../../protocol/schema/style";
 import {
   normalizeSelectionBounds,
   type SelectionBounds,
@@ -16,6 +16,43 @@ export interface StyledRun {
   styleId: number;
   style: Style;
   selected?: boolean; // True if this run is within selection
+  bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
+}
+
+/**
+ * Extract background color from cell content if present.
+ * Ghostty stores bg-only cells (like htop's colored headers) with content_tag 2 or 3.
+ */
+function getCellContentBgColor(cell: Cell): Color | undefined {
+  if (cell.content.tag === ContentTag.BG_COLOR_PALETTE) {
+    return { tag: ColorTag.PALETTE, index: cell.content.palette };
+  }
+  if (cell.content.tag === ContentTag.BG_COLOR_RGB) {
+    return {
+      tag: ColorTag.RGB,
+      r: cell.content.rgb.r,
+      g: cell.content.rgb.g,
+      b: cell.content.rgb.b,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Compare two optional colors for equality.
+ */
+function colorsEqual(a: Color | undefined, b: Color | undefined): boolean {
+  if (a === undefined && b === undefined) return true;
+  if (a === undefined || b === undefined) return false;
+  if (a.tag !== b.tag) return false;
+  if (a.tag === ColorTag.NONE) return true;
+  if (a.tag === ColorTag.PALETTE && b.tag === ColorTag.PALETTE) {
+    return a.index === b.index;
+  }
+  if (a.tag === ColorTag.RGB && b.tag === ColorTag.RGB) {
+    return a.r === b.r && a.g === b.g && a.b === b.b;
+  }
+  return false;
 }
 
 /**
@@ -89,17 +126,20 @@ export function cellsToRuns(
       const char = cell ? cellToChar(cell) : " ";
       const styleId = cell?.styleId ?? 0;
       const selected = selection ? isCellInSelection(x, y, selection) : false;
+      // Extract content-based bg color (for bg-only cells like htop headers)
+      const bgOverride = cell ? getCellContentBgColor(cell) : undefined;
 
-      // Start a new run if style or selection state changes
+      // Start a new run if style, selection, or bgOverride changes
       if (
         currentRun &&
         currentRun.styleId === styleId &&
-        currentRun.selected === selected
+        currentRun.selected === selected &&
+        colorsEqual(currentRun.bgOverride, bgOverride)
       ) {
         currentRun.text += char;
       } else {
         const style = getStyle(styles, styleId);
-        currentRun = { text: char, styleId, style, selected };
+        currentRun = { text: char, styleId, style, selected, bgOverride };
         runs.push(currentRun);
       }
     }
