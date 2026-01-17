@@ -1888,7 +1888,9 @@ pub const EventLoop = struct {
                 };
 
                 // Write to PTY
-                pane.writeInput(result.slice()) catch |e| {
+                const mouse_seq = result.slice();
+                self.session.logPtySend(pane.id, mouse_seq);
+                pane.writeInput(mouse_seq) catch |e| {
                     logRecoverable("send mouse event", e);
                     return;
                 };
