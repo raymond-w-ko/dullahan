@@ -23,3 +23,6 @@ pub const log_client_join: bool = true;
 
 /// Log clipboard operations (OSC 52 SET/GET)
 pub const log_clipboard: bool = true;
+
+/// Log delta sync operations (dirty row counts, delta vs snapshot comparison)
+pub const log_delta: bool = true;

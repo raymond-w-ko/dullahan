@@ -359,6 +359,9 @@ pub const EventLoop = struct {
     ipc_clipboard_c: ?[]const u8 = null,
     ipc_clipboard_p: ?[]const u8 = null,
 
+    // Debug: disable delta updates (always send full snapshots)
+    no_delta: bool = false,
+
     const IPC_FD_INDEX = 0;
     const HTTP_FD_INDEX = 1;
     const FIXED_FD_COUNT = 2;
@@ -368,11 +371,16 @@ pub const EventLoop = struct {
         ipc_server: *ipc.Server,
         http_server: *http.Server,
         session: *Session,
+        no_delta: bool,
     ) EventLoop {
         var layouts = layout_db.LayoutDb.init(allocator);
         layouts.load() catch |e| {
             logRecoverable("load layouts", e);
         };
+
+        if (no_delta) {
+            log.info("Delta updates DISABLED (--no-delta)", .{});
+        }
 
         return .{
             .allocator = allocator,
@@ -381,6 +389,7 @@ pub const EventLoop = struct {
             .session = session,
             .start_time = std.time.timestamp(),
             .layouts = layouts,
+            .no_delta = no_delta,
         };
     }
 
@@ -1261,6 +1270,15 @@ pub const EventLoop = struct {
 
         // Note: Clipboard SET/GET operations are handled in broadcastPaneUpdate()
         // to ensure all clients receive them before the state is cleared.
+
+        // If no_delta is set, always send full snapshots for debugging
+        if (self.no_delta) {
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try client.ws.sendBinary(snap);
+            client.setGeneration(pane_id, pane.generation);
+            return;
+        }
 
         const result = try pane.getBroadcastDelta();
         defer pane.allocator.free(result.delta);
@@ -2205,7 +2223,14 @@ pub const EventLoop = struct {
     }
 
     fn handleSyncRequest(self: *EventLoop, client: *ClientState, pane: *Pane, client_gen: u64) !void {
-        _ = self;
+        // If no_delta is set, always send full snapshots for debugging
+        if (self.no_delta) {
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try client.ws.sendBinary(snap);
+            client.setGeneration(pane.id, pane.generation);
+            return;
+        }
 
         if (client_gen == pane.generation) {
             const delta = try snapshot.generateDelta(pane.allocator, pane, client_gen, true);

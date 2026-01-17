@@ -115,6 +115,11 @@ pub const Pane = struct {
     /// row IDs are completely different between screens
     last_was_alt_screen: bool = false,
 
+    /// Track the last seen page serial to detect page reallocation
+    /// When ghostty adjusts page capacity, it creates new pages with new serials,
+    /// which invalidates all existing row IDs and requires full resync
+    last_page_serial: ?u64 = null,
+
     /// Selection tracking state for mouse-based selection
     /// Start position of selection drag (viewport coordinates)
     selection_start: ?struct { x: u16, y: u16 } = null,
@@ -323,6 +328,25 @@ pub const Pane = struct {
             self.forceFullResync();
         }
 
+        // Check for page reallocation (ghostty adjusting page capacity)
+        // When this happens, page serials change and all row IDs become invalid
+        const pages = &self.terminal.screens.active.pages;
+        if (pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } })) |first_pin| {
+            const current_serial = first_pin.node.serial;
+            if (self.last_page_serial) |last_serial| {
+                if (current_serial != last_serial) {
+                    log.debug("Page serial changed: {d} -> {d}, forcing full resync", .{
+                        last_serial,
+                        current_serial,
+                    });
+                    self.last_page_serial = current_serial;
+                    self.forceFullResync();
+                }
+            } else {
+                self.last_page_serial = current_serial;
+            }
+        }
+
         // Collect dirty rows from ghostty's dirty tracking
         self.collectDirtyRows();
 
@@ -343,17 +367,36 @@ pub const Pane = struct {
             self.terminal.flags.dirty.clear = false;
         }
 
+        // Count how many rows ghostty marked dirty (for debug logging)
+        var ghostty_dirty_count: usize = 0;
+
         // Iterate through viewport rows to find dirty ones
         var y: usize = 0;
         while (y < self.rows) : (y += 1) {
             const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
 
+            const is_ghostty_dirty = pin.isDirty();
+            if (is_ghostty_dirty) {
+                ghostty_dirty_count += 1;
+            }
+
             // Mark row dirty if: screen-level clear occurred OR row is individually dirty
-            if (full_clear or pin.isDirty()) {
+            if (full_clear or is_ghostty_dirty) {
                 const row_id = snapshot.computeRowId(pin);
                 self.dirty_rows.put(row_id, {}) catch {
                     log.warn("Failed to track dirty row {d}", .{row_id});
                 };
+            }
+        }
+
+        if (log_config.log_delta) {
+            if (full_clear or ghostty_dirty_count > 0) {
+                log.debug("Pane {d}: collectDirtyRows full_clear={} ghostty_dirty={d} total_dirty={d}", .{
+                    self.id,
+                    full_clear,
+                    ghostty_dirty_count,
+                    self.dirty_rows.count(),
+                });
             }
         }
 
@@ -938,22 +981,28 @@ pub const Pane = struct {
     /// Force all clients to do a full resync.
     /// Used after resize because reflow invalidates row IDs.
     fn forceFullResync(self: *Pane) void {
-        // Clear dirty tracking and set base to current generation
-        // This makes needsFullResync() return true for any client
-        // with an older generation
+        // Increment generation first - this is critical!
+        // Clients are at the current generation, so we need the delta's from_gen
+        // to be HIGHER than what clients have, triggering snapshot fallback.
+        self.generation +%= 1;
+
+        // Clear dirty tracking and set base to new generation
         self.dirty_rows.clearRetainingCapacity();
         self.dirty_base_gen = self.generation;
 
-        // Invalidate cached delta - next getBroadcastDelta will regenerate
-        // with from_gen = generation, which forces full snapshot for all clients
-        // since client_gen < from_gen will be true
+        // Invalidate cached delta
         if (self.cached_delta) |old| {
             self.allocator.free(old);
             self.cached_delta = null;
         }
-        // Set last_broadcast_gen to current so next delta has from_gen = generation
-        // This ensures client_gen < from_gen triggers snapshot in sendUpdate
+
+        // Set last_broadcast_gen to new generation
+        // Now delta from_gen will be higher than client_gen, forcing snapshot
         self.last_broadcast_gen = self.generation;
+
+        if (log_config.log_delta) {
+            log.debug("Pane {d}: forceFullResync, new gen={d}", .{ self.id, self.generation });
+        }
     }
 
     /// Get the set of dirty row IDs since last clear.
@@ -993,9 +1042,20 @@ pub const Pane = struct {
 
         // Need to generate new delta
         const from_gen = self.last_broadcast_gen;
+        const dirty_count = self.dirty_rows.count();
 
         // Generate delta
         const delta = try snapshot.generateDelta(self.allocator, self, from_gen, false);
+
+        if (log_config.log_delta and dirty_count > 0) {
+            log.debug("Pane {d}: getBroadcastDelta from_gen={d} to_gen={d} dirty_rows={d} delta_size={d}", .{
+                self.id,
+                from_gen,
+                self.generation,
+                dirty_count,
+                delta.len,
+            });
+        }
 
         // Free old cached delta
         if (self.cached_delta) |old| {

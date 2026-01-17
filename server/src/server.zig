@@ -20,6 +20,7 @@ pub const RunConfig = struct {
     static_dir: ?[]const u8 = null,
     ws_port: u16 = http.DEFAULT_PORT,
     pty_log: bool = false,
+    no_delta: bool = false,
 
     /// Get static_dir with fallback to ./client if it exists
     pub fn getStaticDir(self: RunConfig) ?[]const u8 {
@@ -101,7 +102,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     defer http_server.deinit();
 
     // Initialize event loop
-    var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session);
+    var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session, config.no_delta);
     defer event_loop.deinit();
 
     // Assign layouts to windows created before event loop

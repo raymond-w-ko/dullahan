@@ -17,6 +17,7 @@ pub const CliArgs = struct {
     static_dir: ?[]const u8 = null,
     ws_port: u16 = 7681,
     pty_log: bool = false,
+    no_delta: bool = false,
     help: bool = false,
     serve: bool = false,
     no_spawn: bool = false,
@@ -74,6 +75,8 @@ pub const CliArgs = struct {
                 args.ws_port = std.fmt.parseInt(u16, val, 10) catch 7681;
             } else if (std.mem.eql(u8, arg, "--pty-log")) {
                 args.pty_log = true;
+            } else if (std.mem.eql(u8, arg, "--no-delta")) {
+                args.no_delta = true;
             } else if (ipc.Command.fromString(arg)) |cmd| {
                 args.command = cmd;
             }
@@ -108,6 +111,7 @@ pub fn printUsage() void {
         \\  --static-dir=PATH    Serve static files from directory
         \\  --port=PORT          WebSocket/HTTP port (default: 7681)
         \\  --pty-log            Enable PTY traffic logging (truncates existing log)
+        \\  --no-delta           Disable delta updates (always send full snapshots)
         \\  --no-spawn           Don't auto-spawn server if not running
         \\
         \\Examples:
