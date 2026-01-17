@@ -1100,6 +1100,62 @@ pub const EventLoop = struct {
     /// Broadcast pane update (snapshot/delta) to all connected clients.
     /// Used for selection changes and other immediate updates.
     fn broadcastPaneUpdate(self: *EventLoop, pane: *Pane) !void {
+        const pane_id = pane.id;
+
+        // Handle clipboard SET operation (OSC 52) - must broadcast to ALL clients before clearing
+        if (pane.hasClipboardSet()) {
+            if (pane.getClipboardSet()) |op| {
+                const msg = snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "set",
+                    op.kind,
+                    op.data,
+                ) catch |e| {
+                    logRecoverable("generate clipboard SET message", e);
+                    return;
+                };
+                defer pane.allocator.free(msg);
+
+                for (self.clients.items) |*client| {
+                    client.ws.sendBinary(msg) catch |e| {
+                        logClientError("broadcast clipboard SET", e);
+                    };
+                }
+            }
+            pane.clearClipboardSet();
+        }
+
+        // Handle clipboard GET request (OSC 52) - send to master client only
+        if (pane.hasClipboardGet()) {
+            if (pane.getClipboardGetKind()) |kind| {
+                const msg = snapshot.generateClipboardMessage(
+                    pane.allocator,
+                    pane_id,
+                    "get",
+                    kind,
+                    null, // no data for GET request
+                ) catch |e| {
+                    logRecoverable("generate clipboard GET message", e);
+                    return;
+                };
+                defer pane.allocator.free(msg);
+
+                // GET should only go to master client (they respond with clipboard content)
+                for (self.clients.items) |*client| {
+                    const is_master = if (client.client_id) |id| self.isMaster(id) else false;
+                    if (is_master) {
+                        client.ws.sendBinary(msg) catch |e| {
+                            logClientError("send clipboard GET to master", e);
+                        };
+                        break;
+                    }
+                }
+            }
+            pane.clearClipboardGet();
+        }
+
+        // Now broadcast pane state updates to all clients
         for (self.clients.items) |*client| {
             self.sendPaneUpdate(client, pane) catch |e| {
                 logClientError("broadcast pane update", e);
@@ -1142,37 +1198,8 @@ pub const EventLoop = struct {
             }
         }
 
-        // Check for clipboard SET operation (OSC 52)
-        if (pane.hasClipboardSet()) {
-            if (pane.getClipboardSet()) |op| {
-                const msg = try snapshot.generateClipboardMessage(
-                    pane.allocator,
-                    pane_id,
-                    "set",
-                    op.kind,
-                    op.data,
-                );
-                defer pane.allocator.free(msg);
-                try client.ws.sendBinary(msg);
-            }
-            pane.clearClipboardSet();
-        }
-
-        // Check for clipboard GET request (OSC 52)
-        if (pane.hasClipboardGet()) {
-            if (pane.getClipboardGetKind()) |kind| {
-                const msg = try snapshot.generateClipboardMessage(
-                    pane.allocator,
-                    pane_id,
-                    "get",
-                    kind,
-                    null, // no data for GET request
-                );
-                defer pane.allocator.free(msg);
-                try client.ws.sendBinary(msg);
-            }
-            pane.clearClipboardGet();
-        }
+        // Note: Clipboard SET/GET operations are handled in broadcastPaneUpdate()
+        // to ensure all clients receive them before the state is cleared.
 
         const result = try pane.getBroadcastDelta();
         defer pane.allocator.free(result.delta);
