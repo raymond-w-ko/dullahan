@@ -297,6 +297,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <span class="settings-label">Clear selection on copy</span>
             </label>
           </div>
+
+          {/* Mouse */}
+          <div class="settings-section">
+            <h3>Mouse</h3>
+
+            <label class="settings-field settings-field--checkbox">
+              <input
+                type="checkbox"
+                checked={settings.mouseMove}
+                onChange={(e) => setSetting("mouseMove", inputChecked(e))}
+              />
+              <span class="settings-label">Send mouse move events</span>
+            </label>
+          </div>
         </div>
       </div>
     </div>

@@ -21,6 +21,7 @@ export interface SettingsState {
   cursorBlink: "" | "true" | "false";
   bellFeatures: string;
   selectionClearOnCopy: boolean;
+  mouseMove: boolean;
 }
 
 // Keys that require CSS reapplication after change
@@ -63,6 +64,7 @@ export function useSettings() {
     cursorBlink: config.get("cursorBlink"),
     bellFeatures: config.get("bellFeatures"),
     selectionClearOnCopy: config.get("selectionClearOnCopy"),
+    mouseMove: config.get("mouseMove"),
   }));
 
   const setSetting = useCallback(
