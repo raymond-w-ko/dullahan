@@ -11,7 +11,10 @@
 import { debug } from "../debug";
 import { cellToChar } from "../../../protocol/schema/cell";
 import type { Cell } from "../../../protocol/schema/cell";
-import type { SelectionBounds } from "../../../protocol/schema/messages";
+import {
+  normalizeSelectionBounds,
+  type SelectionBounds,
+} from "../../../protocol/schema/messages";
 
 /**
  * Check if the Clipboard API is available.
@@ -152,7 +155,7 @@ export function getTerminalSelectionText(
     return "";
   }
 
-  const rows = Math.ceil(cells.length / cols);
+  const termRows = Math.ceil(cells.length / cols);
 
   // Validate selection bounds are within terminal dimensions
   if (
@@ -162,26 +165,17 @@ export function getTerminalSelectionText(
     selection.endY < 0 ||
     selection.startX >= cols ||
     selection.endX >= cols ||
-    selection.startY >= rows ||
-    selection.endY >= rows
+    selection.startY >= termRows ||
+    selection.endY >= termRows
   ) {
     debug.warn(
-      `Selection bounds out of range: (${selection.startX},${selection.startY})-(${selection.endX},${selection.endY}) for ${cols}x${rows} terminal`
+      `Selection bounds out of range: (${selection.startX},${selection.startY})-(${selection.endX},${selection.endY}) for ${cols}x${termRows} terminal`
     );
     return "";
   }
 
   // Normalize so start is before end
-  let startX = selection.startX;
-  let startY = selection.startY;
-  let endX = selection.endX;
-  let endY = selection.endY;
-
-  // Swap if start is after end (for reversed selection)
-  if (startY > endY || (startY === endY && startX > endX)) {
-    [startX, endX] = [endX, startX];
-    [startY, endY] = [endY, startY];
-  }
+  const { startX, startY, endX, endY } = normalizeSelectionBounds(selection);
 
   const lines: string[] = [];
 

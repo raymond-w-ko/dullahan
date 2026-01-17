@@ -219,6 +219,31 @@ export interface SelectionBounds {
 }
 
 /**
+ * Normalize selection bounds so start is always before end.
+ *
+ * If the selection was made in reverse (end before start), this swaps
+ * the coordinates. The returned bounds will always have:
+ * - startY <= endY
+ * - If startY === endY, then startX <= endX
+ *
+ * @param selection - The selection bounds to normalize
+ * @returns A new SelectionBounds with normalized coordinates
+ */
+export function normalizeSelectionBounds(
+  selection: SelectionBounds
+): SelectionBounds {
+  let { startX, startY, endX, endY, isRectangle } = selection;
+
+  // Swap if start is after end (for reversed selection)
+  if (startY > endY || (startY === endY && startX > endX)) {
+    [startX, endX] = [endX, startX];
+    [startY, endY] = [endY, startY];
+  }
+
+  return { startX, startY, endX, endY, isRectangle };
+}
+
+/**
  * Full terminal state snapshot.
  * Sent on connect and when delta sync fails.
  */

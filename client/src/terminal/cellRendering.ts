@@ -5,7 +5,10 @@ import { cellToChar } from "../../../protocol/schema/cell";
 import { getStyle } from "../../../protocol/schema/style";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { Style, StyleTable } from "../../../protocol/schema/style";
-import type { SelectionBounds } from "../../../protocol/schema/messages";
+import {
+  normalizeSelectionBounds,
+  type SelectionBounds,
+} from "../../../protocol/schema/messages";
 
 /** A run of consecutive cells with the same style */
 export interface StyledRun {
@@ -31,18 +34,10 @@ export function isCellInSelection(
   selection: SelectionBounds
 ): boolean {
   // Normalize so start is before end
-  let startX = selection.startX;
-  let startY = selection.startY;
-  let endX = selection.endX;
-  let endY = selection.endY;
+  const { startX, startY, endX, endY, isRectangle } =
+    normalizeSelectionBounds(selection);
 
-  // Swap if start is after end (for reversed selection)
-  if (startY > endY || (startY === endY && startX > endX)) {
-    [startX, endX] = [endX, startX];
-    [startY, endY] = [endY, startY];
-  }
-
-  if (selection.isRectangle) {
+  if (isRectangle) {
     // Rectangle selection: cell is in if x is between startX/endX
     // and y is between startY/endY
     const minX = Math.min(startX, endX);
