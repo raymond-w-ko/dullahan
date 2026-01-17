@@ -95,6 +95,10 @@ pub const Pane = struct {
     /// Whether the GET request has been sent to the client (awaiting response)
     clipboard_get_sent: bool = false,
 
+    /// Buffer for incomplete OSC sequences that span multiple feed() calls
+    /// Large OSC 52 clipboard data (up to 64KB base64) can be split across chunks
+    osc_buffer: ?[]u8 = null,
+
     /// Generation of the last broadcast delta
     last_broadcast_gen: u64 = 0,
 
@@ -132,6 +136,9 @@ pub const Pane = struct {
             allocator.free(self.data);
         }
     };
+
+    /// Maximum size for OSC buffer (100KB) to prevent unbounded memory growth
+    const max_osc_buffer_size: usize = 100_000;
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
         var terminal = try Terminal.init(allocator, .{
@@ -187,6 +194,11 @@ pub const Pane = struct {
         // Free pending clipboard data
         if (self.clipboard_pending_set) |op| {
             op.deinit(self.allocator);
+        }
+
+        // Free OSC buffer if allocated
+        if (self.osc_buffer) |buf| {
+            self.allocator.free(buf);
         }
 
         self.dirty_rows.deinit();
@@ -459,46 +471,89 @@ pub const Pane = struct {
     /// OSC 52 = clipboard operations
     /// Format: ESC ] <cmd> ; <text> (BEL | ST)
     /// BEL = 0x07, ST = ESC \ (0x1b 0x5c)
+    ///
+    /// Handles split sequences: large OSC 52 data can span multiple feed() calls.
+    /// Incomplete sequences are buffered and processed when the terminator arrives.
     fn handleOscSequences(self: *Pane, data: []const u8) void {
+        // Combine buffered data with new data if we have a partial sequence
+        var combined: ?[]u8 = null;
+        defer if (combined) |c| self.allocator.free(c);
+
+        const work_data: []const u8 = if (self.osc_buffer) |buf| blk: {
+            // Combine buffered data with new input
+            combined = self.allocator.alloc(u8, buf.len + data.len) catch {
+                log.warn("Failed to allocate combined OSC buffer", .{});
+                // Discard buffer and process new data alone
+                self.allocator.free(buf);
+                self.osc_buffer = null;
+                break :blk data;
+            };
+            @memcpy(combined.?[0..buf.len], buf);
+            @memcpy(combined.?[buf.len..], data);
+            // Free old buffer
+            self.allocator.free(buf);
+            self.osc_buffer = null;
+            break :blk combined.?;
+        } else data;
+
         var i: usize = 0;
-        while (i < data.len) : (i += 1) {
+        var last_osc_start: ?usize = null; // Track incomplete OSC for buffering
+
+        while (i < work_data.len) : (i += 1) {
             // Look for ESC ]
-            if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == ']') {
-                const osc_start = i + 2;
-                if (osc_start >= data.len) break;
+            if (work_data[i] == 0x1b and i + 1 < work_data.len and work_data[i + 1] == ']') {
+                const osc_start = i;
+                const param_start = i + 2;
+                if (param_start >= work_data.len) {
+                    // Incomplete: buffer from ESC to end
+                    last_osc_start = osc_start;
+                    break;
+                }
 
                 // Parse OSC number (u16 to support OSC 52+)
                 var cmd: u16 = 0;
-                var param_end = osc_start;
-                while (param_end < data.len and data[param_end] >= '0' and data[param_end] <= '9') {
-                    cmd = cmd *| 10 +| (data[param_end] - '0');
+                var param_end = param_start;
+                while (param_end < work_data.len and work_data[param_end] >= '0' and work_data[param_end] <= '9') {
+                    cmd = cmd *| 10 +| (work_data[param_end] - '0');
                     param_end += 1;
                 }
 
                 // Expect semicolon after command number
-                if (param_end >= data.len or data[param_end] != ';') continue;
+                if (param_end >= work_data.len) {
+                    // Incomplete: need more data for semicolon
+                    last_osc_start = osc_start;
+                    break;
+                }
+                if (work_data[param_end] != ';') {
+                    // Not a valid OSC, skip this ESC ]
+                    continue;
+                }
                 const text_start = param_end + 1;
 
                 // Find terminator: BEL (0x07) or ST (ESC \)
                 var text_end = text_start;
                 var found_term = false;
-                while (text_end < data.len) : (text_end += 1) {
-                    if (data[text_end] == 0x07) {
+                while (text_end < work_data.len) : (text_end += 1) {
+                    if (work_data[text_end] == 0x07) {
                         // BEL terminator
                         found_term = true;
                         break;
                     }
-                    if (data[text_end] == 0x1b and text_end + 1 < data.len and data[text_end + 1] == '\\') {
+                    if (work_data[text_end] == 0x1b and text_end + 1 < work_data.len and work_data[text_end + 1] == '\\') {
                         // ST terminator (ESC \)
                         found_term = true;
                         break;
                     }
                 }
 
-                if (!found_term) continue;
+                if (!found_term) {
+                    // Incomplete: buffer from OSC start to end
+                    last_osc_start = osc_start;
+                    break;
+                }
 
-                // Extract payload text
-                const payload = data[text_start..text_end];
+                // Complete sequence found - process it
+                const payload = work_data[text_start..text_end];
 
                 // Handle based on OSC number
                 switch (cmd) {
@@ -517,7 +572,22 @@ pub const Pane = struct {
 
                 // Skip past this OSC sequence
                 i = text_end;
+                last_osc_start = null; // Successfully processed, no need to buffer
             }
+        }
+
+        // Buffer incomplete OSC sequence for next call
+        if (last_osc_start) |start| {
+            const remaining = work_data[start..];
+            if (remaining.len > max_osc_buffer_size) {
+                log.warn("OSC sequence too large ({d} bytes), discarding", .{remaining.len});
+                return;
+            }
+            self.osc_buffer = self.allocator.dupe(u8, remaining) catch {
+                log.warn("Failed to buffer incomplete OSC sequence", .{});
+                return;
+            };
+            log.debug("Buffered incomplete OSC sequence: {d} bytes", .{remaining.len});
         }
     }
 
