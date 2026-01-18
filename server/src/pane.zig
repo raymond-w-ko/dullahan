@@ -22,6 +22,11 @@ const dlog = @import("dlog.zig");
 const shell = @import("shell.zig");
 const terminal_mod = @import("terminal.zig");
 const log_config = @import("log_config.zig");
+const clipboard_mod = @import("clipboard.zig");
+
+/// Re-exported for convenience
+pub const ClipboardOp = clipboard_mod.ClipboardOp;
+pub const ClipboardHandler = clipboard_mod.ClipboardHandler;
 
 const log = std.log.scoped(.pane);
 
@@ -82,19 +87,8 @@ pub const Pane = struct {
     /// Reset by clearBell(), used for push notifications to clients
     bell_pending: bool = false,
 
-    /// Pending OSC 52 clipboard SET operation
-    /// Contains base64-encoded data to send to clients
-    clipboard_pending_set: ?ClipboardOp = null,
-
-    /// Pending OSC 52 clipboard GET request
-    /// The value is the clipboard kind ('c', 's', 'p')
-    clipboard_pending_get: ?u8 = null,
-
-    /// Timestamp (ms) when clipboard GET was requested, for timeout handling
-    clipboard_get_timestamp_ms: ?i64 = null,
-
-    /// Whether the GET request has been sent to the client (awaiting response)
-    clipboard_get_sent: bool = false,
+    /// Clipboard handler (OSC 52 operations)
+    clipboard: ClipboardHandler,
 
     /// Buffer for incomplete OSC sequences that span multiple feed() calls
     /// Large OSC 52 clipboard data (up to 64KB base64) can be split across chunks
@@ -133,16 +127,6 @@ pub const Pane = struct {
         id: u16 = 0,
     };
 
-    /// OSC 52 clipboard operation data
-    pub const ClipboardOp = struct {
-        kind: u8, // 'c' (clipboard), 's' (selection), 'p' (primary)
-        data: []const u8, // base64-encoded, owned by pane
-
-        pub fn deinit(self: ClipboardOp, allocator: std.mem.Allocator) void {
-            allocator.free(self.data);
-        }
-    };
-
     /// Maximum size for OSC buffer (100KB) to prevent unbounded memory growth
     const max_osc_buffer_size: usize = 100_000;
 
@@ -163,6 +147,7 @@ pub const Pane = struct {
             .id = opts.id,
             .allocator = allocator,
             .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
+            .clipboard = ClipboardHandler.init(allocator),
             // vt_stream is lazily initialized in feed() - see comment on field
         };
     }
@@ -197,10 +182,8 @@ pub const Pane = struct {
             self.allocator.free(delta);
         }
 
-        // Free pending clipboard data
-        if (self.clipboard_pending_set) |op| {
-            op.deinit(self.allocator);
-        }
+        // Cleanup clipboard handler
+        self.clipboard.deinit();
 
         // Free OSC buffer if allocated
         if (self.osc_buffer) |buf| {
@@ -615,7 +598,7 @@ pub const Pane = struct {
                     },
                     52 => {
                         // Clipboard: OSC 52 ; <kind> ; <data> ST
-                        self.handleOsc52(payload);
+                        self.clipboard.handleOsc52(payload, self.id);
                     },
                     else => {},
                 }
@@ -638,98 +621,6 @@ pub const Pane = struct {
                 return;
             };
             log.debug("Buffered incomplete OSC sequence: {d} bytes", .{remaining.len});
-        }
-    }
-
-    /// Handle OSC 52 clipboard operations
-    /// Format: <clipboard-kind> ; <base64-data>
-    /// clipboard-kind: 'c' (clipboard), 's' (selection), 'p' (primary), or combinations
-    /// base64-data: '?' for GET, base64-encoded data for SET
-    fn handleOsc52(self: *Pane, payload: []const u8) void {
-        // Find semicolon separator between kind and data
-        var sep_idx: ?usize = null;
-        for (payload, 0..) |c, idx| {
-            if (c == ';') {
-                sep_idx = idx;
-                break;
-            }
-        }
-
-        if (sep_idx == null) {
-            log.debug("OSC 52: missing semicolon separator", .{});
-            return;
-        }
-
-        const kind_str = payload[0..sep_idx.?];
-        const data_str = payload[sep_idx.? + 1 ..];
-
-        // Parse clipboard kind - default to 'c' (system clipboard) if empty
-        // Multiple kinds can be specified (e.g., "pc" for primary+clipboard)
-        // We select the first one we find in priority order: 'c' > 'p' > 's'
-        var kind: u8 = 'c'; // Default if none specified
-        if (kind_str.len > 0) {
-            // Look for preferred kinds in priority order
-            var found_c = false;
-            var found_p = false;
-            var found_s = false;
-
-            for (kind_str) |k| {
-                switch (k) {
-                    'c' => found_c = true,
-                    'p' => found_p = true,
-                    's' => found_s = true,
-                    else => {},
-                }
-            }
-
-            // Select by priority: c > p > s
-            if (found_c) {
-                kind = 'c';
-            } else if (found_p) {
-                kind = 'p';
-            } else if (found_s) {
-                kind = 's';
-            }
-            // If none of c/p/s found, keep default 'c'
-        }
-
-        // Check for GET request
-        if (data_str.len == 1 and data_str[0] == '?') {
-            log.debug("OSC 52 GET request: kind={c}", .{kind});
-            if (log_config.log_clipboard) {
-                dlog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ self.id, kind });
-            }
-            self.clipboard_pending_get = kind;
-            self.clipboard_get_timestamp_ms = std.time.milliTimestamp();
-            return;
-        }
-
-        // SET request - data_str contains base64-encoded content
-        if (data_str.len == 0) {
-            log.debug("OSC 52 SET: empty data (clear clipboard)", .{});
-            // Empty data means clear clipboard - still send to client
-        }
-
-        // Free any existing pending set operation
-        if (self.clipboard_pending_set) |old| {
-            old.deinit(self.allocator);
-        }
-
-        // Copy the base64 data (we own it)
-        const data_copy = self.allocator.dupe(u8, data_str) catch |e| {
-            log.warn("OSC 52: failed to allocate clipboard data: {any}", .{e});
-            self.clipboard_pending_set = null;
-            return;
-        };
-
-        self.clipboard_pending_set = .{
-            .kind = kind,
-            .data = data_copy,
-        };
-
-        log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ kind, data_str.len });
-        if (log_config.log_clipboard) {
-            dlog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ self.id, kind, data_str.len });
         }
     }
 
@@ -809,92 +700,79 @@ pub const Pane = struct {
     }
 
     // ========================================================================
-    // Clipboard API (OSC 52)
+    // Clipboard API (OSC 52) - delegates to ClipboardHandler
     // ========================================================================
 
     /// Check if there's a pending clipboard SET operation
     pub fn hasClipboardSet(self: *const Pane) bool {
-        return self.clipboard_pending_set != null;
+        return self.clipboard.hasSet();
     }
 
     /// Get the pending clipboard SET operation (if any)
     pub fn getClipboardSet(self: *const Pane) ?ClipboardOp {
-        return self.clipboard_pending_set;
+        return self.clipboard.getSet();
     }
 
     /// Clear the clipboard SET operation
     pub fn clearClipboardSet(self: *Pane) void {
-        if (self.clipboard_pending_set) |op| {
-            op.deinit(self.allocator);
-        }
-        self.clipboard_pending_set = null;
+        self.clipboard.clearSet();
     }
 
     /// Check if there's a pending clipboard GET request
     pub fn hasClipboardGet(self: *const Pane) bool {
-        return self.clipboard_pending_get != null;
+        return self.clipboard.hasGet();
     }
 
     /// Get the clipboard kind for GET request (if any)
     pub fn getClipboardGetKind(self: *const Pane) ?u8 {
-        return self.clipboard_pending_get;
+        return self.clipboard.getGetKind();
     }
 
     /// Clear the clipboard GET request (called when response received or timed out)
     pub fn clearClipboardGet(self: *Pane) void {
-        self.clipboard_pending_get = null;
-        self.clipboard_get_timestamp_ms = null;
-        self.clipboard_get_sent = false;
+        self.clipboard.clearGet();
     }
 
     /// Check if clipboard GET request needs to be sent to client
     pub fn needsClipboardGetSend(self: *const Pane) bool {
-        return self.clipboard_pending_get != null and !self.clipboard_get_sent;
+        return self.clipboard.needsGetSend();
     }
 
     /// Mark clipboard GET as sent to client
     pub fn markClipboardGetSent(self: *Pane) void {
-        self.clipboard_get_sent = true;
+        self.clipboard.markGetSent();
     }
 
     /// Clipboard GET timeout in milliseconds (5 seconds)
-    pub const clipboard_get_timeout_ms: i64 = 5000;
+    pub const clipboard_get_timeout_ms: i64 = ClipboardHandler.get_timeout_ms;
 
     /// Check if a clipboard GET request has timed out
     pub fn hasClipboardGetTimedOut(self: *const Pane) bool {
-        if (self.clipboard_get_timestamp_ms) |ts| {
-            const now = std.time.milliTimestamp();
-            return (now - ts) > clipboard_get_timeout_ms;
-        }
-        return false;
+        return self.clipboard.hasGetTimedOut();
     }
 
     /// Handle clipboard GET timeout - send empty response and clear pending state
     pub fn handleClipboardGetTimeout(self: *Pane) void {
-        if (self.clipboard_pending_get) |kind| {
-            log.warn("Clipboard GET timed out for kind={c}, sending empty response", .{kind});
-            // Send empty response to unblock the terminal
-            self.sendClipboardResponse(kind, "");
-            self.clearClipboardGet();
+        if (self.clipboard.checkGetTimeout()) |timeout_info| {
+            if (timeout_info.should_timeout) {
+                // Send empty response to unblock the terminal
+                self.sendClipboardResponse(timeout_info.kind, "");
+                self.clipboard.clearGet();
+            }
         }
     }
-
-    /// Maximum allowed clipboard response size (100KB)
-    const max_clipboard_response_size: usize = 100_000;
 
     /// Send OSC 52 clipboard response back to the terminal.
     /// Called when the client responds to a GET request.
     /// kind: 'c', 's', or 'p'
     /// data: base64-encoded clipboard contents
     pub fn sendClipboardResponse(self: *Pane, kind: u8, data: []const u8) void {
-        // Format: ESC ] 52 ; <kind> ; <base64-data> ESC \
-        // Size: ESC ] 52 ; = 5, kind = 1, ; = 1, data = data.len, ESC \ = 2 = 9 + data.len
         const required_size: usize = 9 + data.len;
 
-        if (required_size > max_clipboard_response_size) {
+        if (required_size > ClipboardHandler.max_response_size) {
             log.warn("OSC 52 response too large: {d} bytes (max {d})", .{
                 required_size,
-                max_clipboard_response_size,
+                ClipboardHandler.max_response_size,
             });
             return;
         }
@@ -906,10 +784,7 @@ pub const Pane = struct {
         };
         defer self.allocator.free(buf);
 
-        const response = std.fmt.bufPrint(buf, "\x1b]52;{c};{s}\x1b\\", .{ kind, data }) catch |e| {
-            log.warn("OSC 52 response format error: {any}", .{e});
-            return;
-        };
+        const response = ClipboardHandler.formatResponse(kind, data, buf) orelse return;
 
         self.writeInput(response) catch |e| {
             log.warn("Failed to send OSC 52 response: {any}", .{e});
