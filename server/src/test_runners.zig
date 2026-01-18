@@ -1552,72 +1552,70 @@ fn runGraphemeTest() void {
         \\Grapheme Cluster Test
         \\=====================
         \\
-        \\This test displays various Unicode grapheme clusters.
-        \\Each grapheme should render as a single character.
+        \\Each grapheme should render as a single combined character.
         \\
         \\1. EMOJI WITH SKIN TONE MODIFIERS
-        \\   👍       (thumbs up)
-        \\   👍🏻      (thumbs up, light skin)
-        \\   👍🏼      (thumbs up, medium-light skin)
-        \\   👍🏽      (thumbs up, medium skin)
-        \\   👍🏾      (thumbs up, medium-dark skin)
-        \\   👍🏿      (thumbs up, dark skin)
+        \\   👍  thumbs up
+        \\   👍🏻  thumbs up, light skin
+        \\   👍🏼  thumbs up, medium-light skin
+        \\   👍🏽  thumbs up, medium skin
+        \\   👍🏾  thumbs up, medium-dark skin
+        \\   👍🏿  thumbs up, dark skin
         \\
         \\2. FAMILY EMOJI (ZWJ SEQUENCES)
-        \\   👨‍👩‍👧     (family: man, woman, girl)
-        \\   👨‍👩‍👧‍👦    (family: man, woman, girl, boy)
-        \\   👩‍👩‍👦‍👦    (family: woman, woman, boy, boy)
-        \\   👨‍👨‍👧‍👧    (family: man, man, girl, girl)
+        \\   👨‍👩‍👧  family: man, woman, girl
+        \\   👨‍👩‍👧‍👦  family: man, woman, girl, boy
+        \\   👩‍👩‍👦‍👦  family: woman, woman, boy, boy
+        \\   👨‍👨‍👧‍👧  family: man, man, girl, girl
         \\
         \\3. PROFESSION EMOJI (ZWJ SEQUENCES)
-        \\   👨‍💻      (man technologist)
-        \\   👩‍💻      (woman technologist)
-        \\   👨‍🚀      (man astronaut)
-        \\   👩‍🚀      (woman astronaut)
-        \\   👨‍🍳      (man cook)
-        \\   👩‍🍳      (woman cook)
+        \\   👨‍💻  man technologist
+        \\   👩‍💻  woman technologist
+        \\   👨‍🚀  man astronaut
+        \\   👩‍🚀  woman astronaut
+        \\   👨‍🍳  man cook
+        \\   👩‍🍳  woman cook
         \\
         \\4. FLAG EMOJI (REGIONAL INDICATORS)
-        \\   🇺🇸      (United States)
-        \\   🇬🇧      (United Kingdom)
-        \\   🇯🇵      (Japan)
-        \\   🇩🇪      (Germany)
-        \\   🇫🇷      (France)
+        \\   🇺🇸  United States
+        \\   🇬🇧  United Kingdom
+        \\   🇯🇵  Japan
+        \\   🇩🇪  Germany
+        \\   🇫🇷  France
         \\
         \\5. COMBINING MARKS (DIACRITICS)
-        \\   é        (e + combining acute accent, precomposed)
-        \\   é       (e + combining acute accent, decomposed - U+0065 U+0301)
-        \\   ñ        (n + combining tilde, precomposed)
-        \\   ñ       (n + combining tilde, decomposed - U+006E U+0303)
-        \\   ü        (u + combining diaeresis, precomposed)
-        \\   ü       (u + combining diaeresis, decomposed - U+0075 U+0308)
+        \\   é   e + acute (precomposed)
+    ++ "\n   e\u{0301}   e + acute (decomposed)\n" ++
+        \\   ñ   n + tilde (precomposed)
+    ++ "\n   n\u{0303}   n + tilde (decomposed)\n" ++
+        \\   ü   u + diaeresis (precomposed)
+    ++ "\n   u\u{0308}   u + diaeresis (decomposed)\n" ++
         \\
         \\6. COMBINING MARKS (STACKED)
-        \\   ệ        (e + circumflex + dot below)
-        \\   ǭ        (o + macron + ogonek)
+        \\   ệ   e + circumflex + dot below
+        \\   ǭ   o + macron + ogonek
         \\
         \\7. EMOJI VARIATIONS
-        \\   ❤️       (red heart)
-        \\   ❤️‍🔥      (heart on fire)
-        \\   ❤️‍🩹      (mending heart)
-        \\   ☀️       (sun with rays)
-        \\   ⭐       (star)
+        \\   ❤️  red heart
+        \\   ❤️‍🔥  heart on fire
+        \\   ❤️‍🩹  mending heart
+        \\   ☀️  sun with rays
+        \\   ⭐  star
         \\
         \\8. KEYCAP SEQUENCES
-        \\   1️⃣       (keycap 1)
-        \\   2️⃣       (keycap 2)
-        \\   #️⃣       (keycap #)
-        \\   *️⃣       (keycap *)
+        \\   1️⃣  keycap 1
+        \\   2️⃣  keycap 2
+        \\   #️⃣  keycap #
+        \\   *️⃣  keycap *
         \\
         \\9. WIDE CHARACTERS (CJK)
-        \\   日本語    (Japanese)
-        \\   中文     (Chinese)
-        \\   한국어    (Korean)
+        \\   日本語  Japanese (3 chars, 6 cells)
+        \\   中文    Chinese (2 chars, 4 cells)
+        \\   한국어  Korean (3 chars, 6 cells)
         \\
-        \\10. MIXED WIDTH LINE
-        \\    Hello世界🌍Test
-        \\    ^^^^^|^^|^|^^^^
-        \\    (each ^ marks a cell, | marks wide char boundaries)
+        \\10. MIXED WIDTH
+        \\    Hello世界🌍!
+        \\    └───┘└─┘└┘└── mixed ASCII, CJK, emoji
         \\
         \\Test complete!
         \\
