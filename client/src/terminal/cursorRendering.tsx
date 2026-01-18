@@ -9,7 +9,7 @@ import {
   colorToCss,
 } from "./terminalStyle";
 import { handleHyperlinkClick } from "./hyperlink";
-import type { StyledRun } from "./cellRendering";
+import type { StyledRun, WideCharRange } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
 import { ColorTag } from "../../../protocol/schema/style";
 
@@ -71,12 +71,12 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
  */
 function renderTextWithWideChars(
   text: string,
-  wideIndices: number[] | undefined,
+  wideRanges: WideCharRange[] | undefined,
   baseClass: string,
   style: h.JSX.CSSProperties | undefined
 ): preact.JSX.Element | preact.JSX.Element[] {
   // No wide characters - render as single element
-  if (!wideIndices || wideIndices.length === 0) {
+  if (!wideRanges || wideRanges.length === 0) {
     return (
       <span class={baseClass} style={style}>
         {text}
@@ -86,35 +86,38 @@ function renderTextWithWideChars(
 
   // Has wide characters - split and render segments
   const elements: preact.JSX.Element[] = [];
-  const wideSet = new Set(wideIndices);
-  let segmentStart = 0;
+  let pos = 0;
 
-  for (let i = 0; i <= text.length; i++) {
-    const isWide = wideSet.has(i);
-    const isEnd = i === text.length;
-
-    // When we hit a wide char or end, flush the narrow segment
-    if ((isWide || isEnd) && i > segmentStart) {
-      const narrowText = text.slice(segmentStart, i);
+  for (const range of wideRanges) {
+    // Render narrow text before this wide character
+    if (range.start > pos) {
+      const narrowText = text.slice(pos, range.start);
       elements.push(
-        <span key={`n${segmentStart}`} class={baseClass} style={style}>
+        <span key={`n${pos}`} class={baseClass} style={style}>
           {narrowText}
         </span>
       );
     }
 
     // Render wide character with explicit width
-    if (isWide && i < text.length) {
-      const wideChar = text[i];
-      elements.push(
-        <span key={`w${i}`} class={`${baseClass} wide-char`.trim()} style={style}>
-          {wideChar}
-        </span>
-      );
-      segmentStart = i + 1;
-    } else if (isWide) {
-      segmentStart = i + 1;
-    }
+    const wideChar = text.slice(range.start, range.end);
+    elements.push(
+      <span key={`w${range.start}`} class={`${baseClass} wide-char`.trim()} style={style}>
+        {wideChar}
+      </span>
+    );
+
+    pos = range.end;
+  }
+
+  // Render any remaining narrow text after the last wide character
+  if (pos < text.length) {
+    const narrowText = text.slice(pos);
+    elements.push(
+      <span key={`n${pos}`} class={baseClass} style={style}>
+        {narrowText}
+      </span>
+    );
   }
 
   return elements;
@@ -140,7 +143,7 @@ function renderRunElement(
   // For hyperlinks, we render differently (as <a> tag)
   if (run.hyperlink) {
     // For hyperlinks with wide chars, we need to handle it specially
-    if (run.wideIndices && run.wideIndices.length > 0) {
+    if (run.wideRanges && run.wideRanges.length > 0) {
       return (
         <a
           key={key}
@@ -150,7 +153,7 @@ function renderRunElement(
           title={run.hyperlink}
           onClick={(e: MouseEvent) => handleHyperlinkClick(e, run.hyperlink!)}
         >
-          {renderTextWithWideChars(text, run.wideIndices, "", undefined)}
+          {renderTextWithWideChars(text, run.wideRanges, "", undefined)}
         </a>
       );
     }
@@ -169,7 +172,7 @@ function renderRunElement(
   }
 
   // No wide characters - simple span
-  if (!run.wideIndices || run.wideIndices.length === 0) {
+  if (!run.wideRanges || run.wideRanges.length === 0) {
     return (
       <span key={key} class={classes} style={style}>
         {text}
@@ -180,7 +183,7 @@ function renderRunElement(
   // Has wide characters - render with explicit widths
   return (
     <span key={key}>
-      {renderTextWithWideChars(text, run.wideIndices, classes, style)}
+      {renderTextWithWideChars(text, run.wideRanges, classes, style)}
     </span>
   );
 }

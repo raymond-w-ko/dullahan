@@ -10,6 +10,12 @@ import {
   type SelectionBounds,
 } from "../../../protocol/schema/messages";
 
+/** Range of a wide character within the run's text (start inclusive, end exclusive) */
+export interface WideCharRange {
+  start: number;
+  end: number;
+}
+
 /** A run of consecutive cells with the same style */
 export interface StyledRun {
   text: string;
@@ -18,7 +24,7 @@ export interface StyledRun {
   selected?: boolean; // True if this run is within selection
   bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
   hyperlink?: string; // URL for OSC 8 hyperlinks
-  wideIndices?: number[]; // Indices of wide (2-cell) characters within text
+  wideRanges?: WideCharRange[]; // Ranges of wide (2-cell) characters within text
 }
 
 /**
@@ -154,18 +160,21 @@ export function cellsToRuns(
         currentRun.hyperlink === hyperlink
       ) {
         if (isWide) {
-          // Track the index of this wide character within the run
-          if (!currentRun.wideIndices) {
-            currentRun.wideIndices = [];
+          // Track the range of this wide character (graphemes can be multi-codepoint)
+          if (!currentRun.wideRanges) {
+            currentRun.wideRanges = [];
           }
-          currentRun.wideIndices.push(currentRun.text.length);
+          const start = currentRun.text.length;
+          currentRun.text += char;
+          currentRun.wideRanges.push({ start, end: currentRun.text.length });
+        } else {
+          currentRun.text += char;
         }
-        currentRun.text += char;
       } else {
         const style = getStyle(styles, styleId);
         currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
         if (isWide) {
-          currentRun.wideIndices = [0];
+          currentRun.wideRanges = [{ start: 0, end: char.length }];
         }
         runs.push(currentRun);
       }
