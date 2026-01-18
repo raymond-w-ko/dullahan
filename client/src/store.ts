@@ -30,6 +30,16 @@ export interface ClipboardEntry {
   timestamp: number; // Date.now()
 }
 
+/** Toast notification (from OSC 9/777) */
+export interface ToastNotification {
+  id: string;
+  paneId: number;
+  title?: string;
+  message: string;
+  type: "info" | "success" | "warning" | "error";
+  timestamp: number;
+}
+
 export interface Store {
   // Connection state
   connection: TerminalConnection | null;
@@ -59,6 +69,7 @@ export interface Store {
   settingsOpen: boolean;
   fullscreenPaneId: number | null; // Pane ID in fullscreen, null if not fullscreen
   dimensionVersion: number; // Incremented when font settings change
+  toasts: ToastNotification[]; // Active toast notifications
 
   // Config (mirrored from config module for reactivity)
   theme: string;
@@ -111,6 +122,7 @@ const store: Store = {
   settingsOpen: false,
   fullscreenPaneId: null,
   dimensionVersion: 0, // Incremented when font settings change to trigger recalc
+  toasts: [],
 
   theme: config.get("theme") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
@@ -223,6 +235,57 @@ export function setPaneDimensions(
 export function setBellActive(active: boolean) {
   store.bellActive = active;
   notify();
+}
+
+// ============================================================================
+// Toast notifications
+// ============================================================================
+
+/** Infer toast type from message content */
+function inferToastType(message: string, title?: string): ToastNotification["type"] {
+  const text = `${title ?? ""} ${message}`.toLowerCase();
+  if (text.includes("error") || text.includes("fail") || text.includes("fatal")) {
+    return "error";
+  }
+  if (text.includes("warn")) {
+    return "warning";
+  }
+  if (text.includes("success") || text.includes("done") || text.includes("complete")) {
+    return "success";
+  }
+  return "info";
+}
+
+/** Add a toast notification */
+export function addToast(paneId: number, title: string | undefined, message: string) {
+  const toast: ToastNotification = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    paneId,
+    title,
+    message,
+    type: inferToastType(message, title),
+    timestamp: Date.now(),
+  };
+  store.toasts = [...store.toasts, toast];
+  notify();
+  return toast.id;
+}
+
+/** Dismiss a toast by ID */
+export function dismissToast(id: string) {
+  store.toasts = store.toasts.filter((t) => t.id !== id);
+  notify();
+}
+
+/** Clear all toasts */
+export function clearAllToasts() {
+  store.toasts = [];
+  notify();
+}
+
+/** Get visible toasts (limited by max visible) */
+export function getVisibleToasts(maxVisible: number): ToastNotification[] {
+  return store.toasts.slice(-maxVisible);
 }
 
 export function setSettingsOpen(open: boolean) {
@@ -468,6 +531,10 @@ export function initConnection() {
     if (features.audio) {
       playBellAudio();
     }
+  });
+
+  conn.on("toast", (paneId, title, message) => {
+    addToast(paneId, title, message);
   });
 
   conn.on("masterChanged", (masterId, isMaster) => {

@@ -22,3 +22,11 @@ export const AUDIO = {
   /** Minimum gain before stopping oscillator */
   MIN_GAIN: 0.001,
 } as const;
+
+/** Toast notification constants */
+export const TOAST = {
+  /** Maximum number of visible toasts */
+  MAX_VISIBLE: 5,
+  /** Auto-dismiss delay in milliseconds */
+  AUTO_DISMISS_MS: 5000,
+} as const;

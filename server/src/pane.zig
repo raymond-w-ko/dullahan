@@ -87,6 +87,16 @@ pub const Pane = struct {
     /// Reset by clearBell(), used for push notifications to clients
     bell_pending: bool = false,
 
+    /// Notification triggered by OSC 9 or OSC 777 escape sequences
+    /// Reset by clearNotification(), used for toast notifications
+    notify_pending: bool = false,
+
+    /// Notification title (optional, from OSC 777 format)
+    notify_title: ?[]const u8 = null,
+
+    /// Notification body/message
+    notify_body: ?[]const u8 = null,
+
     /// Clipboard handler (OSC 52 operations)
     clipboard: ClipboardHandler,
 
@@ -179,6 +189,14 @@ pub const Pane = struct {
         // Free title if allocated
         if (self.title) |t| {
             self.allocator.free(t);
+        }
+
+        // Free notification data if allocated
+        if (self.notify_title) |t| {
+            self.allocator.free(t);
+        }
+        if (self.notify_body) |b| {
+            self.allocator.free(b);
         }
 
         // Free cached broadcast delta
@@ -600,9 +618,35 @@ pub const Pane = struct {
                             self.setTitle(payload);
                         }
                     },
+                    9 => {
+                        // Notification: OSC 9 ; <message> ST (iTerm2 style)
+                        if (payload.len > 0) {
+                            self.setNotification(null, payload);
+                        }
+                    },
                     52 => {
                         // Clipboard: OSC 52 ; <kind> ; <data> ST
                         self.clipboard.handleOsc52(payload, self.id);
+                    },
+                    777 => {
+                        // Notification: OSC 777 ; notify ; <title> ; <body> ST (rxvt-unicode style)
+                        // Parse: notify;<title>;<body>
+                        if (std.mem.startsWith(u8, payload, "notify;")) {
+                            const rest = payload["notify;".len..];
+                            // Find the separator between title and body
+                            if (std.mem.indexOf(u8, rest, ";")) |sep_idx| {
+                                const title = rest[0..sep_idx];
+                                const body = rest[sep_idx + 1 ..];
+                                if (body.len > 0) {
+                                    self.setNotification(if (title.len > 0) title else null, body);
+                                }
+                            } else {
+                                // No separator, treat rest as body
+                                if (rest.len > 0) {
+                                    self.setNotification(null, rest);
+                                }
+                            }
+                        }
                     },
                     else => {},
                 }
@@ -701,6 +745,55 @@ pub const Pane = struct {
     /// Clear the bell pending flag
     pub fn clearBell(self: *Pane) void {
         self.bell_pending = false;
+    }
+
+    // ========================================================================
+    // Notification API (OSC 9/777) - toast notifications
+    // ========================================================================
+
+    /// Set a notification (triggered by OSC 9 or OSC 777)
+    pub fn setNotification(self: *Pane, title: ?[]const u8, body: []const u8) void {
+        // Free previous notification data
+        if (self.notify_title) |t| {
+            self.allocator.free(t);
+        }
+        if (self.notify_body) |b| {
+            self.allocator.free(b);
+        }
+
+        // Store new notification data
+        self.notify_title = if (title) |t| self.allocator.dupe(u8, t) catch null else null;
+        self.notify_body = self.allocator.dupe(u8, body) catch null;
+        self.notify_pending = true;
+        log.debug("Notification set: title={?s}, body={s}", .{ title, body });
+    }
+
+    /// Check if there's a pending notification
+    pub fn hasNotification(self: *const Pane) bool {
+        return self.notify_pending;
+    }
+
+    /// Get the pending notification (title, body)
+    /// Returns null if no notification pending
+    pub fn getNotification(self: *const Pane) ?struct { title: ?[]const u8, body: []const u8 } {
+        if (!self.notify_pending) return null;
+        if (self.notify_body) |body| {
+            return .{ .title = self.notify_title, .body = body };
+        }
+        return null;
+    }
+
+    /// Clear the notification
+    pub fn clearNotification(self: *Pane) void {
+        if (self.notify_title) |t| {
+            self.allocator.free(t);
+            self.notify_title = null;
+        }
+        if (self.notify_body) |b| {
+            self.allocator.free(b);
+            self.notify_body = null;
+        }
+        self.notify_pending = false;
     }
 
     // ========================================================================

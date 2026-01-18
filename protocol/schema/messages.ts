@@ -301,6 +301,14 @@ export interface BellMessage {
   type: "bell";
 }
 
+/** Toast notification (OSC 9/777 triggered) */
+export interface ToastMessage {
+  type: "toast";
+  paneId: number;
+  title?: string;
+  message: string;
+}
+
 /**
  * Clipboard operation notification (OSC 52).
  * Sent when the terminal requests clipboard access.
@@ -372,6 +380,7 @@ export type ServerMessage =
   | BinaryDelta
   | TitleMessage
   | BellMessage
+  | ToastMessage
   | ClipboardMessage
   | FocusServerMessage
   | MasterChangedMessage

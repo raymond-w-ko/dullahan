@@ -770,6 +770,16 @@ pub const EventLoop = struct {
             }
         }
 
+        // Check for toast notification (OSC 9/777)
+        if (pane.hasNotification()) {
+            if (pane.getNotification()) |notif| {
+                const msg = try snapshot.generateToastMessage(pane.allocator, pane_id, notif.title, notif.body);
+                defer pane.allocator.free(msg);
+                try client.ws.sendBinary(msg);
+            }
+            pane.clearNotification();
+        }
+
         // Note: Clipboard SET/GET operations are handled in broadcastPaneUpdate()
         // to ensure all clients receive them before the state is cleared.
 

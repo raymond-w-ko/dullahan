@@ -652,6 +652,27 @@ pub fn generateBellMessage(allocator: std.mem.Allocator) ![]u8 {
     return packAndCompress(allocator, &payload, 64);
 }
 
+/// Generate a binary msgpack toast notification message
+/// Triggered by OSC 9 or OSC 777 escape sequences
+pub fn generateToastMessage(
+    allocator: std.mem.Allocator,
+    pane_id: u16,
+    title: ?[]const u8,
+    message: []const u8,
+) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("toast", allocator));
+    try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
+    if (title) |t| {
+        try payload.mapPut("title", try msgpack.Payload.strToPayload(t, allocator));
+    }
+    try payload.mapPut("message", try msgpack.Payload.strToPayload(message, allocator));
+
+    return packAndCompress(allocator, &payload, 4096);
+}
+
 /// Generate a binary msgpack clipboard message for OSC 52 operations.
 /// operation: "set" (terminal writing to clipboard) or "get" (terminal reading)
 /// clipboard: 'c', 's', or 'p'

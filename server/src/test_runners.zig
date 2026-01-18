@@ -33,6 +33,7 @@ pub const TestCommand = enum {
     @"grapheme-test",
     @"grapheme-debug",
     @"hyperlink-test",
+    @"toast-test",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -47,6 +48,7 @@ pub const TestCommand = enum {
             .{ "grapheme-test", .@"grapheme-test" },
             .{ "grapheme-debug", .@"grapheme-debug" },
             .{ "hyperlink-test", .@"hyperlink-test" },
+            .{ "toast-test", .@"toast-test" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -64,6 +66,7 @@ pub const TestCommand = enum {
             .@"grapheme-test" => "Display grapheme clusters (emoji, combining marks)",
             .@"grapheme-debug" => "Debug grapheme cluster detection in VT emulator",
             .@"hyperlink-test" => "Display OSC 8 hyperlinks for testing",
+            .@"toast-test" => "Display toast notifications via OSC 9/777",
             .help => "Show available test commands",
         };
     }
@@ -84,6 +87,7 @@ pub fn printTestUsage() void {
         \\  grapheme-test     Display grapheme clusters (emoji, combining marks)
         \\  grapheme-debug    Debug grapheme detection in VT emulator
         \\  hyperlink-test    Display OSC 8 hyperlinks for testing
+        \\  toast-test        Display toast notifications via OSC 9/777
         \\  help              Show this help
         \\
         \\Examples:
@@ -94,6 +98,7 @@ pub fn printTestUsage() void {
         \\  dullahan test osc52-interactive     # Interactive mode (run in dullahan pane)
         \\  dullahan test grapheme-test         # Test grapheme cluster rendering
         \\  dullahan test hyperlink-test        # Test OSC 8 hyperlinks
+        \\  dullahan test toast-test            # Test toast notifications
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -112,6 +117,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"grapheme-test" => runGraphemeTest(),
         .@"grapheme-debug" => try runGraphemeDebug(allocator),
         .@"hyperlink-test" => runHyperlinkTest(),
+        .@"toast-test" => runToastTest(),
         .help => printTestUsage(),
     }
 }
@@ -1876,6 +1882,84 @@ fn runHyperlinkTest() void {
         \\
         \\Note: Links should be underlined and clickable. Unsupported protocols
         \\(file://, javascript:, etc.) may be blocked by the client for security.
+        \\
+    ) catch {};
+}
+
+// =============================================================================
+// Toast Notification Tester
+// =============================================================================
+
+/// Display toast notifications via OSC 9 and OSC 777 escape sequences
+fn runToastTest() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\Toast Notification Test
+        \\=======================
+        \\
+        \\This test sends OSC 9 and OSC 777 escape sequences to trigger
+        \\toast notifications. Run this in a dullahan terminal pane and
+        \\watch for toasts appearing in the upper-right corner.
+        \\
+        \\Sending notifications...
+        \\
+        \\
+    ) catch {};
+
+    // OSC 9 format: ESC ] 9 ; <message> BEL
+    // OSC 777 format: ESC ] 777 ; notify ; <title> ; <body> BEL
+    const ESC = "\x1b";
+    const BEL = "\x07";
+
+    // Test 1: OSC 9 - Simple notification (info type)
+    _ = posix.write(stdout_fd, "1. OSC 9: Simple info notification\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;Hello from OSC 9!" ++ BEL) catch {};
+    std.Thread.sleep(1_500_000_000); // 1.5 seconds
+
+    // Test 2: OSC 777 - Notification with title (info type)
+    _ = posix.write(stdout_fd, "2. OSC 777: Notification with title\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Build Status;Compiling source files..." ++ BEL) catch {};
+    std.Thread.sleep(1_500_000_000);
+
+    // Test 3: OSC 9 - Success notification
+    _ = posix.write(stdout_fd, "3. OSC 9: Success notification\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;Build complete! All tests passed." ++ BEL) catch {};
+    std.Thread.sleep(1_500_000_000);
+
+    // Test 4: OSC 777 - Warning notification
+    _ = posix.write(stdout_fd, "4. OSC 777: Warning notification\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Warning;Deprecated API usage detected" ++ BEL) catch {};
+    std.Thread.sleep(1_500_000_000);
+
+    // Test 5: OSC 777 - Error notification
+    _ = posix.write(stdout_fd, "5. OSC 777: Error notification\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Error;Build failed with 3 errors" ++ BEL) catch {};
+    std.Thread.sleep(1_500_000_000);
+
+    // Test 6: OSC 9 - Done notification
+    _ = posix.write(stdout_fd, "6. OSC 9: Done notification\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;Task done successfully!" ++ BEL) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Test complete!
+        \\
+        \\You should have seen 6 toast notifications:
+        \\  1. Info: "Hello from OSC 9!"
+        \\  2. Info: "Build Status" / "Compiling source files..."
+        \\  3. Success: "Build complete! All tests passed."
+        \\  4. Warning: "Warning" / "Deprecated API usage detected"
+        \\  5. Error: "Error" / "Build failed with 3 errors"
+        \\  6. Success: "Task done successfully!"
+        \\
+        \\Toast type is inferred from message content:
+        \\  - "error", "fail", "fatal" -> red border
+        \\  - "warn" -> yellow border
+        \\  - "success", "done", "complete" -> green border
+        \\  - default -> blue border (info)
         \\
     ) catch {};
 }
