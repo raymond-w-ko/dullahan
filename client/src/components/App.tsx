@@ -56,9 +56,9 @@ export function App() {
 
         <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <LayoutPickerModal />
-        <ToastContainer />
       </ErrorBoundary>
 
+      <ToastContainer />
       <ClipboardBar />
 
       <aside class="bottombar">

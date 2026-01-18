@@ -45,6 +45,7 @@ html, body {
   /* Spacing - compact by default */
   --space-1: 2px;
   --space-2: 4px;
+  --space-3: 8px;
 
   /* Layout (derived from spacing) */
   --term-padding-x: var(--space-2);
@@ -55,6 +56,7 @@ html, body {
 [data-spacing="comfortable"] {
   --space-1: 8px;
   --space-2: 16px;
+  --space-3: 32px;
 }
 
 /* ==========================================================================
@@ -66,6 +68,7 @@ html, body {
   background: var(--term-bg);
   color: var(--term-fg);
   height: 100vh;
+  position: relative;
   display: flex;
   flex-direction: column;
 }
@@ -1064,7 +1067,7 @@ html, body {
    ============================================================================ */
 
 .toast-container {
-  position: fixed;
+  position: absolute;
   top: var(--space-3);
   right: var(--space-3);
   z-index: 1100;
@@ -1077,13 +1080,13 @@ html, body {
 
 .toast {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: color-mix(in srgb, var(--term-bg) 85%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-radius: 0.5rem;
+  border-radius: 6px;
   border-left: 3px solid var(--c4);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   pointer-events: auto;
@@ -1115,7 +1118,7 @@ html, body {
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--term-fg);
-  margin-bottom: 0.25rem;
+  margin-bottom: 0;
 }
 
 .toast-message {
