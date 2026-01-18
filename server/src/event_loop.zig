@@ -31,6 +31,7 @@ const keyboard = @import("keyboard.zig");
 const messages = @import("messages.zig");
 const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
+const ipc_commands = @import("ipc_commands.zig");
 
 const log = std.log.scoped(.event_loop);
 
@@ -430,370 +431,48 @@ pub const EventLoop = struct {
     }
 
     fn handleCommand(self: *EventLoop, command: ipc.Command, data: ?[]const u8, alloc: std.mem.Allocator) !ipc.Response {
-        return switch (command) {
-            .ping => ipc.Response.ok("pong"),
+        // Build client info for status display
+        var client_infos = try alloc.alloc(ipc_commands.ClientInfo, self.clients.items.len);
+        defer alloc.free(client_infos);
 
-            .status => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
+        for (self.clients.items, 0..) |*client, i| {
+            client_infos[i] = .{
+                .client_id = client.client_id,
+                .is_master = if (client.client_id) |id| self.isMaster(id) else false,
+            };
+        }
 
-                const up = self.uptime();
-                const hours = @divFloor(up, 3600);
-                const mins = @divFloor(@mod(up, 3600), 60);
-                const secs = @mod(up, 60);
-
-                try writer.print("Uptime: {d}h {d}m {d}s\n", .{ hours, mins, secs });
-                try writer.print("Commands processed: {d}\n", .{self.commands_processed});
-                try writer.print("Running: {any}\n", .{self.running});
-                try writer.print("Connected clients: {d}\n", .{self.clients.items.len});
-
-                // Show master status
-                if (self.master_id) |master| {
-                    const short_master = if (master.len >= 8) master[0..8] else master;
-                    try writer.print("Master: {s}...\n", .{short_master});
-                } else {
-                    try writer.writeAll("Master: (none)\n");
-                }
-
-                // List connected clients
-                if (self.clients.items.len > 0) {
-                    try writer.writeAll("Clients:\n");
-                    for (self.clients.items, 0..) |*client, i| {
-                        const is_master = if (client.client_id) |id| self.isMaster(id) else false;
-                        const master_marker: []const u8 = if (is_master) " [MASTER]" else "";
-                        if (client.client_id) |id| {
-                            try writer.print("  [{d}] {s}{s}\n", .{ i, id, master_marker });
-                        } else {
-                            try writer.print("  [{d}] (anonymous)\n", .{i});
-                        }
-                    }
-                }
-
-                const status_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Server status", status_data);
-            },
-
-            .quit => blk: {
-                self.running = false;
-                break :blk ipc.Response.ok("Shutting down");
-            },
-
-            .help => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-                try writer.writeAll("Available commands:\n");
-                inline for (std.meta.fields(ipc.Command)) |field| {
-                    const cmd: ipc.Command = @enumFromInt(field.value);
-                    try writer.print("  {s:<10} - {s}\n", .{ field.name, cmd.description() });
-                }
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Help", result_data);
-            },
-
-            .shell => blk: {
-                const steps = try shell.getDetectionSteps(alloc);
-                break :blk ipc.Response.okWithData("Shell detection", steps);
-            },
-
-            .dump => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-
-                const up = self.uptime();
-                try writer.print("Server: up={d}s cmds={d}\n", .{ up, self.commands_processed });
-                try self.session.dump(writer);
-
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("State dump", result_data);
-            },
-
-            .@"dump-raw" => blk: {
-                const pane = self.session.activePane() orelse
-                    break :blk ipc.Response.err("No active pane");
-
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-                try pane.dumpRaw(writer);
-
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Raw cell dump", result_data);
-            },
-
-            .@"debug-capture" => blk: {
-                const pane = self.session.activePane() orelse
-                    break :blk ipc.Response.err("No active pane");
-
-                const capture_path = paths.StaticPaths.capture();
-
-                pane.startCapture(capture_path) catch |e| {
-                    var errbuf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&errbuf, "Failed to start capture: {any}", .{e}) catch "Failed to start capture";
-                    break :blk ipc.Response.err(msg);
-                };
-
-                pane.writeInput("claude\n") catch |e| {
-                    logRecoverable("capture test input", e);
-                };
-                std.Thread.sleep(500 * std.time.ns_per_ms);
-                pane.stopCapture();
-
-                var msg_buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&msg_buf, "Sent 'claude\\n'. Run 'dump-raw' to see terminal state, check {s} for hex dump.", .{capture_path}) catch "Capture complete";
-                break :blk ipc.Response.okWithData("Capture started", msg);
-            },
-
-            .@"pty-log" => blk: {
-                const enabled = self.session.isPtyLoggingEnabled();
-                const path = self.session.getPtyLogPath();
-                const msg = try std.fmt.allocPrint(alloc, "PTY logging: {s}\nLog file: {s}", .{
-                    if (enabled) "enabled" else "disabled",
-                    path,
-                });
-                break :blk ipc.Response.okWithData(if (enabled) "PTY logging enabled" else "PTY logging disabled", msg);
-            },
-
-            .@"pty-log-on" => blk: {
-                self.session.setPtyLogging(true);
-                const path = self.session.getPtyLogPath();
-                const msg = try std.fmt.allocPrint(alloc, "PTY traffic logging enabled.\nLog file: {s}", .{path});
-                break :blk ipc.Response.okWithData("PTY logging enabled", msg);
-            },
-
-            .@"pty-log-off" => blk: {
-                self.session.setPtyLogging(false);
-                break :blk ipc.Response.ok("PTY logging disabled");
-            },
-
-            .ttysize => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-
-                // Query stdin (fd 0) for terminal size
-                const TIOCGWINSZ: u32 = if (builtin.os.tag == .macos) 0x40087468 else 0x5413;
-                var ws: extern struct {
-                    ws_row: u16 = 0,
-                    ws_col: u16 = 0,
-                    ws_xpixel: u16 = 0,
-                    ws_ypixel: u16 = 0,
-                } = .{};
-
-                if (sys.ioctl(0, TIOCGWINSZ, @intFromPtr(&ws)) < 0) {
-                    // Try stdout if stdin doesn't work
-                    if (sys.ioctl(1, TIOCGWINSZ, @intFromPtr(&ws)) < 0) {
-                        break :blk ipc.Response.err("ioctl TIOCGWINSZ failed (not a tty?)");
-                    }
-                }
-
-                try writer.print("Server console size (ioctl):\n", .{});
-                try writer.print("  cols: {d}\n", .{ws.ws_col});
-                try writer.print("  rows: {d}\n", .{ws.ws_row});
-                try writer.print("  xpixel: {d}\n", .{ws.ws_xpixel});
-                try writer.print("  ypixel: {d}\n", .{ws.ws_ypixel});
-
-                // Also show pane sizes from registry
-                try writer.print("\nVirtual terminal pane sizes:\n", .{});
-                var it = self.session.pane_registry.iterator();
-                while (it.next()) |pane_ptr| {
-                    const pane = pane_ptr.*;
-                    try writer.print("  pane {d}: {d}x{d}\n", .{ pane.id, pane.cols, pane.rows });
-                }
-
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Server console size", result_data);
-            },
-
-            .layouts => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-
-                // Write JSON array of layout templates
-                try writer.writeAll("[\n");
-                const templates = self.layouts.getAll();
-                for (templates, 0..) |template, i| {
-                    if (i > 0) try writer.writeAll(",\n");
-                    try writer.print("  {{ \"id\": \"{s}\", \"name\": \"{s}\", \"panes\": {d} }}", .{
-                        template.id,
-                        template.name,
-                        template.countPanes(),
-                    });
-                }
-                try writer.writeAll("\n]");
-
-                const json_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Available layouts", json_data);
-            },
-
-            .panes => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-
-                // List all pane IDs from registry
-                var pane_it = self.session.pane_registry.iterator();
-                var first = true;
-                while (pane_it.next()) |pane_ptr| {
-                    const pane = pane_ptr.*;
-                    if (!first) try writer.writeAll(" ");
-                    try writer.print("{d}", .{pane.id});
-                    first = false;
-                }
-                if (first) {
-                    try writer.writeAll("(no panes)");
-                }
-
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Pane IDs", result_data);
-            },
-
-            .windows => blk: {
-                var buf: std.ArrayListUnmanaged(u8) = .{};
-                const writer = buf.writer(alloc);
-
-                // JSON array of windows with pane IDs
-                try writer.writeAll("[\n");
-                var win_it = self.session.windows.iterator();
-                var first_win = true;
-                while (win_it.next()) |entry| {
-                    if (!first_win) try writer.writeAll(",\n");
-                    first_win = false;
-
-                    const window = entry.value_ptr;
-                    try writer.print("  {{ \"id\": {d}, \"panes\": [", .{window.id});
-
-                    for (window.pane_ids.items, 0..) |pane_id, i| {
-                        if (i > 0) try writer.writeAll(", ");
-                        try writer.print("{d}", .{pane_id});
-                    }
-                    try writer.writeAll("]");
-
-                    // Include template if set
-                    if (window.template_id) |template| {
-                        try writer.print(", \"template\": \"{s}\"", .{template});
-                    }
-                    try writer.writeAll(" }");
-                }
-                try writer.writeAll("\n]");
-
-                const result_data = try buf.toOwnedSlice(alloc);
-                break :blk ipc.Response.okWithData("Windows", result_data);
-            },
-
-            .send => blk: {
-                const args = data orelse
-                    break :blk ipc.Response.err("Usage: send <pane_id> [text]\nReads from stdin if no text provided");
-
-                // Parse pane ID from first argument
-                const space_idx = std.mem.indexOf(u8, args, " ");
-                const pane_id_str = if (space_idx) |idx| args[0..idx] else args;
-                const text = if (space_idx) |idx| std.mem.trim(u8, args[idx + 1 ..], &std.ascii.whitespace) else null;
-
-                const pane_id = std.fmt.parseInt(u16, pane_id_str, 10) catch
-                    break :blk ipc.Response.err("Invalid pane ID. Usage: send <pane_id> [text]");
-
-                const pane = self.session.pane_registry.get(pane_id) orelse
-                    break :blk ipc.Response.err("Pane not found");
-
-                // If no text provided, that's handled by CLI reading stdin
-                const send_text = text orelse
-                    break :blk ipc.Response.err("No text provided. Use stdin: echo 'text' | dullahan send <pane_id>");
-
-                if (send_text.len == 0)
-                    break :blk ipc.Response.err("Empty text. Use stdin: echo 'text' | dullahan send <pane_id>");
-
-                pane.writeInput(send_text) catch |e| {
-                    var errbuf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&errbuf, "Failed to send: {any}", .{e}) catch "Failed to send";
-                    break :blk ipc.Response.err(msg);
-                };
-
-                var msg_buf: [64]u8 = undefined;
-                const msg = std.fmt.bufPrint(&msg_buf, "Sent {d} bytes to pane {d}", .{ send_text.len, pane.id }) catch "Sent";
-                break :blk ipc.Response.ok(msg);
-            },
-
-            .@"clipboard-set" => blk: {
-                const args = data orelse
-                    break :blk ipc.Response.err("Usage: clipboard-set <c|p> <text>");
-
-                // Parse kind (c or p) from first argument
-                const space_idx = std.mem.indexOf(u8, args, " ");
-                const kind_str = if (space_idx) |idx| args[0..idx] else args;
-                const text = if (space_idx) |idx| args[idx + 1 ..] else null;
-
-                if (kind_str.len != 1 or (kind_str[0] != 'c' and kind_str[0] != 'p'))
-                    break :blk ipc.Response.err("Invalid kind. Use 'c' (clipboard) or 'p' (primary)");
-
-                const kind = kind_str[0];
-                const clipboard_text = text orelse
-                    break :blk ipc.Response.err("No text provided. Usage: clipboard-set <c|p> <text>");
-
-                // Store locally for clipboard-get (use self.allocator for persistent storage)
-                const text_copy = self.allocator.dupe(u8, clipboard_text) catch
-                    break :blk ipc.Response.err("Out of memory");
-
-                if (kind == 'c') {
-                    if (self.ipc_clipboard_c) |old| {
-                        self.allocator.free(old);
-                    }
-                    self.ipc_clipboard_c = text_copy;
-                } else {
-                    if (self.ipc_clipboard_p) |old| {
-                        self.allocator.free(old);
-                    }
-                    self.ipc_clipboard_p = text_copy;
-                }
-
-                // Encode text as base64 for the clipboard message
-                const encoded_len = std.base64.standard.Encoder.calcSize(clipboard_text.len);
-                const base64_data = alloc.alloc(u8, encoded_len) catch
-                    break :blk ipc.Response.err("Out of memory for base64");
-                defer alloc.free(base64_data);
-                _ = std.base64.standard.Encoder.encode(base64_data, clipboard_text);
-
-                // Generate clipboard SET message and broadcast to all clients
-                // Use pane ID 0 (debug pane) as a placeholder
-                const clipboard_msg = snapshot.generateClipboardMessage(
-                    alloc,
-                    0, // pane_id (not important for SET broadcast)
-                    "set",
-                    kind,
-                    base64_data,
-                ) catch break :blk ipc.Response.err("Failed to generate clipboard message");
-                defer alloc.free(clipboard_msg);
-
-                // Broadcast to all clients
-                for (self.clients.items) |*client| {
-                    client.ws.sendBinary(clipboard_msg) catch |e| {
-                        logClientError("broadcast clipboard SET", e);
-                    };
-                }
-
-                var resp_buf: [128]u8 = undefined;
-                const resp_msg = std.fmt.bufPrint(&resp_buf, "Set '{c}' clipboard: {d} bytes, broadcast to {d} clients", .{
-                    kind,
-                    clipboard_text.len,
-                    self.clients.items.len,
-                }) catch "Set clipboard";
-                break :blk ipc.Response.ok(resp_msg);
-            },
-
-            .@"clipboard-get" => blk: {
-                const args = data orelse
-                    break :blk ipc.Response.err("Usage: clipboard-get <c|p>");
-
-                const kind_str = std.mem.trim(u8, args, &std.ascii.whitespace);
-                if (kind_str.len != 1 or (kind_str[0] != 'c' and kind_str[0] != 'p'))
-                    break :blk ipc.Response.err("Invalid kind. Use 'c' (clipboard) or 'p' (primary)");
-
-                const kind = kind_str[0];
-                const stored = if (kind == 'c') self.ipc_clipboard_c else self.ipc_clipboard_p;
-
-                if (stored) |text| {
-                    break :blk ipc.Response.okWithData("Clipboard content", text);
-                } else {
-                    break :blk ipc.Response.ok("(empty)");
-                }
-            },
+        // Build context for command handlers
+        const ctx = ipc_commands.Context{
+            .alloc = alloc,
+            .persistent_alloc = self.allocator,
+            .data = data,
+            .uptime = self.uptime(),
+            .commands_processed = self.commands_processed,
+            .running = &self.running,
+            .session = self.session,
+            .layouts = &self.layouts,
+            .client_count = self.clients.items.len,
+            .clients = client_infos,
+            .master_id = self.master_id,
+            .ipc_clipboard_c = &self.ipc_clipboard_c,
+            .ipc_clipboard_p = &self.ipc_clipboard_p,
         };
+
+        // Dispatch to handler
+        const result = try ipc_commands.dispatch(ctx, command);
+
+        // Handle broadcast if needed
+        if (result.broadcast_data) |broadcast_msg| {
+            defer alloc.free(broadcast_msg);
+            for (self.clients.items) |*client| {
+                client.ws.sendBinary(broadcast_msg) catch |e| {
+                    logClientError("broadcast", e);
+                };
+            }
+        }
+
+        return result.response;
     }
 
     fn handleHttpAccept(self: *EventLoop) !void {
