@@ -4,6 +4,7 @@
 import { h } from "preact";
 import { useEffect, useRef, useCallback } from "preact/hooks";
 import { TerminalView } from "./TerminalView";
+import { ProgressBar } from "./ProgressBar";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
@@ -119,6 +120,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
         </span>
       </div>
       <div class="terminal-container" ref={terminalRef}>
+        <ProgressBar paneId={paneId} />
         {snapshot ? (
           <TerminalView
             paneId={paneId}

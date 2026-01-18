@@ -1,15 +1,20 @@
 // Progress bar component - thin vertical strip for taskbar progress (OSC 9;4)
-// Ghostty-style: minimal, positioned at top edge
+// Ghostty-style: minimal, positioned at top edge of each pane
 
 import { h } from "preact";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import { getStore } from "../store";
 
-export function ProgressBar() {
+export interface ProgressBarProps {
+  paneId: number;
+}
+
+export function ProgressBar({ paneId }: ProgressBarProps) {
   useStoreSubscription();
   const { progress } = getStore();
 
-  if (!progress || progress.state === 0) {
+  // Only show if progress is for this pane
+  if (!progress || progress.state === 0 || progress.paneId !== paneId) {
     return null;
   }
 
