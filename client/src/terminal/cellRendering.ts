@@ -3,7 +3,7 @@
 
 import { cellToChar, ContentTag, Wide } from "../../../protocol/schema/cell";
 import { getStyle, ColorTag } from "../../../protocol/schema/style";
-import type { Cell, HyperlinkTable } from "../../../protocol/schema/cell";
+import type { Cell, HyperlinkTable, GraphemeTable } from "../../../protocol/schema/cell";
 import type { Style, StyleTable, Color } from "../../../protocol/schema/style";
 import {
   normalizeSelectionBounds,
@@ -115,7 +115,8 @@ export function cellsToRuns(
   cols: number,
   rows: number,
   selection?: SelectionBounds,
-  hyperlinks?: HyperlinkTable
+  hyperlinks?: HyperlinkTable,
+  graphemes?: GraphemeTable
 ): StyledRun[][] {
   const lines: StyledRun[][] = [];
 
@@ -132,7 +133,7 @@ export function cellsToRuns(
         continue;
       }
 
-      const char = cell ? cellToChar(cell) : " ";
+      const char = cell ? cellToChar(cell, graphemes, idx) : " ";
       const styleId = cell?.styleId ?? 0;
       const selected = selection ? isCellInSelection(x, y, selection) : false;
       // Extract content-based bg color (for bg-only cells like htop headers)

@@ -10,7 +10,7 @@
 
 import { debug } from "../debug";
 import { cellToChar } from "../../../protocol/schema/cell";
-import type { Cell } from "../../../protocol/schema/cell";
+import type { Cell, GraphemeTable } from "../../../protocol/schema/cell";
 import {
   normalizeSelectionBounds,
   type SelectionBounds,
@@ -143,12 +143,14 @@ export function clearSelection(): void {
  * @param cells - Terminal cell array (row-major order)
  * @param cols - Number of columns in the terminal
  * @param selection - Selection bounds from server
+ * @param graphemes - Optional grapheme table for multi-codepoint characters
  * @returns The selected text as a string
  */
 export function getTerminalSelectionText(
   cells: Cell[],
   cols: number,
-  selection: SelectionBounds
+  selection: SelectionBounds,
+  graphemes?: GraphemeTable
 ): string {
   // Validate input
   if (!cells.length || cols <= 0) {
@@ -189,7 +191,7 @@ export function getTerminalSelectionText(
       for (let x = minX; x <= maxX; x++) {
         const idx = y * cols + x;
         const cell = cells[idx];
-        line += cell ? cellToChar(cell) : " ";
+        line += cell ? cellToChar(cell, graphemes, idx) : " ";
       }
       lines.push(line.trimEnd());
     }
@@ -221,7 +223,7 @@ export function getTerminalSelectionText(
       for (let x = lineStart; x <= lineEnd; x++) {
         const idx = y * cols + x;
         const cell = cells[idx];
-        line += cell ? cellToChar(cell) : " ";
+        line += cell ? cellToChar(cell, graphemes, idx) : " ";
       }
       lines.push(line.trimEnd());
     }

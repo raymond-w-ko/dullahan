@@ -347,8 +347,11 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         const page = &row_pin.node.data;
 
         // Copy each cell as raw bytes and collect styles and graphemes
-        for (cells) |cell| {
-            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
+        // NOTE: Must use index-based iteration to get actual cell pointers from page memory.
+        // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
+        for (0..cells.len) |i| {
+            const cell = &cells[i];
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
             @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
             byte_offset += 8;
 
@@ -361,7 +364,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
             // Check for grapheme clusters (additional codepoints beyond the first)
             if (cell.hasGrapheme()) {
-                if (page.lookupGrapheme(&cell)) |extra_cps| {
+                if (page.lookupGrapheme(cell)) |extra_cps| {
                     if (extra_cps.len > 0 and extra_cps.len <= 255) {
                         // Write: cell_index (u32 LE), num_codepoints (u8), codepoints (3 bytes each)
                         // Cell index (little-endian u32)
@@ -387,7 +390,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
             // Check for hyperlinks (OSC 8)
             if (cell.hyperlink) {
-                if (page.lookupHyperlink(&cell)) |hyperlink_id| {
+                if (page.lookupHyperlink(cell)) |hyperlink_id| {
                     const entry = page.hyperlink_set.get(page.memory, hyperlink_id);
                     const uri = entry.uri.slice(page.memory);
                     if (uri.len > 0 and uri.len <= 65535) {
@@ -839,8 +842,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         try row_hyperlink_list.appendNTimes(allocator, 0, 4);
 
         // Copy actual cells
-        for (cells, 0..) |cell, i| {
-            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&cell);
+        // NOTE: Must use index-based iteration to get actual cell pointers from page memory.
+        // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
+        for (0..cells.len) |i| {
+            const cell = &cells[i];
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
             @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
 
             // Collect style (encode immediately from correct page)
@@ -852,7 +858,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
 
             // Collect graphemes (row-relative column index)
             if (cell.hasGrapheme()) {
-                if (page.lookupGrapheme(&cell)) |extra_cps| {
+                if (page.lookupGrapheme(cell)) |extra_cps| {
                     if (extra_cps.len > 0 and extra_cps.len <= 255) {
                         const col_index: u32 = @intCast(i);
 
@@ -879,7 +885,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
 
             // Collect hyperlinks (row-relative column index)
             if (cell.hyperlink) {
-                if (page.lookupHyperlink(&cell)) |hyperlink_id| {
+                if (page.lookupHyperlink(cell)) |hyperlink_id| {
                     const entry = page.hyperlink_set.get(page.memory, hyperlink_id);
                     const uri = entry.uri.slice(page.memory);
                     if (uri.len > 0 and uri.len <= 65535) {

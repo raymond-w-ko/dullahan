@@ -140,6 +140,10 @@ pub const Pane = struct {
         // Without this, \n only moves down, not back to column 0
         terminal.modes.set(.linefeed, true);
 
+        // Enable grapheme clustering (mode 2027) so emoji with modifiers,
+        // ZWJ sequences, and flag emoji are combined into single cells
+        terminal.modes.set(.grapheme_cluster, true);
+
         return .{
             .terminal = terminal,
             .cols = opts.cols,

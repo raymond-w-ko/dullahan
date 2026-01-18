@@ -174,6 +174,8 @@ Integrated test commands for debugging (run in a real terminal like Ghostty):
 ./zig-out/bin/dullahan test keytest-bytes   # Byte coverage tester (256-byte grid)
 ./zig-out/bin/dullahan test delta-gen       # Generate delta sync test fixtures
 ./zig-out/bin/dullahan test shell-delta     # Shell delta sync test
+./zig-out/bin/dullahan test grapheme-test   # Grapheme cluster rendering test
+./zig-out/bin/dullahan test hyperlink-test  # OSC 8 hyperlink test
 ```
 
 **keytest-kitty** — Tests Kitty keyboard protocol with full event reporting:
@@ -194,6 +196,21 @@ Integrated test commands for debugging (run in a real terminal like Ghostty):
 **shell-delta** — End-to-end delta sync test:
 - Spawns a real shell, sends arrow keys
 - Compares delta vs snapshot for correctness
+
+**grapheme-test** — Displays various Unicode grapheme clusters:
+- Emoji with skin tone modifiers (👍🏻)
+- ZWJ family/profession sequences (👨‍👩‍👧, 👩‍💻)
+- Flag emoji (🇺🇸, 🇯🇵)
+- Combining marks and diacritics (é, ñ)
+- CJK wide characters
+- Useful for verifying grapheme cluster rendering
+
+**hyperlink-test** — Displays OSC 8 clickable hyperlinks:
+- HTTPS, HTTP, mailto:, tel:, file:// links
+- Links with query params and anchors
+- Grouped links with id parameter
+- Links with color styling
+- Useful for verifying OSC 8 hyperlink support
 
 ### Test Coverage
 

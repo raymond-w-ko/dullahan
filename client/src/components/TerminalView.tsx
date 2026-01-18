@@ -123,7 +123,8 @@ export function TerminalView({
           return getTerminalSelectionText(
             currentSnapshot.cells,
             currentSnapshot.cols,
-            currentSnapshot.selection
+            currentSnapshot.selection,
+            currentSnapshot.graphemes
           );
         }
         // Fall back to DOM selection
@@ -279,8 +280,8 @@ export function TerminalView({
     imeRef.current?.focus();
   }, []);
 
-  // Convert cells to styled runs (with selection highlighting and hyperlinks if active)
-  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection, snapshot.hyperlinks);
+  // Convert cells to styled runs (with selection highlighting, hyperlinks, and graphemes if active)
+  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection, snapshot.hyperlinks, snapshot.graphemes);
 
   // Build cursor config object
   const cursorConfig: CursorConfig = {

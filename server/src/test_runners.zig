@@ -30,6 +30,9 @@ pub const TestCommand = enum {
     @"osc52-set",
     @"osc52-get",
     @"osc52-interactive",
+    @"grapheme-test",
+    @"grapheme-debug",
+    @"hyperlink-test",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -41,6 +44,9 @@ pub const TestCommand = enum {
             .{ "osc52-set", .@"osc52-set" },
             .{ "osc52-get", .@"osc52-get" },
             .{ "osc52-interactive", .@"osc52-interactive" },
+            .{ "grapheme-test", .@"grapheme-test" },
+            .{ "grapheme-debug", .@"grapheme-debug" },
+            .{ "hyperlink-test", .@"hyperlink-test" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -55,6 +61,9 @@ pub const TestCommand = enum {
             .@"osc52-set" => "Send OSC 52 SET to clipboard (usage: osc52-set [c|p] [text])",
             .@"osc52-get" => "Send OSC 52 GET to read clipboard (usage: osc52-get [c|p])",
             .@"osc52-interactive" => "Interactive OSC 52 clipboard tester",
+            .@"grapheme-test" => "Display grapheme clusters (emoji, combining marks)",
+            .@"grapheme-debug" => "Debug grapheme cluster detection in VT emulator",
+            .@"hyperlink-test" => "Display OSC 8 hyperlinks for testing",
             .help => "Show available test commands",
         };
     }
@@ -72,6 +81,9 @@ pub fn printTestUsage() void {
         \\  osc52-set         Send OSC 52 SET sequence (run in terminal pane)
         \\  osc52-get         Send OSC 52 GET sequence (run in terminal pane)
         \\  osc52-interactive Interactive clipboard tester (run in terminal pane)
+        \\  grapheme-test     Display grapheme clusters (emoji, combining marks)
+        \\  grapheme-debug    Debug grapheme detection in VT emulator
+        \\  hyperlink-test    Display OSC 8 hyperlinks for testing
         \\  help              Show this help
         \\
         \\Examples:
@@ -80,6 +92,8 @@ pub fn printTestUsage() void {
         \\  dullahan test osc52-set p primary   # Set primary selection to "primary"
         \\  dullahan test osc52-get c           # Request clipboard 'c' content
         \\  dullahan test osc52-interactive     # Interactive mode (run in dullahan pane)
+        \\  dullahan test grapheme-test         # Test grapheme cluster rendering
+        \\  dullahan test hyperlink-test        # Test OSC 8 hyperlinks
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -95,6 +109,9 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"osc52-set" => try runOsc52Set(),
         .@"osc52-get" => try runOsc52Get(),
         .@"osc52-interactive" => try runOsc52Interactive(),
+        .@"grapheme-test" => runGraphemeTest(),
+        .@"grapheme-debug" => try runGraphemeDebug(allocator),
+        .@"hyperlink-test" => runHyperlinkTest(),
         .help => printTestUsage(),
     }
 }
@@ -1520,4 +1537,347 @@ fn osc52SetClipboard(fd: posix.fd_t, kind: u8, text: []const u8) void {
     w.writeByte(0x07) catch return;
 
     _ = posix.write(fd, fbs.getWritten()) catch {};
+}
+
+// =============================================================================
+// Grapheme Cluster Tester
+// =============================================================================
+
+/// Display various grapheme clusters to test Unicode rendering
+fn runGraphemeTest() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    const output =
+        \\
+        \\Grapheme Cluster Test
+        \\=====================
+        \\
+        \\This test displays various Unicode grapheme clusters.
+        \\Each grapheme should render as a single character.
+        \\
+        \\1. EMOJI WITH SKIN TONE MODIFIERS
+        \\   👍       (thumbs up)
+        \\   👍🏻      (thumbs up, light skin)
+        \\   👍🏼      (thumbs up, medium-light skin)
+        \\   👍🏽      (thumbs up, medium skin)
+        \\   👍🏾      (thumbs up, medium-dark skin)
+        \\   👍🏿      (thumbs up, dark skin)
+        \\
+        \\2. FAMILY EMOJI (ZWJ SEQUENCES)
+        \\   👨‍👩‍👧     (family: man, woman, girl)
+        \\   👨‍👩‍👧‍👦    (family: man, woman, girl, boy)
+        \\   👩‍👩‍👦‍👦    (family: woman, woman, boy, boy)
+        \\   👨‍👨‍👧‍👧    (family: man, man, girl, girl)
+        \\
+        \\3. PROFESSION EMOJI (ZWJ SEQUENCES)
+        \\   👨‍💻      (man technologist)
+        \\   👩‍💻      (woman technologist)
+        \\   👨‍🚀      (man astronaut)
+        \\   👩‍🚀      (woman astronaut)
+        \\   👨‍🍳      (man cook)
+        \\   👩‍🍳      (woman cook)
+        \\
+        \\4. FLAG EMOJI (REGIONAL INDICATORS)
+        \\   🇺🇸      (United States)
+        \\   🇬🇧      (United Kingdom)
+        \\   🇯🇵      (Japan)
+        \\   🇩🇪      (Germany)
+        \\   🇫🇷      (France)
+        \\
+        \\5. COMBINING MARKS (DIACRITICS)
+        \\   é        (e + combining acute accent, precomposed)
+        \\   é       (e + combining acute accent, decomposed - U+0065 U+0301)
+        \\   ñ        (n + combining tilde, precomposed)
+        \\   ñ       (n + combining tilde, decomposed - U+006E U+0303)
+        \\   ü        (u + combining diaeresis, precomposed)
+        \\   ü       (u + combining diaeresis, decomposed - U+0075 U+0308)
+        \\
+        \\6. COMBINING MARKS (STACKED)
+        \\   ệ        (e + circumflex + dot below)
+        \\   ǭ        (o + macron + ogonek)
+        \\
+        \\7. EMOJI VARIATIONS
+        \\   ❤️       (red heart)
+        \\   ❤️‍🔥      (heart on fire)
+        \\   ❤️‍🩹      (mending heart)
+        \\   ☀️       (sun with rays)
+        \\   ⭐       (star)
+        \\
+        \\8. KEYCAP SEQUENCES
+        \\   1️⃣       (keycap 1)
+        \\   2️⃣       (keycap 2)
+        \\   #️⃣       (keycap #)
+        \\   *️⃣       (keycap *)
+        \\
+        \\9. WIDE CHARACTERS (CJK)
+        \\   日本語    (Japanese)
+        \\   中文     (Chinese)
+        \\   한국어    (Korean)
+        \\
+        \\10. MIXED WIDTH LINE
+        \\    Hello世界🌍Test
+        \\    ^^^^^|^^|^|^^^^
+        \\    (each ^ marks a cell, | marks wide char boundaries)
+        \\
+        \\Test complete!
+        \\
+    ;
+
+    _ = posix.write(stdout_fd, output) catch {};
+}
+
+// =============================================================================
+// Grapheme Debug Tester
+// =============================================================================
+
+/// Debug grapheme cluster detection by feeding emoji through the VT emulator
+fn runGraphemeDebug(allocator: std.mem.Allocator) !void {
+    std.debug.print("\nGrapheme Debug Test\n", .{});
+    std.debug.print("===================\n\n", .{});
+    std.debug.print("Feeding emoji through VT emulator and inspecting grapheme data...\n\n", .{});
+
+    // Create a pane (which includes a ghostty terminal)
+    var pane = try Pane.init(allocator, .{
+        .cols = 80,
+        .rows = 24,
+    });
+    defer pane.deinit();
+
+    // Test cases: each is a name and UTF-8 bytes to feed
+    const TestCase = struct {
+        name: []const u8,
+        input: []const u8,
+        expected_graphemes: usize, // How many extra codepoints we expect
+    };
+
+    const test_cases = [_]TestCase{
+        // Skin tone modifier (should have 1 extra codepoint)
+        .{ .name = "Thumbs up + skin tone", .input = "👍🏻", .expected_graphemes = 1 },
+        // Family emoji (ZWJ sequence - 6 extra codepoints: ZWJ, woman, ZWJ, girl, ZWJ, boy)
+        .{ .name = "Family emoji", .input = "👨‍👩‍👧‍👦", .expected_graphemes = 6 },
+        // Man technologist (ZWJ sequence - 2 extra: ZWJ, laptop)
+        .{ .name = "Man technologist", .input = "👨‍💻", .expected_graphemes = 2 },
+        // Flag emoji (2 regional indicators)
+        .{ .name = "US Flag", .input = "🇺🇸", .expected_graphemes = 1 },
+        // Red heart with variation selector
+        .{ .name = "Red heart (VS16)", .input = "❤️", .expected_graphemes = 1 },
+        // Heart on fire (ZWJ)
+        .{ .name = "Heart on fire", .input = "❤️‍🔥", .expected_graphemes = 3 },
+        // Simple combining mark (decomposed é)
+        .{ .name = "e + acute (NFD)", .input = "e\xCC\x81", .expected_graphemes = 1 },
+        // Keycap
+        .{ .name = "Keycap 1", .input = "1️⃣", .expected_graphemes = 2 },
+    };
+
+    for (test_cases) |tc| {
+        // Clear and feed the input
+        try pane.feed("\x1b[2J\x1b[H"); // Clear screen, home cursor
+        try pane.feed(tc.input);
+        try pane.feed("\n"); // Newline to make sure it's processed
+
+        // Get the terminal pages
+        const pages = &pane.terminal.screens.active.pages;
+
+        std.debug.print("Test: {s}\n", .{tc.name});
+        std.debug.print("  Input bytes: ", .{});
+        for (tc.input) |b| {
+            std.debug.print("{x:0>2} ", .{b});
+        }
+        std.debug.print("\n", .{});
+
+        // Check first row for grapheme data
+        var grapheme_count: usize = 0;
+        var found_grapheme_cell = false;
+
+        // Get first row via pin
+        if (pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } })) |row_pin| {
+            const page = &row_pin.node.data;
+            const cells = row_pin.cells(.all);
+
+            for (0..cells.len) |col_idx| {
+                const cell = &cells[col_idx]; // Get pointer to actual cell in page memory
+                // Skip empty cells
+                if (cell.codepoint() == 0 or cell.codepoint() == ' ') continue;
+
+                const has_grapheme = cell.hasGrapheme();
+                const cp = cell.codepoint();
+
+                std.debug.print("  Cell[{d}]: U+{X:0>4}", .{ col_idx, cp });
+
+                if (has_grapheme) {
+                    found_grapheme_cell = true;
+                    if (page.lookupGrapheme(cell)) |extra_cps| {
+                        grapheme_count = extra_cps.len;
+                        std.debug.print(" + grapheme({d}): ", .{extra_cps.len});
+                        for (extra_cps) |extra_cp| {
+                            std.debug.print("U+{X:0>4} ", .{extra_cp});
+                        }
+                    } else {
+                        std.debug.print(" (hasGrapheme but no data!)", .{});
+                    }
+                }
+                std.debug.print("\n", .{});
+            }
+        }
+
+        const status = if (grapheme_count == tc.expected_graphemes)
+            "✓ PASS"
+        else if (found_grapheme_cell)
+            "~ PARTIAL"
+        else
+            "✗ FAIL";
+
+        std.debug.print("  Result: {s} (found {d} extra codepoints, expected {d})\n\n", .{
+            status,
+            grapheme_count,
+            tc.expected_graphemes,
+        });
+    }
+
+    std.debug.print("Debug complete!\n", .{});
+}
+
+// =============================================================================
+// Hyperlink (OSC 8) Tester
+// =============================================================================
+
+/// Display OSC 8 hyperlinks to test clickable link rendering
+fn runHyperlinkTest() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    // OSC 8 format: ESC ] 8 ; params ; URI BEL text ESC ] 8 ; ; BEL
+    // params can include id=xxx for link grouping
+    const ESC = "\x1b";
+    const BEL = "\x07";
+    const OSC8_START = ESC ++ "]8;;";
+    const OSC8_END = ESC ++ "]8;;" ++ BEL;
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\OSC 8 Hyperlink Test
+        \\====================
+        \\
+        \\This test displays clickable hyperlinks using OSC 8 escape sequences.
+        \\Hover over links to see the URL, click to open.
+        \\
+        \\1. BASIC HTTPS LINKS
+        \\
+    ) catch {};
+
+    // Link 1: Basic HTTPS
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com" ++ BEL ++ "Click here for example.com" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\n   ") catch {};
+
+    // Link 2: Another HTTPS link
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://github.com" ++ BEL ++ "GitHub" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, " | ") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://google.com" ++ BEL ++ "Google" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, " | ") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://anthropic.com" ++ BEL ++ "Anthropic" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\2. HTTP LINKS (unsecured)
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "http://example.org" ++ BEL ++ "HTTP link (example.org)" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\3. MAILTO LINKS
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "mailto:test@example.com" ++ BEL ++ "test@example.com" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\n   ") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "mailto:support@example.com?subject=Hello" ++ BEL ++ "Email with subject" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\4. TEL LINKS
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "tel:+1-555-123-4567" ++ BEL ++ "+1 (555) 123-4567" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\5. FILE LINKS (local)
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "file:///tmp/test.txt" ++ BEL ++ "/tmp/test.txt" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\6. LINKS WITH SPECIAL CHARACTERS
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/path?query=hello%20world&foo=bar" ++ BEL ++ "URL with query params" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\n   ") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/path#section" ++ BEL ++ "URL with anchor" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\7. LINK WITH ID PARAMETER (for grouping)
+        \\
+    ) catch {};
+
+    // Link with id parameter
+    _ = posix.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Grouped link 1" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, " | ") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Same link group" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\8. LINK IN COLORED TEXT
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, "\x1b[31m") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/red" ++ BEL ++ "Red link" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\x1b[0m | \x1b[32m") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/green" ++ BEL ++ "Green link" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\x1b[0m | \x1b[34m") catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/blue" ++ BEL ++ "Blue link" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, "\x1b[0m") catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\9. ADJACENT LINKS
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://a.com" ++ BEL ++ "AAA" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://b.com" ++ BEL ++ "BBB" ++ OSC8_END) catch {};
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://c.com" ++ BEL ++ "CCC" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\10. LONG URL
+        \\
+    ) catch {};
+
+    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/this/is/a/very/long/path/that/might/wrap/across/multiple/lines/in/the/terminal" ++ BEL ++ "Very long URL path" ++ OSC8_END) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Test complete!
+        \\
+        \\Note: Links should be underlined and clickable. Unsupported protocols
+        \\(file://, javascript:, etc.) may be blocked by the client for security.
+        \\
+    ) catch {};
 }
