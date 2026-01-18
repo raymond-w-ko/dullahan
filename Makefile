@@ -1,4 +1,4 @@
-.PHONY: all build clean dev prod server client fmt themes dist
+.PHONY: all build clean dev prod server client fmt themes dist coverage coverage-server coverage-client
 
 all: build
 
@@ -64,10 +64,59 @@ themes:
 clean:
 	cd server && rm -rf zig-out .zig-cache
 	cd client && rm -rf dist
-	rm -rf dist
+	rm -rf dist coverage
 
 fmt:
 	zig fmt server/src/
+
+# =============================================================================
+# Test coverage
+# =============================================================================
+
+coverage: coverage-server coverage-client
+	@echo ""
+	@echo "Coverage complete."
+	@echo "  Server: Module-level test coverage shown above"
+	@echo "  Client: Line-level coverage from bun shown above"
+
+coverage-server:
+	@echo "=== Server Test Coverage (Module-level) ==="
+	@cd server && zig build test-bin -Doptimize=Debug
+	@server/zig-out/bin/test 2>&1 | awk -F'[. ]' ' \
+		/^[0-9]+\/[0-9]+.*\.test\..*\.\.\./ { \
+			for (i=1; i<=NF; i++) { \
+				if ($$(i) == "test") { module = $$(i-1); break; } \
+			} \
+			status = ($$NF == "OK" || $$(NF-1) == "OK") ? 1 : 0; \
+			if (module != "") { \
+				modules[module]++; \
+				if (status) passed[module]++; \
+			} \
+		} \
+		END { \
+			print ""; \
+			printf "%-20s %6s  %6s\n", "Module", "Tests", "Passed"; \
+			print "------------------------------------"; \
+			for (m in modules) { \
+				p = (m in passed) ? passed[m] : 0; \
+				printf "%-20s %6d  %6d\n", m, modules[m], p; \
+				total_tests += modules[m]; \
+				total_passed += p; \
+			} \
+			print "------------------------------------"; \
+			printf "%-20s %6d  %6d\n", "TOTAL", total_tests, total_passed; \
+			print ""; \
+			if (total_tests > 0) printf "Pass rate: %.1f%%\n", (total_passed/total_tests)*100; \
+		}'
+	@echo ""
+	@echo "Note: Line-level coverage requires kcov, which has limited Zig support."
+	@echo "      Install kcov and run: kcov coverage/server server/zig-out/bin/test"
+
+coverage-client:
+	@mkdir -p coverage/client
+	cd client && bun test --coverage
+	cd protocol && bun test --coverage
+	@echo "Client coverage printed above (bun built-in)"
 
 # =============================================================================
 # Run targets

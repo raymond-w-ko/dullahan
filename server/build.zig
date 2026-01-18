@@ -95,6 +95,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_integration_tests.step);
 
+    // `zig build test-bin` installs test binary for coverage tools (kcov)
+    const test_bin_step = b.step("test-bin", "Build test binary for coverage");
+    const install_test = b.addInstallArtifact(mod_tests, .{ .dest_sub_path = "test" });
+    test_bin_step.dependOn(&install_test.step);
+
     // `zig build test-unit` runs only unit tests
     const unit_test_step = b.step("test-unit", "Run unit tests only");
     unit_test_step.dependOn(&run_mod_tests.step);

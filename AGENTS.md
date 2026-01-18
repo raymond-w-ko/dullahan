@@ -195,6 +195,20 @@ Integrated test commands for debugging (run in a real terminal like Ghostty):
 - Spawns a real shell, sends arrow keys
 - Compares delta vs snapshot for correctness
 
+### Test Coverage
+
+```bash
+make coverage          # Run both server and client coverage
+make coverage-server   # Server only (module-level)
+make coverage-client   # Client only (line-level via bun)
+```
+
+**Client coverage** works well — bun has built-in line-level coverage reporting.
+
+**Server coverage** is limited to module-level (which modules have tests, pass/fail counts).
+Line-level coverage via kcov doesn't work because kcov can't parse Zig's DWARF debug info format.
+Waiting on [ziglang/zig#352](https://github.com/ziglang/zig/issues/352) for native coverage support.
+
 ### Ports & Paths
 
 All temp files are stored in `/tmp/dullahan-<uid>/` where `<uid>` is the user's UID.
