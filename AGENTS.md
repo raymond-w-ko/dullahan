@@ -76,7 +76,7 @@ Dullahan supports multiple simultaneous browser connections with a master/slave 
 **Key files:**
 - `server/src/event_loop.zig` — master assignment, input routing
 - `client/src/terminal/connection.ts` — master checks on input methods
-- `client/src/components/MasterIndicator.tsx` — UI showing master status
+- `client/src/components/App.tsx` — UI showing master status (star icon in bottombar)
 
 ### Window/Pane Architecture
 
@@ -253,8 +253,10 @@ This provides isolation between users on shared systems.
 ```
 dullahan/
 ├── AGENTS.md
-├── README.md
+├── CLAUDE.md
+├── LICENSE
 ├── Makefile                 # orchestrates both builds (also: `make fmt`)
+├── dullahan -> ./server/zig-out/bin/dullahan  # symlink to built binary
 │
 ├── server/
 │   ├── build.zig
@@ -265,9 +267,9 @@ dullahan/
 │       ├── server.zig       # main server loop (IPC + WS threads)
 │       ├── cli.zig          # CLI argument parsing
 │       ├── ipc.zig          # Unix socket IPC for CLI control
+│       ├── ipc_commands.zig # IPC command handlers (ping, status, quit, etc.)
 │       ├── http.zig         # HTTP server with WebSocket upgrade
 │       ├── websocket.zig    # WebSocket frame encoding/decoding
-│       ├── ws_server.zig    # WebSocket client handler (per-connection)
 │       ├── event_loop.zig   # Central event loop (master/slave, message routing)
 │       ├── snapshot.zig     # Terminal state → msgpack + delta generation
 │       ├── embedded_assets.zig # Embedded client for single-binary dist
@@ -278,7 +280,21 @@ dullahan/
 │       ├── layout_db.zig    # Layout templates, JSON persistence
 │       ├── terminal.zig     # ghostty-vt wrapper
 │       ├── pty.zig          # PTY allocation (Linux/macOS)
-│       └── test_runners.zig # Integrated test utilities (keytest, delta tests)
+│       ├── pty_log.zig      # PTY traffic logging (debug)
+│       ├── test_runners.zig # Integrated test utilities (keytest, delta tests)
+│       ├── keyboard.zig     # Server-side keyboard input processing
+│       ├── mouse.zig        # Server-side mouse event handling
+│       ├── clipboard.zig    # Clipboard (OSC 52) handling
+│       ├── messages.zig     # Server-side message types
+│       ├── constants.zig    # Shared constants
+│       ├── paths.zig        # Path resolution utilities
+│       ├── process.zig      # Process spawning utilities
+│       ├── shell.zig        # Shell detection and spawning
+│       ├── signal.zig       # Signal handling
+│       ├── dlog.zig         # Debug logging utilities
+│       ├── log_config.zig   # Logging configuration
+│       ├── math.zig         # Math utilities
+│       └── assets/          # Embedded static assets
 │
 ├── client/
 │   ├── package.json
@@ -291,27 +307,46 @@ dullahan/
 │   │   ├── main.ts          # entry point
 │   │   ├── store.ts         # reactive state management
 │   │   ├── config.ts        # user preferences (localStorage)
-│   │   ├── dullahan.css     # base styles + 256-color palette
+│   │   ├── constants.ts     # Client-side constants
+│   │   ├── debug.ts         # Debug logging (enable with ?debug)
+│   │   ├── dullahan.css     # base styles
+│   │   ├── palette.css      # 256-color palette CSS variables
+│   │   ├── liquid-glass.css # Liquid glass UI effect styles
 │   │   ├── themes.css       # 453 Ghostty themes (generated, gitignored)
 │   │   ├── themes.ts        # theme name index (generated, gitignored)
 │   │   ├── components/
-│   │   │   ├── App.tsx           # root component
-│   │   │   ├── TerminalGrid.tsx  # dynamic pane grid layout
-│   │   │   ├── TerminalPane.tsx  # individual terminal pane
-│   │   │   ├── LayoutRenderer.tsx # recursive layout tree renderer
+│   │   │   ├── App.tsx              # root component
+│   │   │   ├── TerminalGrid.tsx     # dynamic pane grid layout
+│   │   │   ├── TerminalPane.tsx     # individual terminal pane
+│   │   │   ├── TerminalView.tsx     # terminal rendering (cells, cursor, selection)
+│   │   │   ├── LayoutRenderer.tsx   # recursive layout tree renderer
 │   │   │   ├── LayoutPickerModal.tsx # template selection modal
-│   │   │   ├── WindowSwitcher.tsx # tab bar for window switching
-│   │   │   ├── MasterIndicator.tsx # master/slave status UI
-│   │   │   └── Settings.tsx      # settings panel
+│   │   │   ├── WindowSwitcher.tsx   # tab bar for window switching
+│   │   │   ├── SettingsModal.tsx    # settings panel
+│   │   │   ├── ClipboardBar.tsx     # clipboard paste confirmation bar
+│   │   │   └── ErrorBoundary.tsx    # React error boundary
+│   │   ├── hooks/
+│   │   │   ├── useScrollback.ts     # Scrollback buffer management
+│   │   │   ├── useSettings.ts       # Settings state hook
+│   │   │   ├── useModalBehavior.ts  # Modal open/close behavior
+│   │   │   ├── useStoreSubscription.ts # Store subscription hook
+│   │   │   └── useTerminalDimensions.ts # Terminal size calculation
 │   │   └── terminal/
-│   │       ├── connection.ts # WebSocket client + master checks
-│   │       ├── keyboard.ts   # Keyboard event handling + keybind interception
-│   │       ├── keybinds.ts   # Keybind string parser (Ghostty-style)
-│   │       ├── actions.ts    # Terminal action types and handlers
-│   │       ├── dimensions.ts # Shared cell dimension calculation
-│   │       ├── handler.ts    # InputHandler interface for input handlers
-│   │       ├── ime.ts        # IME composition support
-│   │       └── mouse.ts      # Mouse event handling + coordinate conversion
+│   │       ├── connection.ts    # WebSocket client + master checks
+│   │       ├── keyboard.ts      # Keyboard event handling + keybind interception
+│   │       ├── keybinds.ts      # Keybind string parser (Ghostty-style)
+│   │       ├── keybindConfig.ts # Keybind configuration loading
+│   │       ├── actions.ts       # Terminal action types and handlers
+│   │       ├── dimensions.ts    # Shared cell dimension calculation
+│   │       ├── handler.ts       # InputHandler interface for input handlers
+│   │       ├── ime.ts           # IME composition support
+│   │       ├── mouse.ts         # Mouse event handling + coordinate conversion
+│   │       ├── clipboard.ts     # Clipboard read/write operations
+│   │       ├── hyperlink.ts     # OSC 8 hyperlink handling
+│   │       ├── cellRendering.ts # Cell rendering logic
+│   │       ├── cursorRendering.tsx # Cursor rendering component
+│   │       ├── terminalStyle.ts # Terminal style computation
+│   │       └── stringLiteral.ts # String literal parsing for keybinds
 │   └── dist/                # build output (gitignored)
 │
 ├── protocol/                # shared definitions
@@ -323,23 +358,26 @@ dullahan/
 │       ├── layout.ts        # Layout node types + helpers
 │       ├── layout.test.ts   # Layout tests (bun test)
 │       ├── messages.ts      # Wire protocol message types (client↔server)
+│       ├── messages.test.ts # Message tests (bun test)
 │       ├── style.ts         # Style encode/decode (colors, attributes)
 │       └── style.test.ts    # Style tests (bun test)
 │
 ├── docs/                    # documentation
 │   ├── delta-sync-design.md # Delta sync protocol design (row IDs, generations)
 │   ├── keybindings.md       # Keybinding system design and API
-│   ├── zig-0.15-notes.md    # Zig 0.15 migration notes
-│   ├── terminal-state-sync.md # state sync design doc
-│   ├── 2025-12-29-websocket-sprint.md      # WebSocket implementation notes
-│   ├── 2025-12-29-websocket-connection-hang.md  # browser refresh bug postmortem
-│   └── 2026-01-01-stray-m-bug.md  # VT parser state bug (split escape sequences)
+│   ├── ime-support.md       # IME (Input Method Editor) support design
+│   └── zig-0.15-notes.md    # Zig 0.15 migration notes
 │
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout
 │   ├── setup-beads.sh       # initialize beads issue tracking
 │   ├── generate-themes.ts   # convert Ghostty themes to CSS
 │   └── generate-embedded-assets.ts # embed client in server binary
+│
+├── test_fixtures/           # test data files
+│   └── delta/               # delta sync test fixtures
+│
+├── dist/                    # distribution builds (gitignored)
 │
 └── deps/                    # gitignored, source checkouts for reference
     ├── ghostty/             # ghostty source (synced to dependency version)
