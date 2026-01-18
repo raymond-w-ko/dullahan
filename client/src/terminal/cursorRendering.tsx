@@ -8,7 +8,6 @@ import {
   getCellColor,
   colorToCss,
 } from "./terminalStyle";
-import { handleHyperlinkClick } from "./hyperlink";
 import type { StyledRun, WideCharRange } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
 import { ColorTag } from "../../../protocol/schema/style";
@@ -140,7 +139,7 @@ function renderRunElement(
     : runClasses(run);
   const style = extraStyle || runInlineStyle(run);
 
-  // For hyperlinks, we render differently (as <a> tag)
+  // For hyperlinks, render as <a> tag for styling/cursor, but click is handled by MouseHandler
   if (run.hyperlink) {
     // For hyperlinks with wide chars, we need to handle it specially
     if (run.wideRanges && run.wideRanges.length > 0) {
@@ -151,7 +150,6 @@ function renderRunElement(
           style={style}
           href={run.hyperlink}
           title={run.hyperlink}
-          onClick={(e: MouseEvent) => handleHyperlinkClick(e, run.hyperlink!)}
         >
           {renderTextWithWideChars(text, run.wideRanges, "", undefined)}
         </a>
@@ -164,7 +162,6 @@ function renderRunElement(
         style={style}
         href={run.hyperlink}
         title={run.hyperlink}
-        onClick={(e: MouseEvent) => handleHyperlinkClick(e, run.hyperlink!)}
       >
         {text}
       </a>

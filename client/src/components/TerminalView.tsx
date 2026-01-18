@@ -269,6 +269,24 @@ export function TerminalView({
     };
   }, [paneId, connection]);
 
+  // Update hyperlink lookup when snapshot changes
+  useEffect(() => {
+    const mouse = mouseRef.current;
+    if (!mouse) return;
+
+    // Provide lookup function that maps (x, y) to hyperlink URL
+    mouse.setHyperlinkLookup((x: number, y: number) => {
+      const currentSnapshot = snapshotRef.current;
+      if (!currentSnapshot.hyperlinks) return undefined;
+      const idx = y * currentSnapshot.cols + x;
+      return currentSnapshot.hyperlinks.get(idx);
+    });
+
+    return () => {
+      mouse.setHyperlinkLookup(null);
+    };
+  }, [snapshot.hyperlinks]);
+
   // Measure cell width and set CSS variable for wide character alignment
   useEffect(() => {
     const el = terminalRef.current;

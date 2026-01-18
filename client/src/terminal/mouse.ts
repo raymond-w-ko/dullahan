@@ -8,6 +8,7 @@
 import { debug } from "../debug";
 import { getCellDimensions, getPadding } from "./dimensions";
 import { get as getConfig } from "../config";
+import { isValidHyperlinkUrl } from "./hyperlink";
 import type { MouseMessage } from "../../../protocol/schema/messages";
 import type { InputHandler } from "./handler";
 
@@ -42,6 +43,12 @@ export class MouseHandler implements InputHandler<MouseCallback> {
 
   // Focus target - element to focus after mouseup (e.g., IME textarea)
   private focusTarget: HTMLElement | null = null;
+
+  // Click tracking for hyperlink support
+  private mouseDownCell: { x: number; y: number } | null = null;
+
+  // Hyperlink lookup callback - returns URL if cell has hyperlink
+  private hyperlinkLookup: ((x: number, y: number) => string | undefined) | null = null;
 
   constructor() {
     this.boundMouseDown = this.handleMouseDown.bind(this);
@@ -107,6 +114,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     }
     this.pendingMotionEvent = null;
     this.focusTarget = null;
+    this.mouseDownCell = null;
+    this.hyperlinkLookup = null;
   }
 
   /**
@@ -115,6 +124,14 @@ export class MouseHandler implements InputHandler<MouseCallback> {
    */
   setFocusTarget(element: HTMLElement | null): void {
     this.focusTarget = element;
+  }
+
+  /**
+   * Set the hyperlink lookup function.
+   * Called on mouseup to check if clicked cell has a hyperlink.
+   */
+  setHyperlinkLookup(lookup: ((x: number, y: number) => string | undefined) | null): void {
+    this.hyperlinkLookup = lookup;
   }
 
   /**
@@ -190,6 +207,11 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     // Track button state for motion detection
     this.buttonsPressed |= 1 << e.button;
 
+    // Track mousedown cell for hyperlink click detection (left button only)
+    if (e.button === 0) {
+      this.mouseDownCell = { x: coords.x, y: coords.y };
+    }
+
     const message: MouseMessage = {
       type: "mouse",
       paneId: this._paneId,
@@ -225,6 +247,31 @@ export class MouseHandler implements InputHandler<MouseCallback> {
 
     // Clear button state
     this.buttonsPressed &= ~(1 << e.button);
+
+    // Check for hyperlink click: left button, same cell as mousedown, no modifiers
+    if (
+      e.button === 0 &&
+      this.mouseDownCell &&
+      this.mouseDownCell.x === coords.x &&
+      this.mouseDownCell.y === coords.y &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      !e.metaKey
+    ) {
+      const url = this.hyperlinkLookup?.(coords.x, coords.y);
+      if (url && isValidHyperlinkUrl(url)) {
+        debug.log(`[mouse] hyperlink click at (${coords.x}, ${coords.y}): ${url}`);
+        window.open(url, "_blank", "noopener,noreferrer");
+        this.mouseDownCell = null;
+        // Restore focus to IME textarea
+        if (this.focusTarget) {
+          this.focusTarget.focus();
+        }
+        return; // Don't send mouse event to server
+      }
+    }
+    this.mouseDownCell = null;
 
     const message: MouseMessage = {
       type: "mouse",
