@@ -78,6 +78,36 @@ pub fn computeRowId(pin: anytype) u64 {
     return pin.node.serial * PAGE_SIZE + pin.y;
 }
 
+/// Pack a msgpack payload and compress it.
+/// This is the common pattern used by all message generators.
+/// Frees the payload after encoding. Returns owned compressed bytes that caller must free.
+fn packAndCompress(allocator: std.mem.Allocator, payload: *msgpack.Payload, max_size: usize) ![]u8 {
+    const buffer = try allocator.alloc(u8, max_size);
+    defer allocator.free(buffer);
+
+    var write_stream = BufferStream.init(buffer);
+    var read_stream = BufferStream.init(buffer);
+
+    const BufferType = BufferStream;
+    var packer = msgpack.Pack(
+        *BufferType,
+        *BufferType,
+        BufferType.WriteError,
+        BufferType.ReadError,
+        BufferType.write,
+        BufferType.read,
+    ).init(&write_stream, &read_stream);
+
+    packer.write(payload.*) catch |e| {
+        log.err("Failed to encode msgpack: {any}", .{e});
+        return error.MsgpackEncodeFailed;
+    };
+
+    payload.free(allocator);
+
+    return compress(buffer[0..write_stream.pos], allocator);
+}
+
 /// Compress data with Snappy if above threshold, otherwise pass through.
 /// Returns owned slice with 1-byte header (0 = uncompressed, 1 = compressed) that caller must free.
 fn compress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
@@ -592,125 +622,31 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
         try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
     }
 
-    // Encode to msgpack bytes
-    // Use a buffer large enough for typical terminal snapshots
-    // 80x24 terminal = 1920 cells * 8 bytes = ~15KB cells + styles + overhead
-    const max_size = constants.snapshot.max_buffer_size;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    // Free payload after encoding
-    payload.free(allocator);
-
-    // Compress
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-
-    // Free the uncompressed buffer
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, constants.snapshot.max_buffer_size);
 }
 
 /// Generate a binary msgpack title message
 /// Sent when only the title changes (more efficient than full delta)
 pub fn generateTitleMessage(allocator: std.mem.Allocator, pane_id: u16, title: []const u8) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("title", allocator));
     try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
     try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
 
-    const max_size = 1024;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack title: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    // Compress
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 1024);
 }
 
 /// Generate a binary msgpack bell message
 /// Notifies clients that the terminal bell was triggered (BEL 0x07)
 pub fn generateBellMessage(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("bell", allocator));
 
-    const max_size = 64;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack bell: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 64);
 }
 
 /// Generate a binary msgpack clipboard message for OSC 52 operations.
@@ -725,7 +661,7 @@ pub fn generateClipboardMessage(
     data: ?[]const u8, // base64-encoded for set, null for get
 ) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("clipboard", allocator));
     try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
@@ -740,114 +676,29 @@ pub fn generateClipboardMessage(
     }
 
     // Clipboard data can be large (up to 64KB base64 ≈ 87KB encoded)
-    const max_size = 128 * 1024;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack clipboard: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 128 * 1024);
 }
 
 /// Generate a binary msgpack focus message
 /// Notifies clients which pane is now focused
 pub fn generateFocusMessage(allocator: std.mem.Allocator, pane_id: u16) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("focus", allocator));
     try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
 
-    const max_size = 64;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack focus: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 64);
 }
 
 /// Generate a binary msgpack pong message
 pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("pong", allocator));
 
-    const max_size = 64;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack pong: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    // Compress
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 64);
 }
 
 /// Generate a delta update message with only dirty rows
@@ -1161,39 +1012,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
     }
 
-    // Encode and compress
-    const max_size = constants.snapshot.max_buffer_size;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack delta: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    payload.free(allocator);
-
-    // Compress
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, constants.snapshot.max_buffer_size);
 }
 
 /// Generate a binary msgpack master_changed message
@@ -1201,7 +1020,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
 /// master_id: null means no master, otherwise the UUID of the master client
 pub fn generateMasterChangedMessage(allocator: std.mem.Allocator, master_id: ?[]const u8) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
-    defer payload.free(allocator);
+    errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("master_changed", allocator));
 
@@ -1211,35 +1030,7 @@ pub fn generateMasterChangedMessage(allocator: std.mem.Allocator, master_id: ?[]
         try payload.mapPut("masterId", msgpack.Payload{ .nil = {} });
     }
 
-    const max_size = 256;
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack master_changed: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 256);
 }
 
 /// Convert layout nodes to msgpack payload recursively
@@ -1335,38 +1126,7 @@ pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session, la
 
     try payload.mapPut("windows", windows_array);
 
-    // Encode to msgpack
-    const max_size = 64 * 1024; // 64KB for layouts with nested structure
-    const buffer = try allocator.alloc(u8, max_size);
-    errdefer allocator.free(buffer);
-
-    var write_stream = BufferStream.init(buffer);
-    var read_stream = BufferStream.init(buffer);
-
-    const BufferType = BufferStream;
-    var packer = msgpack.Pack(
-        *BufferType,
-        *BufferType,
-        BufferType.WriteError,
-        BufferType.ReadError,
-        BufferType.write,
-        BufferType.read,
-    ).init(&write_stream, &read_stream);
-
-    packer.write(payload) catch |e| {
-        log.err("Failed to encode msgpack layout: {any}", .{e});
-        return error.MsgpackEncodeFailed;
-    };
-
-    payload.free(allocator);
-
-    const msgpack_len = write_stream.pos;
-    const msgpack_data = buffer[0..msgpack_len];
-
-    const result = try compress(msgpack_data, allocator);
-    allocator.free(buffer);
-
-    return result;
+    return packAndCompress(allocator, &payload, 64 * 1024);
 }
 
 test "generate empty snapshot" {

@@ -27,6 +27,8 @@ const MouseEvents = pane_mod.MouseEvents;
 const MouseFormat = pane_mod.MouseFormat;
 const signal = @import("signal.zig");
 const mouse = @import("mouse.zig");
+const keyboard = @import("keyboard.zig");
+const messages = @import("messages.zig");
 const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
 
@@ -60,216 +62,37 @@ fn logFatal(comptime context: []const u8, err: anyerror) noreturn {
 }
 
 // ============================================================================
-// Message Types (for parsing client messages)
+// Message Types (imported from messages.zig)
 // ============================================================================
 
-const KeyEvent = struct {
-    type: []const u8,
-    key: []const u8,
-    code: []const u8,
-    state: []const u8,
-    ctrl: bool = false,
-    alt: bool = false,
-    shift: bool = false,
-    meta: bool = false,
-    repeat: bool = false,
-    timestamp: f64 = 0,
-    keyCode: u16 = 0,
-};
+const KeyEvent = messages.KeyEvent;
+const TextMessage = messages.TextMessage;
+const ResizeMessage = messages.ResizeMessage;
+const ScrollMessage = messages.ScrollMessage;
+const SyncMessage = messages.SyncMessage;
+const FocusMessage = messages.FocusMessage;
+const MouseMessage = messages.MouseMessage;
+const HelloMessage = messages.HelloMessage;
+const NewWindowMessage = messages.NewWindowMessage;
+const CloseWindowMessage = messages.CloseWindowMessage;
+const ClipboardResponseMessage = messages.ClipboardResponseMessage;
+const MessageType = messages.MessageType;
 
-const TextMessage = struct {
-    type: []const u8,
-    data: []const u8,
-};
-
-const ResizeMessage = struct {
-    type: []const u8,
-    cols: u16,
-    rows: u16,
-};
-
-const ScrollMessage = struct {
-    type: []const u8,
-    delta: i32,
-};
-
-const SyncMessage = struct {
-    type: []const u8,
-    gen: u64,
-    minRowId: u64,
-};
-
-const FocusMessage = struct {
-    type: []const u8,
-    paneId: u16,
-};
-
-const MouseMessage = struct {
-    type: []const u8,
-    paneId: u16,
-    button: u8,
-    x: u16,
-    y: u16,
-    px: ?u32 = null, // Pixel X coordinate (for SGR-Pixels mode 1016)
-    py: ?u32 = null, // Pixel Y coordinate (for SGR-Pixels mode 1016)
-    state: []const u8,
-    ctrl: bool = false,
-    alt: bool = false,
-    shift: bool = false,
-    meta: bool = false,
-    timestamp: f64 = 0,
-};
-
-const HelloMessage = struct {
-    type: []const u8,
-    clientId: []const u8,
-};
-
-const NewWindowMessage = struct {
-    type: []const u8,
-    templateId: ?[]const u8 = null,
-};
-
-const CloseWindowMessage = struct {
-    type: []const u8,
-    windowId: u16,
-};
-
-const ClipboardResponseMessage = struct {
-    type: []const u8,
-    paneId: u16,
-    clipboard: []const u8,
-    data: []const u8,
-};
-
-const MessageType = struct {
-    type: []const u8,
-};
-
-// ============================================================================
-// Parsed Message Union (protocol-agnostic)
-// ============================================================================
-
-/// Unified message representation for both JSON and msgpack protocols.
-/// Borrows string data from the underlying protocol payload.
-const ParsedMessage = union(enum) {
-    key: ParsedKeyEvent,
-    text: ParsedText,
-    resize: ParsedResize,
-    scroll: ParsedScroll,
-    ping: void,
-    sync: ParsedSync,
-    focus: ParsedFocus,
-    hello: ParsedHello,
-    request_master: void,
-    new_window: ParsedNewWindow,
-    close_window: ParsedCloseWindow,
-    mouse: ParsedMouse,
-    select_all: ParsedSelectAll,
-    clear_selection: ParsedClearSelection,
-    clipboard_response: ParsedClipboardResponse,
-    unknown: void,
-};
-
-const ParsedKeyEvent = struct {
-    key: []const u8,
-    code: []const u8 = "",
-    state: []const u8,
-    ctrl: bool = false,
-    alt: bool = false,
-    shift: bool = false,
-    meta: bool = false,
-    repeat: bool = false,
-    timestamp: f64 = 0,
-    keyCode: u16 = 0,
-};
-
-const ParsedText = struct {
-    data: []const u8,
-};
-
-const ParsedResize = struct {
-    cols: u16,
-    rows: u16,
-};
-
-const ParsedScroll = struct {
-    delta: i32,
-};
-
-const ParsedSync = struct {
-    gen: u64,
-    minRowId: u64 = 0,
-};
-
-const ParsedFocus = struct {
-    paneId: u16,
-};
-
-const ParsedHello = struct {
-    clientId: []const u8,
-};
-
-const ParsedNewWindow = struct {
-    templateId: ?[]const u8 = null,
-};
-
-const ParsedCloseWindow = struct {
-    windowId: u16,
-};
-
-const ParsedMouse = struct {
-    paneId: u16,
-    button: u8,
-    x: u16,
-    y: u16,
-    px: ?u32 = null,
-    py: ?u32 = null,
-    state: []const u8,
-    ctrl: bool = false,
-    alt: bool = false,
-    shift: bool = false,
-    meta: bool = false,
-    timestamp: f64 = 0,
-};
-
-const ParsedSelectAll = struct {
-    paneId: u16,
-};
-
-const ParsedClearSelection = struct {
-    paneId: u16,
-};
-
-const ParsedClipboardResponse = struct {
-    paneId: u16,
-    clipboard: []const u8,
-    data: []const u8,
-};
-
-/// Cleanup helper for JSON parsed messages.
-/// Holds references to parsed JSON that need to be freed after message handling.
-const JsonCleanup = union(enum) {
-    none: void,
-    json_key: std.json.Parsed(KeyEvent),
-    json_text: std.json.Parsed(TextMessage),
-    json_hello: std.json.Parsed(HelloMessage),
-    json_new_window: std.json.Parsed(NewWindowMessage),
-    json_mouse: std.json.Parsed(MouseMessage),
-    json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
-
-    pub fn deinit(self: *JsonCleanup) void {
-        switch (self.*) {
-            .none => {},
-            .json_key => |*p| p.deinit(),
-            .json_text => |*p| p.deinit(),
-            .json_hello => |*p| p.deinit(),
-            .json_new_window => |*p| p.deinit(),
-            .json_mouse => |*p| p.deinit(),
-            .json_clipboard_response => |*p| p.deinit(),
-        }
-    }
-};
+const ParsedMessage = messages.ParsedMessage;
+const ParsedKeyEvent = messages.ParsedKeyEvent;
+const ParsedText = messages.ParsedText;
+const ParsedResize = messages.ParsedResize;
+const ParsedScroll = messages.ParsedScroll;
+const ParsedSync = messages.ParsedSync;
+const ParsedFocus = messages.ParsedFocus;
+const ParsedHello = messages.ParsedHello;
+const ParsedNewWindow = messages.ParsedNewWindow;
+const ParsedCloseWindow = messages.ParsedCloseWindow;
+const ParsedMouse = messages.ParsedMouse;
+const ParsedSelectAll = messages.ParsedSelectAll;
+const ParsedClearSelection = messages.ParsedClearSelection;
+const ParsedClipboardResponse = messages.ParsedClipboardResponse;
+const JsonCleanup = messages.JsonCleanup;
 
 // ============================================================================
 // Client State
@@ -1806,7 +1629,7 @@ pub const EventLoop = struct {
                     .timestamp = key_msg.timestamp,
                     .keyCode = key_msg.keyCode,
                 };
-                const output = keyEventToBytes(key_event, &output_buf, cursor_key_app);
+                const output = keyboard.keyEventToBytes(key_event, &output_buf, cursor_key_app);
 
                 if (output.len > 0) {
                     self.session.logPtySend(pane.id, output);
@@ -2253,222 +2076,3 @@ pub const EventLoop = struct {
         client.setGeneration(pane.id, pane.generation);
     }
 };
-
-// ============================================================================
-// Key Event Conversion
-// ============================================================================
-
-fn keyEventToBytes(event: KeyEvent, output: []u8, cursor_key_application: bool) []u8 {
-    if (!std.mem.eql(u8, event.state, "down")) {
-        return output[0..0];
-    }
-
-    const key = event.key;
-
-    if (std.mem.eql(u8, key, "Meta") or
-        std.mem.eql(u8, key, "Control") or
-        std.mem.eql(u8, key, "Alt") or
-        std.mem.eql(u8, key, "Shift") or
-        std.mem.eql(u8, key, "CapsLock") or
-        std.mem.eql(u8, key, "NumLock") or
-        std.mem.eql(u8, key, "ScrollLock") or
-        std.mem.eql(u8, key, "Hyper") or
-        std.mem.eql(u8, key, "Super") or
-        std.mem.eql(u8, key, "OS") or
-        std.mem.eql(u8, key, "AltGraph") or
-        std.mem.eql(u8, key, "Fn") or
-        std.mem.eql(u8, key, "FnLock"))
-    {
-        return output[0..0];
-    }
-
-    const ctrl = event.ctrl;
-    const alt = event.alt;
-    const shift = event.shift;
-
-    if (key.len == 1) {
-        const c = key[0];
-
-        if (ctrl and c >= 'a' and c <= 'z') {
-            output[0] = c - 'a' + 1;
-            return output[0..1];
-        }
-        if (ctrl and c >= 'A' and c <= 'Z') {
-            output[0] = c - 'A' + 1;
-            return output[0..1];
-        }
-
-        if (ctrl) {
-            const ctrl_char: ?u8 = switch (c) {
-                '@' => 0x00,
-                '[' => 0x1b,
-                '\\' => 0x1c,
-                ']' => 0x1d,
-                '^' => 0x1e,
-                '_' => 0x1f,
-                '?' => 0x7f,
-                else => null,
-            };
-            if (ctrl_char) |cc| {
-                output[0] = cc;
-                return output[0..1];
-            }
-        }
-
-        if (alt) {
-            output[0] = 0x1b;
-            output[1] = c;
-            return output[0..2];
-        }
-
-        output[0] = c;
-        return output[0..1];
-    }
-
-    if (std.mem.eql(u8, key, "Enter")) {
-        output[0] = '\r';
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Backspace")) {
-        output[0] = 0x7f;
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Tab")) {
-        if (shift) {
-            output[0] = 0x1b;
-            output[1] = '[';
-            output[2] = 'Z';
-            return output[0..3];
-        }
-        output[0] = '\t';
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Escape")) {
-        output[0] = 0x1b;
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Delete")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '3';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    if (std.mem.eql(u8, key, "ArrowUp")) {
-        return writeArrowKey(output, 'A', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowDown")) {
-        return writeArrowKey(output, 'B', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowRight")) {
-        return writeArrowKey(output, 'C', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowLeft")) {
-        return writeArrowKey(output, 'D', ctrl, alt, cursor_key_application);
-    }
-
-    if (std.mem.eql(u8, key, "Home")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = 'H';
-        return output[0..3];
-    }
-    if (std.mem.eql(u8, key, "End")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = 'F';
-        return output[0..3];
-    }
-
-    if (std.mem.eql(u8, key, "PageUp")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '5';
-        output[3] = '~';
-        return output[0..4];
-    }
-    if (std.mem.eql(u8, key, "PageDown")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '6';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    if (std.mem.eql(u8, key, "Insert")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '2';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    if (key.len >= 2 and key[0] == 'F') {
-        const fnum = std.fmt.parseInt(u8, key[1..], 10) catch return output[0..0];
-        return writeFunctionKey(output, fnum);
-    }
-
-    if (key.len > 1 and key.len <= output.len) {
-        @memcpy(output[0..key.len], key);
-        if (alt) {
-            var i: usize = key.len;
-            while (i > 0) : (i -= 1) {
-                output[i] = output[i - 1];
-            }
-            output[0] = 0x1b;
-            return output[0 .. key.len + 1];
-        }
-        return output[0..key.len];
-    }
-
-    return output[0..0];
-}
-
-fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool, cursor_key_application: bool) []u8 {
-    if (ctrl or alt) {
-        var mod: u8 = 1;
-        if (alt) mod += 2;
-        if (ctrl) mod += 4;
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '1';
-        output[3] = ';';
-        output[4] = '0' + mod;
-        output[5] = arrow;
-        return output[0..6];
-    }
-    output[0] = 0x1b;
-    if (cursor_key_application) {
-        output[1] = 'O';
-    } else {
-        output[1] = '[';
-    }
-    output[2] = arrow;
-    return output[0..3];
-}
-
-fn writeFunctionKey(output: []u8, fnum: u8) []u8 {
-    const codes = [_]struct { prefix: []const u8, suffix: u8 }{
-        .{ .prefix = "\x1bOP", .suffix = 0 },
-        .{ .prefix = "\x1bOQ", .suffix = 0 },
-        .{ .prefix = "\x1bOR", .suffix = 0 },
-        .{ .prefix = "\x1bOS", .suffix = 0 },
-        .{ .prefix = "\x1b[15~", .suffix = 0 },
-        .{ .prefix = "\x1b[17~", .suffix = 0 },
-        .{ .prefix = "\x1b[18~", .suffix = 0 },
-        .{ .prefix = "\x1b[19~", .suffix = 0 },
-        .{ .prefix = "\x1b[20~", .suffix = 0 },
-        .{ .prefix = "\x1b[21~", .suffix = 0 },
-        .{ .prefix = "\x1b[23~", .suffix = 0 },
-        .{ .prefix = "\x1b[24~", .suffix = 0 },
-    };
-
-    if (fnum >= 1 and fnum <= 12) {
-        const code = codes[fnum - 1];
-        @memcpy(output[0..code.prefix.len], code.prefix);
-        return output[0..code.prefix.len];
-    }
-
-    return output[0..0];
-}
