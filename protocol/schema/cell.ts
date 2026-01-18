@@ -328,6 +328,32 @@ export function decodeGraphemes(data: Uint8Array): GraphemeTable {
 }
 
 /**
+ * Decode row IDs from packed u64 bytes (little-endian).
+ * Each row ID is 8 bytes.
+ *
+ * @param data - The binary row ID data
+ * @returns Array of row IDs as bigints
+ */
+export function decodeRowIds(data: Uint8Array): bigint[] {
+  if (!data || data.length === 0) {
+    return [];
+  }
+
+  const rowIds: bigint[] = [];
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  for (let i = 0; i < data.length; i += 8) {
+    // Read u64 as two u32s in little-endian and combine
+    const lo = view.getUint32(i, true);
+    const hi = view.getUint32(i + 4, true);
+    const rowId = BigInt(lo) | (BigInt(hi) << 32n);
+    rowIds.push(rowId);
+  }
+
+  return rowIds;
+}
+
+/**
  * Get the character for a cell, or empty string if no text.
  * If grapheme data is provided, combines the base codepoint with additional codepoints.
  *

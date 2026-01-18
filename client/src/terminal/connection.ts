@@ -25,11 +25,11 @@ function readSnappyLength(data: Uint8Array): number {
   }
   throw new Error("Invalid varint in Snappy data");
 }
-import { cellToChar, ContentTag, Wide, decodeGraphemes, decodeHyperlinks } from "../../../protocol/schema/cell";
-import type { Cell, CellContent, WideValue, GraphemeTable, HyperlinkTable } from "../../../protocol/schema/cell";
-import { ColorTag, Underline, decodeColor } from "../../../protocol/schema/style";
+import { cellToChar, ContentTag, Wide, decodeGraphemes, decodeHyperlinks, decodeCellsFromBytes, decodeRowIds } from "../../../protocol/schema/cell";
+import type { Cell, GraphemeTable, HyperlinkTable } from "../../../protocol/schema/cell";
+import { ColorTag, decodeStyleTableFromBytes } from "../../../protocol/schema/style";
 import { calculateTerminalSize } from "./dimensions";
-import type { StyleTable, Style, Color, UnderlineValue } from "../../../protocol/schema/style";
+import type { StyleTable, Style, Color } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
 import type { MouseMessage } from "./mouse";
@@ -404,9 +404,9 @@ export class TerminalConnection {
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
         // Decode cells, styles, row IDs, graphemes, and hyperlinks from raw bytes
-        const cells = this.decodeCellsFromBytes(msg.cells);
-        const styles = this.decodeStyleTableFromBytes(msg.styles);
-        const rowIds = this.decodeRowIdsFromBytes(msg.rowIds);
+        const cells = decodeCellsFromBytes(msg.cells);
+        const styles = decodeStyleTableFromBytes(msg.styles);
+        const rowIds = decodeRowIds(msg.rowIds);
         const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
         const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
         const snapshot: TerminalSnapshot = {
@@ -589,136 +589,6 @@ export class TerminalConnection {
         }
         break;
     }
-  }
-
-  /** Decode cells from raw bytes (8 bytes per cell) */
-  private decodeCellsFromBytes(data: Uint8Array): Cell[] {
-    const cellSize = 8;
-    const count = Math.floor(data.length / cellSize);
-    const cells: Cell[] = [];
-
-    for (let i = 0; i < count; i++) {
-      const offset = i * cellSize;
-      
-      // Read two u32 in little-endian
-      const lo = (data[offset] ?? 0) | 
-                 ((data[offset + 1] ?? 0) << 8) | 
-                 ((data[offset + 2] ?? 0) << 16) | 
-                 ((data[offset + 3] ?? 0) << 24);
-      const hi = (data[offset + 4] ?? 0) | 
-                 ((data[offset + 5] ?? 0) << 8) | 
-                 ((data[offset + 6] ?? 0) << 16) | 
-                 ((data[offset + 7] ?? 0) << 24);
-      
-      // Decode using the same bit layout as cell.ts
-      const contentTag = (lo & 0x3) as 0 | 1 | 2 | 3;
-      const contentBits = (lo >>> 2) & 0xffffff;
-      const styleIdLo = (lo >>> 26) & 0x3f;
-      const styleIdHi = hi & 0x3ff;
-      const styleId = styleIdLo | (styleIdHi << 6);
-      const wide = ((hi >>> 10) & 0x3) as WideValue;
-      const isProtected = ((hi >>> 12) & 0x1) === 1;
-      const isHyperlink = ((hi >>> 13) & 0x1) === 1;
-      
-      let content: CellContent;
-      switch (contentTag) {
-        case ContentTag.CODEPOINT:
-          content = { tag: ContentTag.CODEPOINT, codepoint: contentBits & 0x1fffff };
-          break;
-        case ContentTag.CODEPOINT_GRAPHEME:
-          content = { tag: ContentTag.CODEPOINT_GRAPHEME, codepoint: contentBits & 0x1fffff };
-          break;
-        case ContentTag.BG_COLOR_PALETTE:
-          content = { tag: ContentTag.BG_COLOR_PALETTE, palette: contentBits & 0xff };
-          break;
-        case ContentTag.BG_COLOR_RGB:
-          content = {
-            tag: ContentTag.BG_COLOR_RGB,
-            rgb: {
-              r: contentBits & 0xff,
-              g: (contentBits >>> 8) & 0xff,
-              b: (contentBits >>> 16) & 0xff,
-            },
-          };
-          break;
-      }
-      
-      cells.push({
-        content,
-        styleId,
-        wide,
-        protected: isProtected,
-        hyperlink: isHyperlink,
-      });
-    }
-
-    return cells;
-  }
-
-  /** Decode row IDs from packed u64 bytes (little-endian) */
-  private decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
-    if (!data || data.length === 0) {
-      debug.warn("decodeRowIdsFromBytes: empty or missing data");
-      return [];
-    }
-    
-    // Ensure we have a proper Uint8Array
-    const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-    
-    const rowIds: bigint[] = [];
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    
-    for (let i = 0; i < bytes.length; i += 8) {
-      // Read u64 as two u32s in little-endian and combine
-      const lo = view.getUint32(i, true);
-      const hi = view.getUint32(i + 4, true);
-      const rowId = BigInt(lo) | (BigInt(hi) << 32n);
-      rowIds.push(rowId);
-    }
-    
-    return rowIds;
-  }
-
-  /** Decode style table from raw bytes */
-  private decodeStyleTableFromBytes(data: Uint8Array): StyleTable {
-    const styles = new Map<number, Style>();
-    
-    if (data.length < 2) return styles;
-    
-    const count = (data[0] ?? 0) | ((data[1] ?? 0) << 8);
-    let offset = 2;
-    
-    for (let i = 0; i < count && offset + 16 <= data.length; i++) {
-      const styleId = (data[offset] ?? 0) | ((data[offset + 1] ?? 0) << 8);
-      offset += 2;
-      
-      const fgColor = decodeColor(data[offset] ?? 0, data[offset + 1] ?? 0, data[offset + 2] ?? 0, data[offset + 3] ?? 0);
-      const bgColor = decodeColor(data[offset + 4] ?? 0, data[offset + 5] ?? 0, data[offset + 6] ?? 0, data[offset + 7] ?? 0);
-      const underlineColor = decodeColor(data[offset + 8] ?? 0, data[offset + 9] ?? 0, data[offset + 10] ?? 0, data[offset + 11] ?? 0);
-      
-      // Flags (2 bytes, little-endian)
-      const flagsWord = (data[offset + 12] ?? 0) | ((data[offset + 13] ?? 0) << 8);
-      const underlineRaw = (flagsWord >> 8) & 0x07;
-      const underline: UnderlineValue = (underlineRaw <= 5 ? underlineRaw : Underline.NONE) as UnderlineValue;
-      
-      const flags = {
-        bold: (flagsWord & 0x01) !== 0,
-        italic: (flagsWord & 0x02) !== 0,
-        faint: (flagsWord & 0x04) !== 0,
-        blink: (flagsWord & 0x08) !== 0,
-        inverse: (flagsWord & 0x10) !== 0,
-        invisible: (flagsWord & 0x20) !== 0,
-        strikethrough: (flagsWord & 0x40) !== 0,
-        overline: (flagsWord & 0x80) !== 0,
-        underline,
-      };
-      
-      offset += 14;
-      
-      styles.set(styleId, { fgColor, bgColor, underlineColor, flags });
-    }
-    
-    return styles;
   }
 
   private scheduleReconnect(): void {
@@ -983,7 +853,7 @@ export class TerminalConnection {
     // Apply each dirty row to cache (including graphemes)
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
-      const cells = this.decodeCellsFromBytes(row.cells);
+      const cells = decodeCellsFromBytes(row.cells);
 
       paneState.rowCache.set(rowId, cells);
 
@@ -1023,7 +893,7 @@ export class TerminalConnection {
     paneState.generation = delta.gen;
 
     // Decode styles from delta
-    const styles = this.decodeStyleTableFromBytes(delta.styles);
+    const styles = decodeStyleTableFromBytes(delta.styles);
 
     // Merge with existing styles from last snapshot
     // Delta styles take precedence (they're the current ones)
@@ -1041,7 +911,7 @@ export class TerminalConnection {
       debug.error("Delta missing rowIds!", delta);
       // Fall back to last known rowIds
     }
-    const rowIds = delta.rowIds ? this.decodeRowIdsFromBytes(delta.rowIds) : (paneState.lastRowIds ?? []);
+    const rowIds = delta.rowIds ? decodeRowIds(delta.rowIds) : (paneState.lastRowIds ?? []);
     paneState.lastRowIds = rowIds;
     debug.log(`Pane ${paneId}: Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
     debug.log(`Pane ${paneId}: Row cache size: ${paneState.rowCache.size}, keys:`, [...paneState.rowCache.keys()].map(String));
