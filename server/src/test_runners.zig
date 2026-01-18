@@ -34,6 +34,7 @@ pub const TestCommand = enum {
     @"grapheme-debug",
     @"hyperlink-test",
     @"toast-test",
+    @"progress-test",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -49,6 +50,7 @@ pub const TestCommand = enum {
             .{ "grapheme-debug", .@"grapheme-debug" },
             .{ "hyperlink-test", .@"hyperlink-test" },
             .{ "toast-test", .@"toast-test" },
+            .{ "progress-test", .@"progress-test" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -67,6 +69,7 @@ pub const TestCommand = enum {
             .@"grapheme-debug" => "Debug grapheme cluster detection in VT emulator",
             .@"hyperlink-test" => "Display OSC 8 hyperlinks for testing",
             .@"toast-test" => "Display toast notifications via OSC 9/777",
+            .@"progress-test" => "Display progress bar via OSC 9;4",
             .help => "Show available test commands",
         };
     }
@@ -88,6 +91,7 @@ pub fn printTestUsage() void {
         \\  grapheme-debug    Debug grapheme detection in VT emulator
         \\  hyperlink-test    Display OSC 8 hyperlinks for testing
         \\  toast-test        Display toast notifications via OSC 9/777
+        \\  progress-test     Display progress bar via OSC 9;4
         \\  help              Show this help
         \\
         \\Examples:
@@ -99,6 +103,7 @@ pub fn printTestUsage() void {
         \\  dullahan test grapheme-test         # Test grapheme cluster rendering
         \\  dullahan test hyperlink-test        # Test OSC 8 hyperlinks
         \\  dullahan test toast-test            # Test toast notifications
+        \\  dullahan test progress-test         # Test progress bar
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -118,6 +123,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"grapheme-debug" => try runGraphemeDebug(allocator),
         .@"hyperlink-test" => runHyperlinkTest(),
         .@"toast-test" => runToastTest(),
+        .@"progress-test" => runProgressTest(),
         .help => printTestUsage(),
     }
 }
@@ -1960,6 +1966,90 @@ fn runToastTest() void {
         \\  - "warn" -> yellow border
         \\  - "success", "done", "complete" -> green border
         \\  - default -> blue border (info)
+        \\
+    ) catch {};
+}
+
+// =============================================================================
+// Progress Bar Tester
+// =============================================================================
+
+/// Display progress bar via OSC 9;4 escape sequences
+fn runProgressTest() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\Progress Bar Test (OSC 9;4)
+        \\===========================
+        \\
+        \\This test sends OSC 9;4 escape sequences to control the progress bar.
+        \\Run this in a dullahan terminal pane and watch for the thin bar at
+        \\the top edge of the window.
+        \\
+        \\Format: ESC ] 9 ; 4 ; <state> ; <progress> BEL
+        \\States: 0=hide, 1=normal, 2=error, 3=indeterminate, 4=warning
+        \\
+        \\Starting progress demo...
+        \\
+        \\
+    ) catch {};
+
+    const ESC = "\x1b";
+    const BEL = "\x07";
+
+    // Test 1: Normal progress 0% to 100%
+    _ = posix.write(stdout_fd, "1. Normal progress (0% -> 100%)\n") catch {};
+    var i: u8 = 0;
+    while (i <= 100) : (i += 10) {
+        var buf: [32]u8 = undefined;
+        const seq = std.fmt.bufPrint(&buf, ESC ++ "]9;4;1;{d}" ++ BEL, .{i}) catch continue;
+        _ = posix.write(stdout_fd, seq) catch {};
+        std.Thread.sleep(200_000_000); // 200ms
+    }
+    std.Thread.sleep(500_000_000);
+
+    // Test 2: Indeterminate (animated)
+    _ = posix.write(stdout_fd, "2. Indeterminate progress (animated)\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;4;3" ++ BEL) catch {};
+    std.Thread.sleep(3_000_000_000); // 3 seconds
+
+    // Test 3: Warning state
+    _ = posix.write(stdout_fd, "3. Warning state at 75%\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;4;4;75" ++ BEL) catch {};
+    std.Thread.sleep(2_000_000_000);
+
+    // Test 4: Error state
+    _ = posix.write(stdout_fd, "4. Error state at 50%\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;4;2;50" ++ BEL) catch {};
+    std.Thread.sleep(2_000_000_000);
+
+    // Test 5: Back to normal, complete
+    _ = posix.write(stdout_fd, "5. Normal -> complete\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;4;1;100" ++ BEL) catch {};
+    std.Thread.sleep(1_000_000_000);
+
+    // Hide progress
+    _ = posix.write(stdout_fd, "6. Hiding progress bar\n") catch {};
+    _ = posix.write(stdout_fd, ESC ++ "]9;4;0" ++ BEL) catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Test complete!
+        \\
+        \\Progress bar states:
+        \\  0 = hidden
+        \\  1 = normal (blue)
+        \\  2 = error (red)
+        \\  3 = indeterminate (animated blue)
+        \\  4 = warning (yellow)
+        \\
+        \\Manual test commands:
+        \\  printf '\e]9;4;1;50\a'   # 50% normal
+        \\  printf '\e]9;4;3\a'      # indeterminate
+        \\  printf '\e]9;4;2;75\a'   # 75% error
+        \\  printf '\e]9;4;0\a'      # hide
         \\
     ) catch {};
 }

@@ -97,6 +97,16 @@ pub const Pane = struct {
     /// Notification body/message
     notify_body: ?[]const u8 = null,
 
+    /// Progress bar state (OSC 9;4 ConEmu style)
+    /// state: 0=hidden, 1=normal, 2=error, 3=indeterminate, 4=warning
+    progress_state: u8 = 0,
+
+    /// Progress value (0-100), only meaningful when progress_state > 0
+    progress_value: u8 = 0,
+
+    /// Flag indicating progress state changed since last read
+    progress_changed: bool = false,
+
     /// Clipboard handler (OSC 52 operations)
     clipboard: ClipboardHandler,
 
@@ -619,9 +629,34 @@ pub const Pane = struct {
                         }
                     },
                     9 => {
-                        // Notification: OSC 9 ; <message> ST (iTerm2 style)
+                        // OSC 9 - ConEmu/iTerm2 style commands
+                        // ConEmu format: OSC 9 ; <cmd> ; <args> ST
+                        //   4;<state>;<progress> = taskbar progress
+                        //   1;<msg> = notification (same as iTerm2)
+                        // iTerm2 format: OSC 9 ; <message> ST (plain text)
                         if (payload.len > 0) {
-                            self.setNotification(null, payload);
+                            if (payload.len >= 2 and payload[0] >= '0' and payload[0] <= '9' and payload[1] == ';') {
+                                // ConEmu-style command
+                                const subcmd = payload[0];
+                                const args = payload[2..];
+                                switch (subcmd) {
+                                    '4' => {
+                                        // Progress: 4;<state>;<progress>
+                                        // state: 0=hide, 1=normal, 2=error, 3=indeterminate, 4=warning
+                                        self.handleProgressCommand(args);
+                                    },
+                                    '1' => {
+                                        // Notification with ConEmu format
+                                        if (args.len > 0) {
+                                            self.setNotification(null, args);
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            } else {
+                                // Plain iTerm2-style notification
+                                self.setNotification(null, payload);
+                            }
                         }
                     },
                     52 => {
@@ -794,6 +829,60 @@ pub const Pane = struct {
             self.notify_body = null;
         }
         self.notify_pending = false;
+    }
+
+    // ========================================================================
+    // Progress API (OSC 9;4) - taskbar progress
+    // ========================================================================
+
+    /// Handle progress command from OSC 9;4;<state>;<progress>
+    fn handleProgressCommand(self: *Pane, args: []const u8) void {
+        // Parse state (first char before semicolon)
+        if (args.len == 0) {
+            self.setProgress(0, 0); // Hide on empty args
+            return;
+        }
+
+        const state = args[0] -| '0';
+        if (state > 4) return; // Invalid state
+
+        // Parse progress value if present
+        var progress: u8 = 0;
+        if (args.len >= 2 and args[1] == ';') {
+            // Parse number after semicolon
+            var i: usize = 2;
+            while (i < args.len and args[i] >= '0' and args[i] <= '9') : (i += 1) {
+                progress = progress *| 10 +| (args[i] - '0');
+            }
+            if (progress > 100) progress = 100;
+        }
+
+        self.setProgress(state, progress);
+    }
+
+    /// Set progress state and value
+    pub fn setProgress(self: *Pane, state: u8, value: u8) void {
+        if (self.progress_state != state or self.progress_value != value) {
+            self.progress_state = state;
+            self.progress_value = value;
+            self.progress_changed = true;
+            log.debug("Progress set: state={d}, value={d}", .{ state, value });
+        }
+    }
+
+    /// Check if progress state has changed
+    pub fn hasProgressChanged(self: *const Pane) bool {
+        return self.progress_changed;
+    }
+
+    /// Get current progress state and value
+    pub fn getProgress(self: *const Pane) struct { state: u8, value: u8 } {
+        return .{ .state = self.progress_state, .value = self.progress_value };
+    }
+
+    /// Clear the progress changed flag
+    pub fn clearProgressChanged(self: *Pane) void {
+        self.progress_changed = false;
     }
 
     // ========================================================================

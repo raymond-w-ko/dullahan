@@ -673,6 +673,25 @@ pub fn generateToastMessage(
     return packAndCompress(allocator, &payload, 4096);
 }
 
+/// Generate a binary msgpack progress message
+/// Triggered by OSC 9;4 escape sequences (ConEmu taskbar progress)
+pub fn generateProgressMessage(
+    allocator: std.mem.Allocator,
+    pane_id: u16,
+    state: u8,
+    value: u8,
+) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("progress", allocator));
+    try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
+    try payload.mapPut("state", msgpack.Payload{ .uint = state });
+    try payload.mapPut("value", msgpack.Payload{ .uint = value });
+
+    return packAndCompress(allocator, &payload, 128);
+}
+
 /// Generate a binary msgpack clipboard message for OSC 52 operations.
 /// operation: "set" (terminal writing to clipboard) or "get" (terminal reading)
 /// clipboard: 'c', 's', or 'p'

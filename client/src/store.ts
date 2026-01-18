@@ -40,6 +40,13 @@ export interface ToastNotification {
   timestamp: number;
 }
 
+/** Progress bar state (from OSC 9;4) */
+export interface ProgressState {
+  paneId: number;
+  state: number; // 0=hidden, 1=normal, 2=error, 3=indeterminate, 4=warning
+  value: number; // 0-100
+}
+
 export interface Store {
   // Connection state
   connection: TerminalConnection | null;
@@ -70,6 +77,7 @@ export interface Store {
   fullscreenPaneId: number | null; // Pane ID in fullscreen, null if not fullscreen
   dimensionVersion: number; // Incremented when font settings change
   toasts: ToastNotification[]; // Active toast notifications
+  progress: ProgressState | null; // Active progress bar
 
   // Config (mirrored from config module for reactivity)
   theme: string;
@@ -123,6 +131,7 @@ const store: Store = {
   fullscreenPaneId: null,
   dimensionVersion: 0, // Incremented when font settings change to trigger recalc
   toasts: [],
+  progress: null,
 
   theme: config.get("theme") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
@@ -286,6 +295,26 @@ export function clearAllToasts() {
 /** Get visible toasts (limited by max visible) */
 export function getVisibleToasts(maxVisible: number): ToastNotification[] {
   return store.toasts.slice(-maxVisible);
+}
+
+// ============================================================================
+// Progress bar (OSC 9;4)
+// ============================================================================
+
+/** Set progress bar state */
+export function setProgress(paneId: number, state: number, value: number) {
+  if (state === 0) {
+    // Hide progress
+    store.progress = null;
+  } else {
+    store.progress = { paneId, state, value };
+  }
+  notify();
+}
+
+/** Get current progress state */
+export function getProgress(): ProgressState | null {
+  return store.progress;
 }
 
 export function setSettingsOpen(open: boolean) {
@@ -535,6 +564,10 @@ export function initConnection() {
 
   conn.on("toast", (paneId, title, message) => {
     addToast(paneId, title, message);
+  });
+
+  conn.on("progress", (paneId, state, value) => {
+    setProgress(paneId, state, value);
   });
 
   conn.on("masterChanged", (masterId, isMaster) => {

@@ -122,6 +122,7 @@ export type ConnectionEvents = {
   title: (paneId: number, title: string) => void;
   bell: () => void;
   toast: (paneId: number, title: string | undefined, message: string) => void;
+  progress: (paneId: number, state: number, value: number) => void;
   focus: (paneId: number) => void;
   connect: () => void;
   disconnect: () => void;
@@ -551,6 +552,10 @@ export class TerminalConnection {
       case "toast":
         debug.log("Received toast:", msg.paneId, msg.title, msg.message);
         this.emit("toast", msg.paneId, msg.title, msg.message);
+        break;
+      case "progress":
+        debug.log("Received progress:", msg.paneId, msg.state, msg.value);
+        this.emit("progress", msg.paneId, msg.state, msg.value);
         break;
       case "focus":
         debug.log("Received focus:", msg.paneId);

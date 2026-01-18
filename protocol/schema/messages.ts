@@ -310,6 +310,17 @@ export interface ToastMessage {
 }
 
 /**
+ * Progress bar state (OSC 9;4 ConEmu taskbar progress)
+ * state: 0=hidden, 1=normal, 2=error, 3=indeterminate, 4=warning
+ */
+export interface ProgressMessage {
+  type: "progress";
+  paneId: number;
+  state: number;
+  value: number;
+}
+
+/**
  * Clipboard operation notification (OSC 52).
  * Sent when the terminal requests clipboard access.
  */
@@ -381,6 +392,7 @@ export type ServerMessage =
   | TitleMessage
   | BellMessage
   | ToastMessage
+  | ProgressMessage
   | ClipboardMessage
   | FocusServerMessage
   | MasterChangedMessage

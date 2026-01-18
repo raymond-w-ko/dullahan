@@ -10,6 +10,7 @@ import { WindowSwitcher } from "./WindowSwitcher";
 import { ClipboardBar } from "./ClipboardBar";
 import { LayoutPickerModal } from "./LayoutPickerModal";
 import { ToastContainer } from "./ToastContainer";
+import { ProgressBar } from "./ProgressBar";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
@@ -48,6 +49,7 @@ export function App() {
 
   return (
     <div class="app" data-theme={theme}>
+      <ProgressBar />
       <ErrorBoundary>
         <main class="main">
           {error && <div class="error">Error: {error}</div>}

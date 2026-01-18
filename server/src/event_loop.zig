@@ -780,6 +780,15 @@ pub const EventLoop = struct {
             pane.clearNotification();
         }
 
+        // Check for progress update (OSC 9;4)
+        if (pane.hasProgressChanged()) {
+            const progress = pane.getProgress();
+            const msg = try snapshot.generateProgressMessage(pane.allocator, pane_id, progress.state, progress.value);
+            defer pane.allocator.free(msg);
+            try client.ws.sendBinary(msg);
+            pane.clearProgressChanged();
+        }
+
         // Note: Clipboard SET/GET operations are handled in broadcastPaneUpdate()
         // to ensure all clients receive them before the state is cleared.
 

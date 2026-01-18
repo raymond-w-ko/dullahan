@@ -1157,3 +1157,61 @@ html, body {
     opacity: 1;
   }
 }
+
+/* ============================================================================
+   Progress Bar (OSC 9;4)
+   ============================================================================ */
+
+.progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 1000;
+  overflow: hidden;
+  background: transparent;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  transition: width 0.2s ease-out;
+}
+
+/* Normal (blue) */
+.progress-bar--normal .progress-bar-fill {
+  background: var(--c4);
+  box-shadow: 0 0 8px var(--c4);
+}
+
+/* Error (red) */
+.progress-bar--error .progress-bar-fill {
+  background: var(--c1);
+  box-shadow: 0 0 8px var(--c1);
+}
+
+/* Warning (yellow) */
+.progress-bar--warning .progress-bar-fill {
+  background: var(--c3);
+  box-shadow: 0 0 8px var(--c3);
+}
+
+/* Indeterminate (animated) */
+.progress-bar--indeterminate .progress-bar-fill {
+  width: 30%;
+  background: var(--c4);
+  box-shadow: 0 0 8px var(--c4);
+  animation: progressIndeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes progressIndeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(233%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
