@@ -24,6 +24,9 @@ Thumbs.db
 .vscode/
 *.sublime-*
 
+# AI Agents
+.claude/settings.json
+
 # Logs
 *.log
 
