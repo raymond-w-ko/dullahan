@@ -1615,7 +1615,7 @@ fn runGraphemeTest() void {
         \\
         \\10. MIXED WIDTH
         \\    Hello世界🌍!
-        \\    └───┘└─┘└┘└── mixed ASCII, CJK, emoji
+        \\    └───┘└──┘└┘└ mixed ASCII, CJK, emoji
         \\
         \\Test complete!
         \\
