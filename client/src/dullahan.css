@@ -646,6 +646,14 @@ html, body {
   white-space: pre;
 }
 
+/* Wide characters (CJK, emoji) need explicit 2-cell width for font alignment.
+   Uses --cell-width if set (from measurement), falls back to ch units. */
+.wide-char {
+  display: inline-block;
+  width: calc(2 * var(--cell-width, 1ch));
+  text-align: center;
+}
+
 /* Cursor styles - use --cursor-bg if set, else theme default */
 .cursor-block {
   background: var(--cursor-bg, var(--term-cursor-bg));

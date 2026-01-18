@@ -18,6 +18,7 @@ export interface StyledRun {
   selected?: boolean; // True if this run is within selection
   bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
   hyperlink?: string; // URL for OSC 8 hyperlinks
+  wideIndices?: number[]; // Indices of wide (2-cell) characters within text
 }
 
 /**
@@ -141,6 +142,9 @@ export function cellsToRuns(
       // Get hyperlink URL if this cell is part of a hyperlink
       const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
 
+      // Check if this is a wide character
+      const isWide = cell?.wide === Wide.WIDE;
+
       // Start a new run if style, selection, bgOverride, or hyperlink changes
       if (
         currentRun &&
@@ -149,10 +153,20 @@ export function cellsToRuns(
         colorsEqual(currentRun.bgOverride, bgOverride) &&
         currentRun.hyperlink === hyperlink
       ) {
+        if (isWide) {
+          // Track the index of this wide character within the run
+          if (!currentRun.wideIndices) {
+            currentRun.wideIndices = [];
+          }
+          currentRun.wideIndices.push(currentRun.text.length);
+        }
         currentRun.text += char;
       } else {
         const style = getStyle(styles, styleId);
         currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
+        if (isWide) {
+          currentRun.wideIndices = [0];
+        }
         runs.push(currentRun);
       }
     }

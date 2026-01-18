@@ -65,8 +65,65 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
 }
 
 /**
+ * Render text content, wrapping wide characters in explicit-width spans.
+ * Wide characters (CJK, emoji) need explicit 2-cell width for proper alignment
+ * when mixed with different fallback fonts.
+ */
+function renderTextWithWideChars(
+  text: string,
+  wideIndices: number[] | undefined,
+  baseClass: string,
+  style: h.JSX.CSSProperties | undefined
+): preact.JSX.Element | preact.JSX.Element[] {
+  // No wide characters - render as single element
+  if (!wideIndices || wideIndices.length === 0) {
+    return (
+      <span class={baseClass} style={style}>
+        {text}
+      </span>
+    );
+  }
+
+  // Has wide characters - split and render segments
+  const elements: preact.JSX.Element[] = [];
+  const wideSet = new Set(wideIndices);
+  let segmentStart = 0;
+
+  for (let i = 0; i <= text.length; i++) {
+    const isWide = wideSet.has(i);
+    const isEnd = i === text.length;
+
+    // When we hit a wide char or end, flush the narrow segment
+    if ((isWide || isEnd) && i > segmentStart) {
+      const narrowText = text.slice(segmentStart, i);
+      elements.push(
+        <span key={`n${segmentStart}`} class={baseClass} style={style}>
+          {narrowText}
+        </span>
+      );
+    }
+
+    // Render wide character with explicit width
+    if (isWide && i < text.length) {
+      const wideChar = text[i];
+      elements.push(
+        <span key={`w${i}`} class={`${baseClass} wide-char`.trim()} style={style}>
+          {wideChar}
+        </span>
+      );
+      segmentStart = i + 1;
+    } else if (isWide) {
+      segmentStart = i + 1;
+    }
+  }
+
+  return elements;
+}
+
+/**
  * Render a run element, either as a hyperlink (<a>) or a plain span.
  * Hyperlinks get special styling and click handling.
+ * Wide characters are wrapped in explicit-width spans.
  */
 function renderRunElement(
   run: StyledRun,
@@ -80,7 +137,23 @@ function renderRunElement(
     : runClasses(run);
   const style = extraStyle || runInlineStyle(run);
 
+  // For hyperlinks, we render differently (as <a> tag)
   if (run.hyperlink) {
+    // For hyperlinks with wide chars, we need to handle it specially
+    if (run.wideIndices && run.wideIndices.length > 0) {
+      return (
+        <a
+          key={key}
+          class={`${classes} hyperlink`.trim()}
+          style={style}
+          href={run.hyperlink}
+          title={run.hyperlink}
+          onClick={(e: MouseEvent) => handleHyperlinkClick(e, run.hyperlink!)}
+        >
+          {renderTextWithWideChars(text, run.wideIndices, "", undefined)}
+        </a>
+      );
+    }
     return (
       <a
         key={key}
@@ -95,9 +168,19 @@ function renderRunElement(
     );
   }
 
+  // No wide characters - simple span
+  if (!run.wideIndices || run.wideIndices.length === 0) {
+    return (
+      <span key={key} class={classes} style={style}>
+        {text}
+      </span>
+    );
+  }
+
+  // Has wide characters - render with explicit widths
   return (
-    <span key={key} class={classes} style={style}>
-      {text}
+    <span key={key}>
+      {renderTextWithWideChars(text, run.wideIndices, classes, style)}
     </span>
   );
 }

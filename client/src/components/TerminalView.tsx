@@ -269,6 +269,39 @@ export function TerminalView({
     };
   }, [paneId, connection]);
 
+  // Measure cell width and set CSS variable for wide character alignment
+  useEffect(() => {
+    const el = terminalRef.current;
+    if (!el) return;
+
+    const updateCellWidth = () => {
+      // Find or create measure element in parent container
+      const container = el.parentElement;
+      if (!container) return;
+
+      let measure = container.querySelector(".terminal-measure") as HTMLDivElement | null;
+      if (!measure) {
+        measure = document.createElement("div");
+        measure.className = "terminal-measure terminal-line";
+        measure.textContent = "X";
+        container.appendChild(measure);
+      }
+
+      const rect = measure.getBoundingClientRect();
+      if (rect.width > 0) {
+        el.style.setProperty("--cell-width", `${rect.width}px`);
+      }
+    };
+
+    // Initial measurement
+    updateCellWidth();
+
+    // Re-measure when fonts load
+    document.fonts.ready.then(updateCellWidth);
+
+    // No cleanup needed - CSS variable persists
+  }, []);
+
   // Focus IME textarea when terminal is clicked (but not when selecting text)
   // The keyboard handler is attached to the IME textarea, not the terminal element
   const handleTerminalClick = useCallback(() => {
