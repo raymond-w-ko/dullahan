@@ -575,6 +575,28 @@ pub const Pane = struct {
         log.debug("Sent OSC {d} response: rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ cmd, r16, g16, b16 });
     }
 
+    /// Send focus-in event (ESC [ I) if focus_event mode is enabled
+    pub fn sendFocusIn(self: *Pane) void {
+        if (!self.terminal.modes.get(.focus_event)) return;
+        const response = "\x1b[I";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send focus-in: {any}", .{e});
+            return;
+        };
+        log.debug("Pane {d}: Sent focus-in event", .{self.id});
+    }
+
+    /// Send focus-out event (ESC [ O) if focus_event mode is enabled
+    pub fn sendFocusOut(self: *Pane) void {
+        if (!self.terminal.modes.get(.focus_event)) return;
+        const response = "\x1b[O";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send focus-out: {any}", .{e});
+            return;
+        };
+        log.debug("Pane {d}: Sent focus-out event", .{self.id});
+    }
+
     /// Parse OSC (Operating System Command) sequences.
     /// OSC 0 = set icon name and window title
     /// OSC 2 = set window title only

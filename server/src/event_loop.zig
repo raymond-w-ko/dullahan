@@ -1568,7 +1568,21 @@ pub const EventLoop = struct {
             },
             .focus => |focus_msg| {
                 const window = self.session.activeWindow() orelse return;
+                const old_pane_id = window.active_pane_id;
+
                 if (window.setActivePane(focus_msg.paneId)) {
+                    // Send focus-out to previously active pane
+                    if (old_pane_id != focus_msg.paneId) {
+                        if (self.session.pane_registry.get(old_pane_id)) |old_pane| {
+                            old_pane.sendFocusOut();
+                        }
+                    }
+
+                    // Send focus-in to newly active pane
+                    if (self.session.pane_registry.get(focus_msg.paneId)) |new_pane| {
+                        new_pane.sendFocusIn();
+                    }
+
                     log.info("Switched to pane {d}", .{focus_msg.paneId});
                 }
             },
