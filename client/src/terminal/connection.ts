@@ -1084,10 +1084,16 @@ export class TerminalConnection {
   /**
    * Extract current theme colors from CSS variables.
    * Returns fg/bg colors that can be sent to the server for OSC 10/11 queries.
+   * Queries .app element since that's where data-theme sets the CSS variables.
    */
   private getThemeColors(): { themeFg?: string; themeBg?: string } {
     try {
-      const style = getComputedStyle(document.documentElement);
+      // Get computed style from .app element which has data-theme attribute
+      const appElement = document.querySelector(".app");
+      if (!appElement) {
+        return {};
+      }
+      const style = getComputedStyle(appElement);
       const fg = style.getPropertyValue("--term-fg").trim();
       const bg = style.getPropertyValue("--term-bg").trim();
       return {
