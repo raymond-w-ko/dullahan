@@ -259,9 +259,24 @@ pub const Pane = struct {
     }
 
     /// Write input to the PTY (stdin to child process)
+    /// Loops until all data is written to handle non-blocking partial writes.
     pub fn writeInput(self: *Pane, data: []const u8) !void {
         if (self.pty) |*pty| {
-            _ = try pty.write(data);
+            var remaining = data;
+            while (remaining.len > 0) {
+                const written = pty.write(remaining) catch |err| {
+                    if (err == error.WouldBlock) {
+                        // PTY buffer full, yield and retry
+                        std.Thread.sleep(1_000_000); // 1ms
+                        continue;
+                    }
+                    return err;
+                };
+                if (written == 0) {
+                    return error.ConnectionClosed;
+                }
+                remaining = remaining[written..];
+            }
         } else {
             return error.NoPty;
         }
