@@ -26,3 +26,6 @@ pub const log_clipboard: bool = true;
 
 /// Log delta sync operations (dirty row counts, delta vs snapshot comparison)
 pub const log_delta: bool = true;
+
+/// Log master theme color changes (OSC 10/11 color sync)
+pub const log_theme_colors: bool = true;
