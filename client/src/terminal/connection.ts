@@ -812,6 +812,20 @@ export class TerminalConnection {
     this.send({ type: "close_window", windowId });
   }
 
+  /**
+   * Close a pane.
+   * Only the master client can close panes. Non-masters will have
+   * their requests silently ignored by the server.
+   * If this is the last pane in a window, the window will be closed.
+   * The server will refuse to close the last pane in the last window.
+   * @param paneId The ID of the pane to close
+   */
+  closePane(paneId: number): void {
+    if (!this.isMaster) return;
+    debug.log("Requesting pane close:", paneId);
+    this.send({ type: "close_pane", paneId });
+  }
+
   sendPing(): void {
     this.send({ type: "ping" });
   }

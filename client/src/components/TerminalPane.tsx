@@ -87,6 +87,14 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
     setBellActive(false);
   }, []);
 
+  // Handle pane close button click
+  const handleCloseClick = useCallback((e: MouseEvent) => {
+    e.stopPropagation(); // Don't trigger pane focus
+    if (connection?.isConnected && connection.isMaster) {
+      connection.closePane(paneId);
+    }
+  }, [connection, paneId]);
+
   const displayDims = dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
   const isFocused = focusedPaneId === paneId;
 
@@ -118,6 +126,15 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
         >
           {snapshot ? `${displayDims.cols}\u00D7${displayDims.rows}` : "\u2014"}
         </span>
+        {!isReadOnly && connection?.isMaster && (
+          <button
+            class="pane-close"
+            onClick={handleCloseClick}
+            title="Close pane"
+          >
+            ×
+          </button>
+        )}
       </div>
       <div class="terminal-container" ref={terminalRef}>
         <ProgressBar paneId={paneId} />

@@ -123,6 +123,12 @@ export interface CloseWindowMessage {
   windowId: number;
 }
 
+/** Close a pane */
+export interface ClosePaneMessage {
+  type: "close_pane";
+  paneId: number;
+}
+
 /** Ping for keepalive */
 export interface PingMessage {
   type: "ping";
@@ -195,6 +201,7 @@ export type ClientMessage =
   | RequestMasterMessage
   | NewWindowMessage
   | CloseWindowMessage
+  | ClosePaneMessage
   | PingMessage
   | SelectAllMessage
   | ClearSelectionMessage

@@ -72,6 +72,11 @@ pub const CloseWindowMessage = struct {
     windowId: u16,
 };
 
+pub const ClosePaneMessage = struct {
+    type: []const u8,
+    paneId: u16,
+};
+
 pub const ClipboardResponseMessage = struct {
     type: []const u8,
     paneId: u16,
@@ -121,6 +126,7 @@ pub const ParsedMessage = union(enum) {
     request_master: void,
     new_window: ParsedNewWindow,
     close_window: ParsedCloseWindow,
+    close_pane: ParsedClosePane,
     mouse: ParsedMouse,
     select_all: ParsedSelectAll,
     clear_selection: ParsedClearSelection,
@@ -180,6 +186,10 @@ pub const ParsedNewWindow = struct {
 
 pub const ParsedCloseWindow = struct {
     windowId: u16,
+};
+
+pub const ParsedClosePane = struct {
+    paneId: u16,
 };
 
 pub const ParsedMouse = struct {

@@ -77,6 +77,7 @@ const MouseMessage = messages.MouseMessage;
 const HelloMessage = messages.HelloMessage;
 const NewWindowMessage = messages.NewWindowMessage;
 const CloseWindowMessage = messages.CloseWindowMessage;
+const ClosePaneMessage = messages.ClosePaneMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
 const ClipboardSetMessage = messages.ClipboardSetMessage;
 const MessageType = messages.MessageType;
@@ -91,6 +92,7 @@ const ParsedFocus = messages.ParsedFocus;
 const ParsedHello = messages.ParsedHello;
 const ParsedNewWindow = messages.ParsedNewWindow;
 const ParsedCloseWindow = messages.ParsedCloseWindow;
+const ParsedClosePane = messages.ParsedClosePane;
 const ParsedMouse = messages.ParsedMouse;
 const ParsedSelectAll = messages.ParsedSelectAll;
 const ParsedClearSelection = messages.ParsedClearSelection;
@@ -1279,6 +1281,15 @@ pub const EventLoop = struct {
                 .msg = .{ .close_window = .{ .windowId = parsed.value.windowId } },
                 .cleanup = .{ .none = {} },
             };
+        } else if (std.mem.eql(u8, type_str, "close_pane")) {
+            const parsed = std.json.parseFromSlice(ClosePaneMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .close_pane = .{ .paneId = parsed.value.paneId } },
+                .cleanup = .{ .none = {} },
+            };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
             const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -1473,6 +1484,13 @@ pub const EventLoop = struct {
             const window_id: u16 = @intCast(window_id_payload.getUint() catch return null);
             return .{
                 .msg = .{ .close_window = .{ .windowId = window_id } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "close_pane")) {
+            const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
+            return .{
+                .msg = .{ .close_pane = .{ .paneId = pane_id } },
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
@@ -1808,6 +1826,58 @@ pub const EventLoop = struct {
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
                     logRecoverable("broadcast layout after close", e);
+                };
+            },
+            .close_pane => |close_pane_msg| {
+                // Only master can close panes
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting close_pane from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                const pane_id = close_pane_msg.paneId;
+
+                // Find which window contains this pane
+                var target_window: ?*Window = null;
+                var it = self.session.windows.valueIterator();
+                while (it.next()) |window_ptr| {
+                    if (window_ptr.hasPane(pane_id)) {
+                        target_window = window_ptr;
+                        break;
+                    }
+                }
+
+                const window = target_window orelse {
+                    log.warn("close_pane: pane {d} not found in any window", .{pane_id});
+                    return;
+                };
+
+                // If this is the last pane in the window, close the entire window instead
+                if (window.paneCount() <= 1) {
+                    // Can't close the last pane in the last window
+                    if (self.session.windowCount() <= 1) {
+                        log.warn("Rejecting close_pane: can't close the last pane in the last window", .{});
+                        return;
+                    }
+
+                    // Close the entire window
+                    const window_id = window.id;
+                    self.session.closeWindow(window_id) catch |e| {
+                        logRecoverable("close window (last pane)", e);
+                        return;
+                    };
+                    log.info("Closed window {d} (last pane closed)", .{window_id});
+                } else {
+                    // Remove pane from window and destroy it
+                    window.removePane(pane_id);
+                    self.session.pane_registry.destroy(pane_id);
+                    log.info("Closed pane {d}", .{pane_id});
+                }
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    logRecoverable("broadcast layout after close pane", e);
                 };
             },
             .mouse => |mouse_msg| {
