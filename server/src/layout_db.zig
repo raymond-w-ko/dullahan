@@ -438,6 +438,41 @@ pub const LayoutDb = struct {
         try self.addDefault("3-row", "Three Rows", &.{
             .{ .container = .{ .width = 100, .height = 100, .children = three_rows_children } },
         });
+
+        // 3x3 grid (9 panes)
+        const grid3_col1 = try self.allocator.alloc(LayoutNode, 3);
+        grid3_col1[0] = LayoutNode.createPane(100, 33.33);
+        grid3_col1[1] = LayoutNode.createPane(100, 33.34);
+        grid3_col1[2] = LayoutNode.createPane(100, 33.33);
+        const grid3_col2 = try self.allocator.alloc(LayoutNode, 3);
+        grid3_col2[0] = LayoutNode.createPane(100, 33.33);
+        grid3_col2[1] = LayoutNode.createPane(100, 33.34);
+        grid3_col2[2] = LayoutNode.createPane(100, 33.33);
+        const grid3_col3 = try self.allocator.alloc(LayoutNode, 3);
+        grid3_col3[0] = LayoutNode.createPane(100, 33.33);
+        grid3_col3[1] = LayoutNode.createPane(100, 33.34);
+        grid3_col3[2] = LayoutNode.createPane(100, 33.33);
+        try self.addDefault("3x3", "3×3 Grid", &.{
+            .{ .container = .{ .width = 33.33, .height = 100, .children = grid3_col1 } },
+            .{ .container = .{ .width = 33.34, .height = 100, .children = grid3_col2 } },
+            .{ .container = .{ .width = 33.33, .height = 100, .children = grid3_col3 } },
+        });
+
+        // 3 columns x 2 rows grid (6 panes)
+        const grid3x2_col1 = try self.allocator.alloc(LayoutNode, 2);
+        grid3x2_col1[0] = LayoutNode.createPane(100, 50);
+        grid3x2_col1[1] = LayoutNode.createPane(100, 50);
+        const grid3x2_col2 = try self.allocator.alloc(LayoutNode, 2);
+        grid3x2_col2[0] = LayoutNode.createPane(100, 50);
+        grid3x2_col2[1] = LayoutNode.createPane(100, 50);
+        const grid3x2_col3 = try self.allocator.alloc(LayoutNode, 2);
+        grid3x2_col3[0] = LayoutNode.createPane(100, 50);
+        grid3x2_col3[1] = LayoutNode.createPane(100, 50);
+        try self.addDefault("3x2", "3×2 Grid", &.{
+            .{ .container = .{ .width = 33.33, .height = 100, .children = grid3x2_col1 } },
+            .{ .container = .{ .width = 33.34, .height = 100, .children = grid3x2_col2 } },
+            .{ .container = .{ .width = 33.33, .height = 100, .children = grid3x2_col3 } },
+        });
     }
 
     /// Add a default template
@@ -488,7 +523,7 @@ test "LayoutDb creates defaults" {
 
     try db.createDefaults();
 
-    try std.testing.expect(db.templates.items.len >= 6);
+    try std.testing.expect(db.templates.items.len >= 10);
 
     // Check single layout
     const single = db.get("single");
@@ -499,4 +534,14 @@ test "LayoutDb creates defaults" {
     const grid = db.get("2x2");
     try std.testing.expect(grid != null);
     try std.testing.expectEqual(grid.?.countPanes(), 4);
+
+    // Check 3x3 layout
+    const grid3x3 = db.get("3x3");
+    try std.testing.expect(grid3x3 != null);
+    try std.testing.expectEqual(grid3x3.?.countPanes(), 9);
+
+    // Check 3x2 layout
+    const grid3x2 = db.get("3x2");
+    try std.testing.expect(grid3x2 != null);
+    try std.testing.expectEqual(grid3x2.?.countPanes(), 6);
 }
