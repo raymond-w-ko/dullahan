@@ -35,6 +35,7 @@ pub const TestCommand = enum {
     @"hyperlink-test",
     @"toast-test",
     @"progress-test",
+    @"sync-test",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -51,6 +52,7 @@ pub const TestCommand = enum {
             .{ "hyperlink-test", .@"hyperlink-test" },
             .{ "toast-test", .@"toast-test" },
             .{ "progress-test", .@"progress-test" },
+            .{ "sync-test", .@"sync-test" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -70,6 +72,7 @@ pub const TestCommand = enum {
             .@"hyperlink-test" => "Display OSC 8 hyperlinks for testing",
             .@"toast-test" => "Display toast notifications via OSC 9/777",
             .@"progress-test" => "Display progress bar via OSC 9;4",
+            .@"sync-test" => "Test synchronized output mode (DECSET 2026)",
             .help => "Show available test commands",
         };
     }
@@ -92,6 +95,7 @@ pub fn printTestUsage() void {
         \\  hyperlink-test    Display OSC 8 hyperlinks for testing
         \\  toast-test        Display toast notifications via OSC 9/777
         \\  progress-test     Display progress bar via OSC 9;4
+        \\  sync-test         Test synchronized output mode (DECSET 2026)
         \\  help              Show this help
         \\
         \\Examples:
@@ -104,6 +108,7 @@ pub fn printTestUsage() void {
         \\  dullahan test hyperlink-test        # Test OSC 8 hyperlinks
         \\  dullahan test toast-test            # Test toast notifications
         \\  dullahan test progress-test         # Test progress bar
+        \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -124,6 +129,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"hyperlink-test" => runHyperlinkTest(),
         .@"toast-test" => runToastTest(),
         .@"progress-test" => runProgressTest(),
+        .@"sync-test" => runSyncTest(),
         .help => printTestUsage(),
     }
 }
@@ -2050,6 +2056,135 @@ fn runProgressTest() void {
         \\  printf '\e]9;4;3\a'      # indeterminate
         \\  printf '\e]9;4;2;75\a'   # 75% error
         \\  printf '\e]9;4;0\a'      # hide
+        \\
+    ) catch {};
+}
+
+// =============================================================================
+// Synchronized Output Test (DECSET 2026)
+// =============================================================================
+
+/// Escape sequences for synchronized output mode
+const SYNC_BEGIN = "\x1b[?2026h"; // BSU - Begin Synchronized Update
+const SYNC_END = "\x1b[?2026l"; // ESU - End Synchronized Update
+
+/// Test synchronized output mode (DECSET 2026)
+/// Tests both normal operation and timeout behavior
+fn runSyncTest() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\Synchronized Output Test (DECSET 2026)
+        \\======================================
+        \\
+        \\This test demonstrates synchronized output mode which reduces flicker
+        \\in TUI applications. When sync mode is enabled, terminal updates are
+        \\buffered and rendered atomically when the mode is disabled.
+        \\
+        \\Protocol:
+        \\  CSI ? 2026 h  - Begin synchronized update (BSU)
+        \\  CSI ? 2026 l  - End synchronized update (ESU)
+        \\
+        \\Run this in a dullahan terminal pane to observe the behavior.
+        \\
+        \\
+    ) catch {};
+
+    // Test 1: Normal synchronized update
+    _ = posix.write(stdout_fd, "Test 1: Normal synchronized update\n") catch {};
+    _ = posix.write(stdout_fd, "-----------------------------------\n") catch {};
+    _ = posix.write(stdout_fd, "Enabling sync mode, writing 10 lines with 50ms delays...\n\n") catch {};
+    std.Thread.sleep(500_000_000); // 500ms pause before test
+
+    // Enable sync mode
+    _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+
+    // Write multiple lines with small sleeps (simulating TUI app drawing)
+    var i: u8 = 1;
+    while (i <= 10) : (i += 1) {
+        var buf: [64]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "  [SYNC] Line {d:2}/10 - This should appear all at once\n", .{i}) catch continue;
+        _ = posix.write(stdout_fd, line) catch {};
+        std.Thread.sleep(50_000_000); // 50ms between writes
+    }
+
+    // Disable sync mode - all lines should render atomically
+    _ = posix.write(stdout_fd, SYNC_END) catch {};
+
+    _ = posix.write(stdout_fd, "\nSync mode disabled - all 10 lines should have appeared at once!\n") catch {};
+    std.Thread.sleep(1_500_000_000); // 1.5s pause
+
+    // Test 2: Multiple sync batches
+    _ = posix.write(stdout_fd, "\nTest 2: Multiple sync batches\n") catch {};
+    _ = posix.write(stdout_fd, "-----------------------------\n") catch {};
+    _ = posix.write(stdout_fd, "Three separate batches, each with sync mode...\n\n") catch {};
+    std.Thread.sleep(500_000_000);
+
+    var batch: u8 = 1;
+    while (batch <= 3) : (batch += 1) {
+        _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+
+        var j: u8 = 1;
+        while (j <= 3) : (j += 1) {
+            var buf: [80]u8 = undefined;
+            const line = std.fmt.bufPrint(&buf, "  [BATCH {d}] Line {d}/3\n", .{ batch, j }) catch continue;
+            _ = posix.write(stdout_fd, line) catch {};
+            std.Thread.sleep(30_000_000); // 30ms
+        }
+
+        _ = posix.write(stdout_fd, SYNC_END) catch {};
+        std.Thread.sleep(300_000_000); // 300ms between batches
+    }
+
+    _ = posix.write(stdout_fd, "\nEach batch of 3 lines should have appeared atomically.\n") catch {};
+    std.Thread.sleep(1_500_000_000);
+
+    // Test 3: Malformed - missing end sequence (timeout test)
+    _ = posix.write(stdout_fd, "\nTest 3: Timeout test (malformed - missing SYNC_END)\n") catch {};
+    _ = posix.write(stdout_fd, "---------------------------------------------------\n") catch {};
+    _ = posix.write(stdout_fd, "Enabling sync mode but NOT disabling it.\n") catch {};
+    _ = posix.write(stdout_fd, "Server should timeout after 1 second and flush automatically.\n\n") catch {};
+    std.Thread.sleep(500_000_000);
+
+    // Enable sync mode but DON'T disable it
+    _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+
+    var k: u8 = 1;
+    while (k <= 5) : (k += 1) {
+        var buf: [80]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "  [TIMEOUT TEST] Line {d}/5 - Waiting for timeout...\n", .{k}) catch continue;
+        _ = posix.write(stdout_fd, line) catch {};
+        std.Thread.sleep(100_000_000); // 100ms
+    }
+
+    // NO SYNC_END here! Server should timeout after 1 second
+    _ = posix.write(stdout_fd, "\n  (Sync mode still enabled - waiting for 1 second timeout...)\n") catch {};
+
+    // Wait for timeout (server has 1 second timeout)
+    std.Thread.sleep(1_500_000_000); // 1.5 seconds - should trigger timeout
+
+    // After timeout, these should appear immediately (sync mode auto-disabled)
+    _ = posix.write(stdout_fd, "\n  [AFTER TIMEOUT] If you see this, timeout worked!\n") catch {};
+    _ = posix.write(stdout_fd, "  [AFTER TIMEOUT] Sync mode was auto-disabled after 1 second.\n") catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Test complete!
+        \\
+        \\Summary:
+        \\  - Test 1: Lines 1-10 should appear all at once (sync worked)
+        \\  - Test 2: Each batch of 3 lines should appear atomically
+        \\  - Test 3: Lines should appear after ~1 second timeout
+        \\
+        \\Manual test commands:
+        \\  printf '\e[?2026h'         # Begin sync (BSU)
+        \\  printf 'Line 1\nLine 2\n'  # Write content
+        \\  printf '\e[?2026l'         # End sync (ESU) - content appears
+        \\
+        \\  # Timeout test (no ESU):
+        \\  printf '\e[?2026h'; echo "Should appear after 1s timeout"
         \\
     ) catch {};
 }
