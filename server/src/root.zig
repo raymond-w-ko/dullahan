@@ -41,6 +41,9 @@ pub const paths = @import("paths.zig");
 // PTY traffic logging
 pub const pty_log = @import("pty_log.zig");
 
+// Tailscale detection
+pub const tailscale = @import("tailscale.zig");
+
 // Layout database (config file)
 pub const layout_db = @import("layout_db.zig");
 

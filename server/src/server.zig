@@ -12,6 +12,7 @@ const signal = @import("signal.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
 const dlog = @import("dlog.zig");
 const pty_log = @import("pty_log.zig");
+const tailscale = @import("tailscale.zig");
 
 const log = std.log.scoped(.server);
 
@@ -87,9 +88,15 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Write PID file
     try ipc_server.writePidFile();
 
+    // Detect Tailscale for remote access
+    var tailscale_info = tailscale.detect(allocator);
+    defer if (tailscale_info) |*info| info.deinit();
+
+    const bind_all = tailscale_info != null;
+
     // Initialize HTTP server for WebSocket
     const static_dir = config.getStaticDir();
-    var http_server = http.Server.init(allocator, config.ws_port, static_dir) catch |e| {
+    var http_server = http.Server.init(allocator, config.ws_port, static_dir, bind_all) catch |e| {
         if (e == error.AddressInUse) {
             log.err("Port {d} is already in use. Another server may be running.", .{config.ws_port});
             std.debug.print("Error: Port {d} is already in use. Is another dullahan or ttyd running?\n", .{config.ws_port});
@@ -111,9 +118,15 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Note: Shells are already spawned by createWindowWithPanes() -> createShellPane()
 
     log.info("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]", .{ config.ipc.getSocketPath(), config.ws_port });
-    std.debug.print("dullahan server started (socket: {s}, ws: port {d}) [single-threaded]\n", .{ config.ipc.getSocketPath(), config.ws_port });
+    std.debug.print("dullahan server started\n", .{});
+    std.debug.print("  IPC socket: {s}\n", .{config.ipc.getSocketPath()});
+    std.debug.print("  Listening on:\n", .{});
+    std.debug.print("    http://127.0.0.1:{d}/\n", .{config.ws_port});
+    if (tailscale_info) |info| {
+        std.debug.print("    http://{s}:{d}/ (Tailscale)\n", .{ info.ip, config.ws_port });
+    }
     if (static_dir) |dir| {
-        std.debug.print("Serving static files from: {s}\n", .{dir});
+        std.debug.print("  Static files: {s}\n", .{dir});
     }
     std.debug.print("Press Ctrl+C to shutdown\n", .{});
 

@@ -190,18 +190,23 @@ pub const Server = struct {
     port: u16,
     static_dir: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8) !Server {
-        // Only accept connections from localhost for security
-        const address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+    pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8, bind_all: bool) !Server {
+        // Bind to all interfaces if requested (e.g., for Tailscale), otherwise localhost only
+        const address = if (bind_all)
+            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port)
+        else
+            std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+
         const listener = try address.listen(.{
             .reuse_address = true,
             .kernel_backlog = 128, // Handle burst of connections on refresh
         });
 
+        const bind_addr = if (bind_all) "0.0.0.0" else "127.0.0.1";
         if (static_dir) |dir| {
-            log.info("HTTP server listening on port {d}, serving static files from {s}", .{ port, dir });
+            log.info("HTTP server listening on {s}:{d}, serving static files from {s}", .{ bind_addr, port, dir });
         } else {
-            log.info("HTTP server listening on port {d}", .{port});
+            log.info("HTTP server listening on {s}:{d}", .{ bind_addr, port });
         }
 
         return .{
