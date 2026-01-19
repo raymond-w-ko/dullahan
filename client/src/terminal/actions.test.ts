@@ -35,28 +35,13 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
 
 describe("canPerformAction", () => {
   describe("copy_to_clipboard", () => {
-    test("returns true when there is a selection", () => {
-      const ctx = createMockContext({
-        getSelection: () => "selected text",
-      });
-      const action: TerminalAction = { type: "copy_to_clipboard" };
-      expect(canPerformAction(action, ctx)).toBe(true);
-    });
-
-    test("returns false when selection is null", () => {
+    test("always returns true (server handles selection extraction)", () => {
       const ctx = createMockContext({
         getSelection: () => null,
       });
       const action: TerminalAction = { type: "copy_to_clipboard" };
-      expect(canPerformAction(action, ctx)).toBe(false);
-    });
-
-    test("returns false when selection is empty string", () => {
-      const ctx = createMockContext({
-        getSelection: () => "",
-      });
-      const action: TerminalAction = { type: "copy_to_clipboard" };
-      expect(canPerformAction(action, ctx)).toBe(false);
+      // Copy is always performable - server extracts selection from terminal state
+      expect(canPerformAction(action, ctx)).toBe(true);
     });
   });
 

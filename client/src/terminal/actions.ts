@@ -215,9 +215,9 @@ export function canPerformAction(
 ): boolean {
   switch (action.type) {
     case "copy_to_clipboard": {
-      // Can only copy if there's a selection
-      const selection = ctx.getSelection();
-      return selection !== null && selection.length > 0;
+      // Always allow - server will extract selection from terminal state
+      // and handle the case where there's no selection
+      return true;
     }
 
     case "switch_window": {
