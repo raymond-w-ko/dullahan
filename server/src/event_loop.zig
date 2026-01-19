@@ -733,13 +733,13 @@ pub const EventLoop = struct {
         self.master_theme_fg = if (fg) |f| parseHexColor(f) else null;
         self.master_theme_bg = if (bg) |b| parseHexColor(b) else null;
 
-        // Log the change
+        // Log the change to debug console
         if (log_config.log_theme_colors) {
             if (self.master_theme_fg) |f| {
-                log.debug("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
+                dlog.info("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
             }
             if (self.master_theme_bg) |b| {
-                log.debug("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
+                dlog.info("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
             }
         }
 
