@@ -359,6 +359,18 @@ export interface ProgressMessage {
 }
 
 /**
+ * Shell integration event (OSC 133)
+ * Sent when the shell emits semantic prompt markers.
+ * Used for prompt-aware scrolling and command region detection.
+ */
+export interface ShellIntegrationMessage {
+  type: "shell_integration";
+  paneId: number;
+  event: "prompt_start" | "prompt_end" | "output_start" | "command_end";
+  exitCode?: number; // Only for command_end
+}
+
+/**
  * Clipboard operation notification (OSC 52).
  * Sent when the terminal requests clipboard access.
  */
@@ -431,6 +443,7 @@ export type ServerMessage =
   | BellMessage
   | ToastMessage
   | ProgressMessage
+  | ShellIntegrationMessage
   | ClipboardMessage
   | FocusServerMessage
   | MasterChangedMessage

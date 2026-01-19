@@ -25,6 +25,7 @@ const pane_mod = @import("pane.zig");
 const Pane = pane_mod.Pane;
 const MouseEvents = pane_mod.MouseEvents;
 const MouseFormat = pane_mod.MouseFormat;
+const ShellIntegrationEvent = pane_mod.ShellIntegrationEvent;
 const signal = @import("signal.zig");
 const mouse = @import("mouse.zig");
 const keyboard = @import("keyboard.zig");
@@ -616,6 +617,9 @@ pub const EventLoop = struct {
                 // This ensures clipboard messages are broadcast to all clients immediately
                 self.handlePaneClipboard(pane);
 
+                // Handle shell integration events (OSC 133) - broadcast to all clients
+                self.handlePaneShellIntegration(pane);
+
                 // Send updates only if not in sync mode, OR if sync just ended
                 // When sync mode is enabled, updates are deferred until mode is disabled
                 if (!pane.sync_output_enabled or sync_just_ended) {
@@ -1118,6 +1122,51 @@ pub const EventLoop = struct {
             }
             pane.handleClipboardGetTimeout();
         }
+    }
+
+    /// Handle shell integration events (OSC 133) for a pane.
+    /// Broadcasts shell integration messages to all connected clients.
+    /// Called after pane.feed() to ensure events are sent immediately.
+    fn handlePaneShellIntegration(self: *EventLoop, pane: *Pane) void {
+        if (!pane.hasShellEvent()) return;
+
+        const event = pane.getShellEvent() orelse return;
+        const pane_id = pane.id;
+
+        // Convert event kind to string
+        const event_str = switch (event.kind) {
+            .prompt_start => "prompt_start",
+            .prompt_end => "prompt_end",
+            .output_start => "output_start",
+            .command_end => "command_end",
+        };
+
+        log.info("Shell integration: pane={d} event={s} exit_code={?d}", .{
+            pane_id,
+            event_str,
+            event.exit_code,
+        });
+
+        const msg = snapshot.generateShellIntegrationMessage(
+            self.allocator,
+            pane_id,
+            event_str,
+            event.exit_code,
+        ) catch |e| {
+            logRecoverable("generate shell integration message", e);
+            pane.clearShellEvent();
+            return;
+        };
+        defer self.allocator.free(msg);
+
+        // Broadcast to all clients
+        for (self.clients.items) |*client| {
+            client.ws.sendBinary(msg) catch |e| {
+                logClientError("broadcast shell integration", e);
+            };
+        }
+
+        pane.clearShellEvent();
     }
 
     // ========================================================================

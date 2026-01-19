@@ -1,4 +1,5 @@
 import { debug } from "../debug";
+import { get as getConfig } from "../config";
 // WebSocket connection to dullahan server
 // Uses binary msgpack for efficient data transmission
 // Messages are compressed with Snappy
@@ -50,6 +51,7 @@ import type {
   DeltaUpdate,
   ScrollbackInfo,
   SelectionBounds,
+  ShellIntegrationMessage,
 } from "../../../protocol/schema/messages";
 
 export type {
@@ -123,6 +125,11 @@ export type ConnectionEvents = {
   bell: () => void;
   toast: (paneId: number, title: string | undefined, message: string) => void;
   progress: (paneId: number, state: number, value: number) => void;
+  shellIntegration: (
+    paneId: number,
+    event: "prompt_start" | "prompt_end" | "output_start" | "command_end",
+    exitCode?: number
+  ) => void;
   focus: (paneId: number) => void;
   connect: () => void;
   disconnect: () => void;
@@ -562,6 +569,18 @@ export class TerminalConnection {
         debug.log("Received progress:", msg.paneId, msg.state, msg.value);
         this.emit("progress", msg.paneId, msg.state, msg.value);
         break;
+      case "shell_integration": {
+        // OSC 133 shell integration event
+        // Always log to console for debugging (TODO: remove after verification)
+        const exitStr = msg.exitCode !== undefined ? ` exit=${msg.exitCode}` : "";
+        console.log(
+          `%c[shell]%c pane=${msg.paneId} event=${msg.event}${exitStr}`,
+          "color: #00aa00; font-weight: bold",
+          "color: inherit"
+        );
+        this.emit("shellIntegration", msg.paneId, msg.event, msg.exitCode);
+        break;
+      }
       case "focus":
         debug.log("Received focus:", msg.paneId);
         this.emit("focus", msg.paneId);

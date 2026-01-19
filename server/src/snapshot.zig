@@ -692,6 +692,28 @@ pub fn generateProgressMessage(
     return packAndCompress(allocator, &payload, 128);
 }
 
+/// Generate a binary msgpack shell integration message
+/// Triggered by OSC 133 escape sequences (semantic prompts)
+pub fn generateShellIntegrationMessage(
+    allocator: std.mem.Allocator,
+    pane_id: u16,
+    event: []const u8, // "prompt_start", "prompt_end", "output_start", "command_end"
+    exit_code: ?i32, // Only for command_end
+) ![]u8 {
+    var payload = msgpack.Payload.mapPayload(allocator);
+    errdefer payload.free(allocator);
+
+    try payload.mapPut("type", try msgpack.Payload.strToPayload("shell_integration", allocator));
+    try payload.mapPut("paneId", msgpack.Payload{ .uint = pane_id });
+    try payload.mapPut("event", try msgpack.Payload.strToPayload(event, allocator));
+
+    if (exit_code) |code| {
+        try payload.mapPut("exitCode", msgpack.Payload{ .int = code });
+    }
+
+    return packAndCompress(allocator, &payload, 128);
+}
+
 /// Generate a binary msgpack clipboard message for OSC 52 operations.
 /// operation: "set" (terminal writing to clipboard) or "get" (terminal reading)
 /// clipboard: 'c', 's', or 'p'

@@ -46,6 +46,10 @@ export interface ConfigSchema {
   // Bell (matches ghostty's bell-features)
   // Comma-separated list: "audio", "attention", "title"
   bellFeatures: string;
+
+  // Shell integration (OSC 133) logging
+  // When enabled, logs shell integration events to the browser console
+  shellIntegrationLogging: boolean;
 }
 
 // Default values - used when localStorage doesn't have a value
@@ -86,6 +90,11 @@ export const DEFAULTS: ConfigSchema = {
 
   // Bell (all enabled by default, matches ghostty)
   bellFeatures: 'audio,attention,title',
+
+  // Shell integration logging (disabled by default)
+  // Enable via URL param: ?shell-integration-logging
+  // Or localStorage: localStorage.setItem('dullahan.shellIntegrationLogging', 'true')
+  shellIntegrationLogging: false,
 };
 
 export type ConfigKey = keyof ConfigSchema;

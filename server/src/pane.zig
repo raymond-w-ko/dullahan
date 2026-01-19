@@ -31,6 +31,20 @@ pub const ClipboardHandler = clipboard_mod.ClipboardHandler;
 
 const log = std.log.scoped(.pane);
 
+/// Shell integration event (OSC 133)
+/// Sent by shells with semantic prompt integration to mark prompt/command regions
+pub const ShellIntegrationEvent = struct {
+    kind: Kind,
+    exit_code: ?i32 = null, // Only set for command_end
+
+    pub const Kind = enum {
+        prompt_start, // A - start of prompt
+        prompt_end, // B - end of prompt (command input starts)
+        output_start, // C - command output starts
+        command_end, // D - command finished with exit code
+    };
+};
+
 pub const Pane = struct {
     /// The terminal emulator state
     terminal: Terminal,
@@ -142,6 +156,13 @@ pub const Pane = struct {
     /// When ghostty adjusts page capacity, it creates new pages with new serials,
     /// which invalidates all existing row IDs and requires full resync
     last_page_serial: ?u64 = null,
+
+    /// Shell integration (OSC 133) event tracking
+    /// Stores the most recent shell integration event for broadcast to clients
+    shell_event: ?ShellIntegrationEvent = null,
+
+    /// Flag indicating a shell integration event needs to be sent to clients
+    shell_event_pending: bool = false,
 
     /// Selection tracking state for mouse-based selection
     /// Start position of selection drag (viewport coordinates)
@@ -809,6 +830,10 @@ pub const Pane = struct {
                         // Clipboard: OSC 52 ; <kind> ; <data> ST
                         self.clipboard.handleOsc52(payload, self.id);
                     },
+                    133 => {
+                        // Shell integration: OSC 133 ; <letter> [; <params>] ST
+                        self.handleShellIntegration(payload);
+                    },
                     777 => {
                         // Notification: OSC 777 ; notify ; <title> ; <body> ST (rxvt-unicode style)
                         // Parse: notify;<title>;<body>
@@ -1029,6 +1054,79 @@ pub const Pane = struct {
     /// Clear the progress changed flag
     pub fn clearProgressChanged(self: *Pane) void {
         self.progress_changed = false;
+    }
+
+    // ========================================================================
+    // Shell Integration API (OSC 133) - semantic prompts
+    // ========================================================================
+
+    /// Handle OSC 133 shell integration sequence.
+    /// Format: ESC ] 133 ; <letter> [; <params>] ST
+    /// Letters: A=prompt_start, B=prompt_end, C=output_start, D=command_end
+    fn handleShellIntegration(self: *Pane, payload: []const u8) void {
+        if (payload.len == 0) return;
+
+        const letter = payload[0];
+        var exit_code: ?i32 = null;
+
+        const kind: ShellIntegrationEvent.Kind = switch (letter) {
+            'A' => .prompt_start,
+            'B' => .prompt_end,
+            'C' => .output_start,
+            'D' => blk: {
+                // Parse exit code if present: "D;0" or "D;1" etc.
+                if (payload.len > 2 and payload[1] == ';') {
+                    // Parse the integer after "D;"
+                    const code_str = payload[2..];
+                    var code: i32 = 0;
+                    var negative = false;
+                    var i: usize = 0;
+
+                    // Handle negative numbers
+                    if (i < code_str.len and code_str[i] == '-') {
+                        negative = true;
+                        i += 1;
+                    }
+
+                    // Parse digits
+                    while (i < code_str.len and code_str[i] >= '0' and code_str[i] <= '9') : (i += 1) {
+                        code = code *| 10 +| @as(i32, @intCast(code_str[i] - '0'));
+                    }
+
+                    if (i > @intFromBool(negative)) {
+                        // Only set exit_code if we parsed at least one digit
+                        exit_code = if (negative) -code else code;
+                    }
+                }
+                break :blk .command_end;
+            },
+            else => return, // Unknown letter, ignore
+        };
+
+        self.shell_event = .{ .kind = kind, .exit_code = exit_code };
+        self.shell_event_pending = true;
+
+        log.info("OSC 133 parsed: {s} exit_code={?d}", .{
+            @tagName(kind),
+            exit_code,
+        });
+    }
+
+    /// Check if there's a pending shell integration event
+    pub fn hasShellEvent(self: *const Pane) bool {
+        return self.shell_event_pending;
+    }
+
+    /// Get the pending shell integration event (if any)
+    pub fn getShellEvent(self: *const Pane) ?ShellIntegrationEvent {
+        if (!self.shell_event_pending) return null;
+        return self.shell_event;
+    }
+
+    /// Clear the shell integration event
+    pub fn clearShellEvent(self: *Pane) void {
+        self.shell_event = null;
+        self.shell_event_pending = false;
     }
 
     // ========================================================================
@@ -1831,4 +1929,72 @@ test "OSC 52 clipboard with multiple kinds" {
     const op2 = pane.getClipboardSet().?;
     try std.testing.expectEqual(@as(u8, 'p'), op2.kind);
     pane.clearClipboardSet();
+}
+
+test "OSC 133 shell integration basic" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Initially no shell event
+    try std.testing.expect(!pane.hasShellEvent());
+    try std.testing.expect(pane.getShellEvent() == null);
+
+    // Feed OSC 133 ; A (prompt start) with BEL terminator
+    try pane.feed("\x1b]133;A\x07");
+    try std.testing.expect(pane.hasShellEvent());
+    const event_a = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.prompt_start, event_a.kind);
+    try std.testing.expect(event_a.exit_code == null);
+
+    // Clear and verify
+    pane.clearShellEvent();
+    try std.testing.expect(!pane.hasShellEvent());
+
+    // Feed OSC 133 ; B (prompt end) with ST terminator
+    try pane.feed("\x1b]133;B\x1b\\");
+    try std.testing.expect(pane.hasShellEvent());
+    const event_b = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.prompt_end, event_b.kind);
+    pane.clearShellEvent();
+
+    // Feed OSC 133 ; C (output start)
+    try pane.feed("\x1b]133;C\x07");
+    try std.testing.expect(pane.hasShellEvent());
+    const event_c = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.output_start, event_c.kind);
+    pane.clearShellEvent();
+}
+
+test "OSC 133 shell integration command_end with exit code" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    // Feed OSC 133 ; D ; 0 (command end with exit code 0)
+    try pane.feed("\x1b]133;D;0\x07");
+    try std.testing.expect(pane.hasShellEvent());
+    const event_d0 = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d0.kind);
+    try std.testing.expectEqual(@as(?i32, 0), event_d0.exit_code);
+    pane.clearShellEvent();
+
+    // Feed OSC 133 ; D ; 1 (command end with exit code 1)
+    try pane.feed("\x1b]133;D;1\x07");
+    const event_d1 = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d1.kind);
+    try std.testing.expectEqual(@as(?i32, 1), event_d1.exit_code);
+    pane.clearShellEvent();
+
+    // Feed OSC 133 ; D ; 127 (command end with exit code 127)
+    try pane.feed("\x1b]133;D;127\x07");
+    const event_d127 = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d127.kind);
+    try std.testing.expectEqual(@as(?i32, 127), event_d127.exit_code);
+    pane.clearShellEvent();
+
+    // Feed OSC 133 ; D (command end without exit code)
+    try pane.feed("\x1b]133;D\x07");
+    const event_d_no_code = pane.getShellEvent().?;
+    try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d_no_code.kind);
+    try std.testing.expect(event_d_no_code.exit_code == null);
+    pane.clearShellEvent();
 }
