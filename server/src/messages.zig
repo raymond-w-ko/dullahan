@@ -216,7 +216,7 @@ pub const ParsedCopy = struct {
 
 pub const ParsedClipboardPaste = struct {
     paneId: u16,
-    clipboard: []const u8,
+    clipboard: u8, // 'c' or 'p' - just the first char
 };
 
 /// Cleanup helper for JSON parsed messages.

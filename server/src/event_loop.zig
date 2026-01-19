@@ -1219,10 +1219,12 @@ pub const EventLoop = struct {
                 .ignore_unknown_fields = true,
             }) catch return null;
             defer parsed.deinit();
+            // Extract just the first character (c or p) to avoid use-after-free
+            const kind: u8 = if (parsed.value.clipboard.len > 0) parsed.value.clipboard[0] else 'c';
             return .{
                 .msg = .{ .clipboard_paste = .{
                     .paneId = parsed.value.paneId,
-                    .clipboard = parsed.value.clipboard,
+                    .clipboard = kind,
                 } },
                 .cleanup = .{ .none = {} },
             };
@@ -1393,8 +1395,19 @@ pub const EventLoop = struct {
 
                 const pane = self.session.activePane() orelse return;
 
-                // Clear selection on any keyboard input
-                if (pane.hasSelection()) {
+                // Check if this is a modifier-only key (Ctrl, Shift, Alt, Meta)
+                // Don't clear selection for modifier-only keys - they don't produce output
+                const is_modifier_only = std.mem.eql(u8, key_msg.code, "ControlLeft") or
+                    std.mem.eql(u8, key_msg.code, "ControlRight") or
+                    std.mem.eql(u8, key_msg.code, "ShiftLeft") or
+                    std.mem.eql(u8, key_msg.code, "ShiftRight") or
+                    std.mem.eql(u8, key_msg.code, "AltLeft") or
+                    std.mem.eql(u8, key_msg.code, "AltRight") or
+                    std.mem.eql(u8, key_msg.code, "MetaLeft") or
+                    std.mem.eql(u8, key_msg.code, "MetaRight");
+
+                // Clear selection on keyboard input that produces output (not modifier-only)
+                if (!is_modifier_only and pane.hasSelection()) {
                     pane.clearSelection();
                     self.broadcastPaneUpdate(pane) catch |e| {
                         logRecoverable("broadcast selection clear on keypress", e);
@@ -1994,7 +2007,7 @@ pub const EventLoop = struct {
                     return;
                 };
 
-                const kind: u8 = if (paste_msg.clipboard.len > 0) paste_msg.clipboard[0] else 'c';
+                const kind = paste_msg.clipboard; // Already a u8 ('c' or 'p')
                 const text = if (kind == 'p') self.ipc_clipboard_p else self.ipc_clipboard_c;
 
                 if (text) |data| {
