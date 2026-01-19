@@ -1347,10 +1347,32 @@ pub const EventLoop = struct {
                     };
                 }
 
-                self.session.logPtySend(pane.id, text_msg.data);
-                pane.writeInput(text_msg.data) catch |e| {
-                    logRecoverable("write text to PTY", e);
-                };
+                // Wrap in bracketed paste sequences if mode is enabled (DECSET 2004)
+                if (pane.terminal.modes.get(.bracketed_paste)) {
+                    const PASTE_START = "\x1b[200~";
+                    const PASTE_END = "\x1b[201~";
+
+                    self.session.logPtySend(pane.id, PASTE_START);
+                    self.session.logPtySend(pane.id, text_msg.data);
+                    self.session.logPtySend(pane.id, PASTE_END);
+
+                    pane.writeInput(PASTE_START) catch |e| {
+                        logRecoverable("write paste start to PTY", e);
+                        return;
+                    };
+                    pane.writeInput(text_msg.data) catch |e| {
+                        logRecoverable("write text to PTY", e);
+                        return;
+                    };
+                    pane.writeInput(PASTE_END) catch |e| {
+                        logRecoverable("write paste end to PTY", e);
+                    };
+                } else {
+                    self.session.logPtySend(pane.id, text_msg.data);
+                    pane.writeInput(text_msg.data) catch |e| {
+                        logRecoverable("write text to PTY", e);
+                    };
+                }
             },
             .resize => |resize_msg| {
                 // Only master can resize
