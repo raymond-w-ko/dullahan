@@ -347,9 +347,14 @@ export class TerminalConnection {
       debug.log("WebSocket connected");
       // Reset reconnect backoff on successful connection
       this.reconnectAttempts = 0;
-      // Send hello message to identify this client
-      this.send({ type: "hello", clientId: this._clientId });
-      debug.log("Sent hello with client ID:", this._clientId);
+      // Send hello message to identify this client with theme colors
+      const themeColors = this.getThemeColors();
+      this.send({
+        type: "hello",
+        clientId: this._clientId,
+        ...themeColors,
+      });
+      debug.log("Sent hello with client ID:", this._clientId, "theme:", themeColors);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
       this.emit("connect");
@@ -1073,6 +1078,25 @@ export class TerminalConnection {
     if (deltaTitle && typeof deltaTitle === 'string') {
       debug.log("Delta includes title for pane", paneId, ":", deltaTitle);
       this.emit("title", paneId, deltaTitle);
+    }
+  }
+
+  /**
+   * Extract current theme colors from CSS variables.
+   * Returns fg/bg colors that can be sent to the server for OSC 10/11 queries.
+   */
+  private getThemeColors(): { themeFg?: string; themeBg?: string } {
+    try {
+      const style = getComputedStyle(document.documentElement);
+      const fg = style.getPropertyValue("--term-fg").trim();
+      const bg = style.getPropertyValue("--term-bg").trim();
+      return {
+        themeFg: fg || undefined,
+        themeBg: bg || undefined,
+      };
+    } catch {
+      // Fallback if CSS variables not available
+      return {};
     }
   }
 

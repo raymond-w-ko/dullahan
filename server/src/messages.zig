@@ -58,6 +58,8 @@ pub const MouseMessage = struct {
 pub const HelloMessage = struct {
     type: []const u8,
     clientId: []const u8,
+    themeFg: ?[]const u8 = null,
+    themeBg: ?[]const u8 = null,
 };
 
 pub const NewWindowMessage = struct {
@@ -166,6 +168,10 @@ pub const ParsedFocus = struct {
 
 pub const ParsedHello = struct {
     clientId: []const u8,
+    /// Theme foreground color (e.g., "#abb2bf")
+    themeFg: ?[]const u8 = null,
+    /// Theme background color (e.g., "#282c34")
+    themeBg: ?[]const u8 = null,
 };
 
 pub const ParsedNewWindow = struct {

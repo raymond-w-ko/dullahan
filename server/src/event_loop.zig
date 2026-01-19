@@ -177,6 +177,11 @@ pub const EventLoop = struct {
     // Master client can perform privileged operations (resize, create panes, etc.)
     master_id: ?[]const u8 = null,
 
+    // Master's theme colors for OSC 10/11 queries (parsed from "#rrggbb" format)
+    // These are updated when master sends hello with theme colors
+    master_theme_fg: ?[3]u8 = null, // [r, g, b]
+    master_theme_bg: ?[3]u8 = null, // [r, g, b]
+
     // Layout database (templates for window creation)
     layouts: layout_db.LayoutDb,
 
@@ -708,6 +713,46 @@ pub const EventLoop = struct {
         }
     }
 
+    /// Parse a hex color string like "#rrggbb" into [r, g, b] bytes.
+    /// Returns null if the string is not a valid hex color.
+    fn parseHexColor(color_str: []const u8) ?[3]u8 {
+        // Must be exactly "#rrggbb" (7 chars)
+        if (color_str.len != 7 or color_str[0] != '#') {
+            return null;
+        }
+        const r = std.fmt.parseInt(u8, color_str[1..3], 16) catch return null;
+        const g = std.fmt.parseInt(u8, color_str[3..5], 16) catch return null;
+        const b = std.fmt.parseInt(u8, color_str[5..7], 16) catch return null;
+        return .{ r, g, b };
+    }
+
+    /// Set master's theme colors and update all panes.
+    /// Called when master client sends hello with theme colors.
+    pub fn setMasterTheme(self: *EventLoop, fg: ?[]const u8, bg: ?[]const u8) void {
+        // Parse colors
+        self.master_theme_fg = if (fg) |f| parseHexColor(f) else null;
+        self.master_theme_bg = if (bg) |b| parseHexColor(b) else null;
+
+        // Log the change
+        if (self.master_theme_fg) |f| {
+            log.debug("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
+        }
+        if (self.master_theme_bg) |b| {
+            log.debug("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
+        }
+
+        // Update all panes with new theme colors
+        self.updatePaneThemeColors();
+    }
+
+    /// Update all panes with current master theme colors.
+    fn updatePaneThemeColors(self: *EventLoop) void {
+        var pane_iter = self.session.pane_registry.panes.valueIterator();
+        while (pane_iter.next()) |pane_ptr| {
+            pane_ptr.*.setThemeColors(self.master_theme_fg, self.master_theme_bg);
+        }
+    }
+
     /// Broadcast layout message to all connected clients
     fn broadcastLayout(self: *EventLoop) !void {
         const msg = try snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts);
@@ -1121,7 +1166,11 @@ pub const EventLoop = struct {
                 .ignore_unknown_fields = true,
             }) catch return null;
             return .{
-                .msg = .{ .hello = .{ .clientId = parsed.value.clientId } },
+                .msg = .{ .hello = .{
+                    .clientId = parsed.value.clientId,
+                    .themeFg = parsed.value.themeFg,
+                    .themeBg = parsed.value.themeBg,
+                } },
                 .cleanup = .{ .json_hello = parsed },
             };
         } else if (std.mem.eql(u8, type_str, "request_master")) {
@@ -1541,6 +1590,13 @@ pub const EventLoop = struct {
                         self.setMaster(cid) catch |e| {
                             logRecoverable("auto-set master", e);
                         };
+                    }
+                }
+
+                // If this client is master, store their theme colors for OSC 10/11
+                if (client.client_id) |cid| {
+                    if (self.isMaster(cid)) {
+                        self.setMasterTheme(hello_msg.themeFg, hello_msg.themeBg);
                     }
                 }
 

@@ -142,6 +142,11 @@ pub const Pane = struct {
     /// Whether a selection drag is currently active
     selection_active: bool = false,
 
+    /// Theme colors for OSC 10/11 queries (set by master client)
+    /// Falls back to constants.colors defaults if null
+    theme_fg: ?[3]u8 = null, // [r, g, b]
+    theme_bg: ?[3]u8 = null, // [r, g, b]
+
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
@@ -674,13 +679,13 @@ pub const Pane = struct {
                         // Foreground color query: OSC 10 ; ? ST
                         // Response: OSC 10 ; rgb:RRRR/GGGG/BBBB ST
                         if (payload.len == 1 and payload[0] == '?') {
-                            self.sendOscColorResponse(
-                                10,
+                            // Use master's theme colors if available, else defaults
+                            const fg = self.theme_fg orelse .{
                                 constants.colors.fg_r,
                                 constants.colors.fg_g,
                                 constants.colors.fg_b,
-                                use_st,
-                            );
+                            };
+                            self.sendOscColorResponse(10, fg[0], fg[1], fg[2], use_st);
                         }
                         // Ignore SET operations (programs trying to change colors)
                     },
@@ -688,13 +693,13 @@ pub const Pane = struct {
                         // Background color query: OSC 11 ; ? ST
                         // Response: OSC 11 ; rgb:RRRR/GGGG/BBBB ST
                         if (payload.len == 1 and payload[0] == '?') {
-                            self.sendOscColorResponse(
-                                11,
+                            // Use master's theme colors if available, else defaults
+                            const bg = self.theme_bg orelse .{
                                 constants.colors.bg_r,
                                 constants.colors.bg_g,
                                 constants.colors.bg_b,
-                                use_st,
-                            );
+                            };
+                            self.sendOscColorResponse(11, bg[0], bg[1], bg[2], use_st);
                         }
                         // Ignore SET operations (programs trying to change colors)
                     },
@@ -1329,6 +1334,17 @@ pub const Pane = struct {
             self.generation +%= 1;
         }
         return result;
+    }
+
+    // ========================================================================
+    // Theme colors (for OSC 10/11 queries)
+    // ========================================================================
+
+    /// Set theme colors from master client.
+    /// Called by event_loop when master's theme is updated.
+    pub fn setThemeColors(self: *Pane, fg: ?[3]u8, bg: ?[3]u8) void {
+        self.theme_fg = fg;
+        self.theme_bg = bg;
     }
 
     /// Dump pane state in compact human-readable format

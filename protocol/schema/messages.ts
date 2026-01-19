@@ -100,6 +100,10 @@ export interface FocusMessage {
 export interface HelloMessage {
   type: "hello";
   clientId: string;
+  /** Theme foreground color (e.g., "#abb2bf") */
+  themeFg?: string;
+  /** Theme background color (e.g., "#282c34") */
+  themeBg?: string;
 }
 
 /** Request to become master */
