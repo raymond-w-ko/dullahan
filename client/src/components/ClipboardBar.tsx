@@ -2,6 +2,7 @@
 // Allows syncing between internal clipboards and navigator.clipboard
 
 import { h } from "preact";
+import { useState, useEffect } from "preact/hooks";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
@@ -74,6 +75,13 @@ export function ClipboardBar() {
   useStoreSubscription();
   const store = getStore();
   const { clipboardC, clipboardP } = store;
+
+  // Periodic re-render to update relative timestamps
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Determine which is most recent
   const cIsRecent =
