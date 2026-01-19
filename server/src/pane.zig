@@ -8,6 +8,7 @@ const posix = std.posix;
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
 const Pty = @import("pty.zig").Pty;
+const constants = @import("constants.zig");
 
 /// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
 /// Re-exported from ghostty for use by event_loop.zig
@@ -545,6 +546,30 @@ pub const Pane = struct {
         }
     }
 
+    /// Send OSC 10/11 color query response.
+    /// cmd: 10 (foreground) or 11 (background)
+    /// r, g, b: 8-bit color values
+    /// use_st: true for ST terminator (ESC \), false for BEL (0x07)
+    fn sendOscColorResponse(self: *Pane, cmd: u8, r: u8, g: u8, b: u8, use_st: bool) void {
+        // Convert 8-bit to 16-bit by duplicating (0xAB -> 0xABAB)
+        const r16: u16 = @as(u16, r) << 8 | r;
+        const g16: u16 = @as(u16, g) << 8 | g;
+        const b16: u16 = @as(u16, b) << 8 | b;
+
+        // Format: ESC ] cmd ; rgb:RRRR/GGGG/BBBB terminator
+        // Max size: 2 (ESC ]) + 2 (cmd) + 1 (;) + 4 (rgb:) + 4*3 (hex) + 2 (/) + 2 (terminator) = 25
+        var buf: [32]u8 = undefined;
+        const response = if (use_st)
+            std.fmt.bufPrint(&buf, "\x1b]{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x1b\\", .{ cmd, r16, g16, b16 }) catch return
+        else
+            std.fmt.bufPrint(&buf, "\x1b]{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x07", .{ cmd, r16, g16, b16 }) catch return;
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send OSC {d} response: {any}", .{ cmd, e });
+        };
+        log.debug("Sent OSC {d} response: rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ cmd, r16, g16, b16 });
+    }
+
     /// Parse OSC (Operating System Command) sequences.
     /// OSC 0 = set icon name and window title
     /// OSC 2 = set window title only
@@ -613,6 +638,7 @@ pub const Pane = struct {
                 // Find terminator: BEL (0x07) or ST (ESC \)
                 var text_end = text_start;
                 var found_term = false;
+                var use_st = false; // Track terminator type for OSC 10/11 response
                 while (text_end < work_data.len) : (text_end += 1) {
                     if (work_data[text_end] == 0x07) {
                         // BEL terminator
@@ -622,6 +648,7 @@ pub const Pane = struct {
                     if (work_data[text_end] == 0x1b and text_end + 1 < work_data.len and work_data[text_end + 1] == '\\') {
                         // ST terminator (ESC \)
                         found_term = true;
+                        use_st = true;
                         break;
                     }
                 }
@@ -642,6 +669,34 @@ pub const Pane = struct {
                         if (payload.len > 0) {
                             self.setTitle(payload);
                         }
+                    },
+                    10 => {
+                        // Foreground color query: OSC 10 ; ? ST
+                        // Response: OSC 10 ; rgb:RRRR/GGGG/BBBB ST
+                        if (payload.len == 1 and payload[0] == '?') {
+                            self.sendOscColorResponse(
+                                10,
+                                constants.colors.fg_r,
+                                constants.colors.fg_g,
+                                constants.colors.fg_b,
+                                use_st,
+                            );
+                        }
+                        // Ignore SET operations (programs trying to change colors)
+                    },
+                    11 => {
+                        // Background color query: OSC 11 ; ? ST
+                        // Response: OSC 11 ; rgb:RRRR/GGGG/BBBB ST
+                        if (payload.len == 1 and payload[0] == '?') {
+                            self.sendOscColorResponse(
+                                11,
+                                constants.colors.bg_r,
+                                constants.colors.bg_g,
+                                constants.colors.bg_b,
+                                use_st,
+                            );
+                        }
+                        // Ignore SET operations (programs trying to change colors)
                     },
                     9 => {
                         // OSC 9 - ConEmu/iTerm2 style commands

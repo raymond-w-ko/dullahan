@@ -77,3 +77,17 @@ pub const process = struct {
     /// Poll interval after SIGKILL.
     pub const sigkill_poll_interval_ms: u32 = 100;
 };
+
+/// Default terminal colors for OSC 10/11 queries.
+/// Values match dullahan.css base theme (One Dark style).
+pub const colors = struct {
+    /// Foreground: #abb2bf
+    pub const fg_r: u8 = 0xab;
+    pub const fg_g: u8 = 0xb2;
+    pub const fg_b: u8 = 0xbf;
+
+    /// Background: #282c34
+    pub const bg_r: u8 = 0x28;
+    pub const bg_g: u8 = 0x2c;
+    pub const bg_b: u8 = 0x34;
+};
