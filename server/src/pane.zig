@@ -61,6 +61,14 @@ pub const Pane = struct {
     /// Clients with generation < this need full resync
     dirty_base_gen: u64 = 0,
 
+    /// Synchronized output mode (DECSET 2026) state tracking
+    /// When enabled, terminal updates are buffered until mode is disabled
+    sync_output_enabled: bool = false,
+
+    /// Timestamp (nanoseconds) when sync mode was enabled
+    /// Used for timeout detection (1 second max)
+    sync_output_start_ns: ?i128 = null,
+
     /// PTY for this pane (null if no shell spawned)
     pty: ?Pty = null,
 
@@ -439,7 +447,48 @@ pub const Pane = struct {
         // Clear ghostty's dirty flags
         self.terminal.screens.active.pages.clearDirty();
     }
-    
+
+    // ========================================================================
+    // Synchronized Output Mode (DECSET 2026)
+    // ========================================================================
+
+    /// Check if synchronized output mode has changed and update state.
+    /// Returns true if sync mode just ended (caller should broadcast immediately).
+    /// Called after feed() to detect mode transitions.
+    pub fn checkSyncModeTransition(self: *Pane) bool {
+        const sync_mode = self.terminal.modes.get(.synchronized_output);
+        if (sync_mode != self.sync_output_enabled) {
+            const was_enabled = self.sync_output_enabled;
+            if (sync_mode) {
+                // Mode just enabled - record start time
+                self.sync_output_start_ns = std.time.nanoTimestamp();
+                log.debug("Pane {d}: Sync output enabled", .{self.id});
+            } else {
+                // Mode just disabled - clear timeout
+                self.sync_output_start_ns = null;
+                log.debug("Pane {d}: Sync output disabled", .{self.id});
+            }
+            self.sync_output_enabled = sync_mode;
+            // Return true if we just ended sync mode (caller should flush)
+            return was_enabled and !sync_mode;
+        }
+        return false;
+    }
+
+    /// Force disable synchronized output mode (used for timeout).
+    /// Clears our tracking state; the terminal's mode flag will be
+    /// corrected when the next DECSET/DECRST sequence arrives.
+    pub fn forceSyncDisable(self: *Pane) void {
+        self.sync_output_enabled = false;
+        self.sync_output_start_ns = null;
+        log.debug("Pane {d}: Sync output force-disabled (timeout)", .{self.id});
+    }
+
+    /// Check if sync mode is currently enabled
+    pub fn isSyncOutputEnabled(self: *const Pane) bool {
+        return self.sync_output_enabled;
+    }
+
     /// Handle terminal queries that require responses (DA1, DSR, etc.)
     /// These are sent by shells/apps to detect terminal capabilities
     fn handleTerminalQueries(self: *Pane, data: []const u8) void {
@@ -1099,6 +1148,10 @@ pub const Pane = struct {
                 log.warn("Failed to resize PTY: {any}", .{e});
             };
         }
+
+        // Clear sync output mode (allowed by spec - resize can interrupt sync)
+        self.sync_output_enabled = false;
+        self.sync_output_start_ns = null;
 
         // Increment generation first
         self.generation +%= 1;

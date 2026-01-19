@@ -287,9 +287,13 @@ pub const EventLoop = struct {
                 continue;
             };
 
-            if (ready == 0) continue;
+            if (ready > 0) {
+                try self.dispatchEvents(poll_fds);
+            }
 
-            try self.dispatchEvents(poll_fds);
+            // Check for synchronized output timeouts on every iteration
+            // This handles apps that enable sync mode but forget to disable it
+            self.checkSyncTimeouts();
         }
 
         log.info("Event loop stopped", .{});
@@ -604,23 +608,55 @@ pub const EventLoop = struct {
                 self.session.logPtyRecv(pane.id, buf[0..n]);
                 try pane.feed(buf[0..n]);
 
+                // Check for synchronized output mode (DECSET 2026) transitions
+                // Returns true if sync mode just ended (need to flush immediately)
+                const sync_just_ended = pane.checkSyncModeTransition();
+
                 // Handle clipboard operations (OSC 52) BEFORE sending pane updates
                 // This ensures clipboard messages are broadcast to all clients immediately
                 self.handlePaneClipboard(pane);
 
-                // Send updates for both the PTY pane and the debug pane
-                // (debug pane was updated by logPtyRecv)
-                const debug_pane = self.session.getDebugPane();
-                for (self.clients.items) |*client| {
-                    self.sendPaneUpdate(client, pane) catch |e| {
-                        logClientError("send pane update", e);
-                    };
-                    if (debug_pane) |dp| {
-                        if (dp.id != pane.id) { // Don't send twice if this IS the debug pane
-                            self.sendPaneUpdate(client, dp) catch |e| {
-                                logClientError("send debug pane update", e);
-                            };
+                // Send updates only if not in sync mode, OR if sync just ended
+                // When sync mode is enabled, updates are deferred until mode is disabled
+                if (!pane.sync_output_enabled or sync_just_ended) {
+                    // Send updates for both the PTY pane and the debug pane
+                    // (debug pane was updated by logPtyRecv)
+                    const debug_pane = self.session.getDebugPane();
+                    for (self.clients.items) |*client| {
+                        self.sendPaneUpdate(client, pane) catch |e| {
+                            logClientError("send pane update", e);
+                        };
+                        if (debug_pane) |dp| {
+                            if (dp.id != pane.id) { // Don't send twice if this IS the debug pane
+                                self.sendPaneUpdate(client, dp) catch |e| {
+                                    logClientError("send debug pane update", e);
+                                };
+                            }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Synchronized output timeout in nanoseconds (1 second)
+    const SYNC_TIMEOUT_NS: i128 = 1_000_000_000;
+
+    /// Check all panes for sync output timeouts and flush if exceeded.
+    /// Called on each poll iteration to handle apps that forget to disable sync mode.
+    fn checkSyncTimeouts(self: *EventLoop) void {
+        const now = std.time.nanoTimestamp();
+        var pane_it = self.session.pane_registry.iterator();
+        while (pane_it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
+            if (pane.sync_output_enabled) {
+                if (pane.sync_output_start_ns) |start| {
+                    if (now - start > SYNC_TIMEOUT_NS) {
+                        log.debug("Sync timeout for pane {d}", .{pane.id});
+                        pane.forceSyncDisable();
+                        self.broadcastPaneUpdate(pane) catch |e| {
+                            logClientError("sync timeout broadcast", e);
+                        };
                     }
                 }
             }
