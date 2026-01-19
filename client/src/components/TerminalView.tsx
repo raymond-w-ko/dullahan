@@ -27,7 +27,7 @@ import {
   setFocusedPane,
   toggleFullscreen,
   getMostRecentClipboard,
-  setClipboardC,
+  setClipboardBothAndSync,
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
@@ -141,8 +141,8 @@ export function TerminalView({
       },
       writeClipboard: async (text: string) => {
         await copyToClipboard(text);
-        // Also update internal clipboard so ClipboardBar shows it
-        setClipboardC(text);
+        // Update both internal clipboards and sync to server
+        setClipboardBothAndSync(text);
         // Clear selection after copy if configured
         if (config.get("selectionClearOnCopy")) {
           clearSelection();

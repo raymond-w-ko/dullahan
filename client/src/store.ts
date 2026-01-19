@@ -471,6 +471,17 @@ export function setClipboardP(text: string) {
   notify();
 }
 
+/** Set both clipboards and sync to server (used by keybind copy action) */
+export function setClipboardBothAndSync(text: string) {
+  const timestamp = Date.now();
+  store.clipboardC = { text, timestamp };
+  store.clipboardP = { text, timestamp };
+  notify();
+  // Sync both to server
+  syncClipboardToServer("c", text);
+  syncClipboardToServer("p", text);
+}
+
 /** Get the most recently modified clipboard ('c' or 'p') */
 export function getMostRecentClipboard(): ClipboardEntry | null {
   const c = store.clipboardC;
