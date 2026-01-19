@@ -77,6 +77,13 @@ pub const ClipboardResponseMessage = struct {
     data: []const u8,
 };
 
+/// Client-initiated clipboard update (from browser clipboard bar)
+pub const ClipboardSetMessage = struct {
+    type: []const u8,
+    clipboard: []const u8, // "c" or "p"
+    data: []const u8, // base64-encoded text
+};
+
 pub const MessageType = struct {
     type: []const u8,
 };
@@ -103,6 +110,7 @@ pub const ParsedMessage = union(enum) {
     select_all: ParsedSelectAll,
     clear_selection: ParsedClearSelection,
     clipboard_response: ParsedClipboardResponse,
+    clipboard_set: ParsedClipboardSet,
     unknown: void,
 };
 
@@ -182,6 +190,11 @@ pub const ParsedClipboardResponse = struct {
     data: []const u8,
 };
 
+pub const ParsedClipboardSet = struct {
+    clipboard: []const u8,
+    data: []const u8,
+};
+
 /// Cleanup helper for JSON parsed messages.
 /// Holds references to parsed JSON that need to be freed after message handling.
 pub const JsonCleanup = union(enum) {
@@ -192,6 +205,7 @@ pub const JsonCleanup = union(enum) {
     json_new_window: std.json.Parsed(NewWindowMessage),
     json_mouse: std.json.Parsed(MouseMessage),
     json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
+    json_clipboard_set: std.json.Parsed(ClipboardSetMessage),
 
     pub fn deinit(self: *JsonCleanup) void {
         switch (self.*) {
@@ -202,6 +216,7 @@ pub const JsonCleanup = union(enum) {
             .json_new_window => |*p| p.deinit(),
             .json_mouse => |*p| p.deinit(),
             .json_clipboard_response => |*p| p.deinit(),
+            .json_clipboard_set => |*p| p.deinit(),
         }
     }
 };

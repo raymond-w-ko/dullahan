@@ -77,6 +77,7 @@ const HelloMessage = messages.HelloMessage;
 const NewWindowMessage = messages.NewWindowMessage;
 const CloseWindowMessage = messages.CloseWindowMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
+const ClipboardSetMessage = messages.ClipboardSetMessage;
 const MessageType = messages.MessageType;
 
 const ParsedMessage = messages.ParsedMessage;
@@ -1135,6 +1136,17 @@ pub const EventLoop = struct {
                 } },
                 .cleanup = .{ .json_clipboard_response = parsed },
             };
+        } else if (std.mem.eql(u8, type_str, "clipboard_set")) {
+            const parsed = std.json.parseFromSlice(ClipboardSetMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            return .{
+                .msg = .{ .clipboard_set = .{
+                    .clipboard = parsed.value.clipboard,
+                    .data = parsed.value.data,
+                } },
+                .cleanup = .{ .json_clipboard_set = parsed },
+            };
         }
 
         return .{ .msg = .{ .unknown = {} }, .cleanup = .{ .none = {} } };
@@ -1757,6 +1769,25 @@ pub const EventLoop = struct {
 
                 log.debug("Forwarded clipboard response to pane {d}: kind={c}, data_len={d}", .{
                     clip_msg.paneId,
+                    kind,
+                    clip_msg.data.len,
+                });
+            },
+            .clipboard_set => |clip_msg| {
+                // Client updating server's clipboard storage (from browser clipboard bar)
+                const kind: u8 = if (clip_msg.clipboard.len > 0) clip_msg.clipboard[0] else 'c';
+
+                if (log_config.log_clipboard) {
+                    dlog.info("Clipboard set from client: kind='{c}' data_len={d}", .{
+                        kind,
+                        clip_msg.data.len,
+                    });
+                }
+
+                // Update server's clipboard storage
+                self.updateIpcClipboardFromBase64(kind, clip_msg.data);
+
+                log.debug("Updated IPC clipboard from client: kind={c}, data_len={d}", .{
                     kind,
                     clip_msg.data.len,
                 });

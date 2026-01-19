@@ -511,11 +511,26 @@ export async function copySystemToInternal(kind: "c" | "p"): Promise<boolean> {
     } else {
       setClipboardP(text);
     }
+    // Sync to server so it persists across reconnects
+    syncClipboardToServer(kind, text);
     debug.log(`Copied system clipboard to internal '${kind}': ${text.length} chars`);
     return true;
   } catch (err) {
     debug.warn(`Failed to copy system clipboard to '${kind}':`, err);
     return false;
+  }
+}
+
+/** Sync clipboard to server for persistence across reconnects */
+function syncClipboardToServer(kind: "c" | "p", text: string): void {
+  const conn = store.connection;
+  if (!conn) return;
+  try {
+    const base64Data = btoa(text);
+    conn.send({ type: "clipboard_set", clipboard: kind, data: base64Data });
+    debug.log(`Synced clipboard '${kind}' to server: ${text.length} chars`);
+  } catch (err) {
+    debug.warn(`Failed to sync clipboard '${kind}' to server:`, err);
   }
 }
 
