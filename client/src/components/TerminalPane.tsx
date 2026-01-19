@@ -29,7 +29,13 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
   const connection = getConnection();
 
   if (!pane) {
-    return <div class="terminal-pane terminal-pane--error">Pane {paneId} not found</div>;
+    return (
+      <div class="not-found">
+        <div class="not-found-icon">⚠</div>
+        <div class="not-found-title">Pane Not Found</div>
+        <div class="not-found-detail">Pane {paneId} does not exist</div>
+      </div>
+    );
   }
 
   const { snapshot, syncStats, isReadOnly, title, dimensions } = pane;

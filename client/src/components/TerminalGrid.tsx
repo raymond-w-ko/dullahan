@@ -18,7 +18,13 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
   const window = getWindow(windowId);
 
   if (!window) {
-    return <div class="terminal-grid terminal-grid--error">Window {windowId} not found</div>;
+    return (
+      <div class="not-found">
+        <div class="not-found-icon">⚠</div>
+        <div class="not-found-title">Window Not Found</div>
+        <div class="not-found-detail">Window {windowId} does not exist</div>
+      </div>
+    );
   }
 
   // Check if a pane in this window is fullscreen
