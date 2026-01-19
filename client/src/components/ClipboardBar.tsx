@@ -40,33 +40,31 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
 
   return (
     <div class={`clipboard-panel ${isRecent ? "clipboard-panel--recent" : ""}`}>
-      <div class="clipboard-panel-header">
-        <span class="clipboard-panel-label">{label}</span>
-        {entry && (
-          <span class="clipboard-panel-time" title={new Date(entry.timestamp).toLocaleString()}>
-            {formatTimestamp(entry.timestamp)}
-          </span>
-        )}
-        <div class="clipboard-panel-buttons">
-          <button
-            class="clipboard-btn"
-            onClick={handleCopyToSystem}
-            disabled={!entry}
-            title={`Copy '${kind}' to system clipboard`}
-          >
-            {"\u2191"}
-          </button>
-          <button
-            class="clipboard-btn"
-            onClick={handleCopyFromSystem}
-            title={`Copy system clipboard to '${kind}'`}
-          >
-            {"\u2193"}
-          </button>
-        </div>
-      </div>
+      <span class="clipboard-panel-label">{label}:</span>
       <div class="clipboard-panel-content">
         {entry ? entry.text : <span class="clipboard-panel-empty">(empty)</span>}
+      </div>
+      {entry && (
+        <span class="clipboard-panel-time" title={new Date(entry.timestamp).toLocaleString()}>
+          {formatTimestamp(entry.timestamp)}
+        </span>
+      )}
+      <div class="clipboard-panel-buttons">
+        <button
+          class="clipboard-btn"
+          onClick={handleCopyToSystem}
+          disabled={!entry}
+          title={`Copy '${kind}' to system clipboard`}
+        >
+          {"\u2191"}
+        </button>
+        <button
+          class="clipboard-btn"
+          onClick={handleCopyFromSystem}
+          title={`Copy system clipboard to '${kind}'`}
+        >
+          {"\u2193"}
+        </button>
       </div>
     </div>
   );
