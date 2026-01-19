@@ -900,6 +900,64 @@ pub const EventLoop = struct {
         }
     }
 
+    /// Update primary (p) clipboard from pane selection text.
+    /// Called when a selection is completed (mouse drag ends).
+    /// Broadcasts clipboard SET to all clients (but not navigator.clipboard).
+    fn updatePrimaryClipboardFromSelection(self: *EventLoop, pane: *Pane) void {
+        // Get the selected text from the terminal
+        const selected_text = pane.getSelectionText() catch |e| {
+            logRecoverable("get selection text for primary clipboard", e);
+            return;
+        };
+
+        if (selected_text) |text| {
+            defer pane.allocator.free(text);
+
+            if (log_config.log_clipboard) {
+                dlog.info("Selection → primary: pane={d} text_len={d}", .{ pane.id, text.len });
+            }
+
+            // Store in ipc_clipboard_p (primary selection)
+            const text_copy = self.allocator.dupe(u8, text) catch |e| {
+                logRecoverable("allocate primary clipboard text", e);
+                return;
+            };
+            if (self.ipc_clipboard_p) |old| {
+                self.allocator.free(old);
+            }
+            self.ipc_clipboard_p = text_copy;
+
+            // Broadcast clipboard SET to all clients
+            const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
+            const base64_data = self.allocator.alloc(u8, encoded_len) catch |e| {
+                logRecoverable("allocate base64 for primary clipboard", e);
+                return;
+            };
+            defer self.allocator.free(base64_data);
+            _ = std.base64.standard.Encoder.encode(base64_data, text);
+
+            const msg = snapshot.generateClipboardMessage(
+                self.allocator,
+                pane.id,
+                "set",
+                'p',
+                base64_data,
+            ) catch |e| {
+                logRecoverable("generate clipboard message for primary", e);
+                return;
+            };
+            defer self.allocator.free(msg);
+
+            for (self.clients.items) |*c| {
+                c.ws.sendBinary(msg) catch |e| {
+                    logClientError("broadcast primary clipboard", e);
+                };
+            }
+
+            log.debug("Updated primary clipboard from selection: {d} chars", .{text.len});
+        }
+    }
+
     /// Handle clipboard operations (OSC 52) for a pane.
     /// This checks for pending SET/GET and broadcasts to appropriate clients.
     /// Called after pane.feed() to ensure clipboard messages are sent immediately.
@@ -1146,6 +1204,27 @@ pub const EventLoop = struct {
                     .data = parsed.value.data,
                 } },
                 .cleanup = .{ .json_clipboard_set = parsed },
+            };
+        } else if (std.mem.eql(u8, type_str, "copy")) {
+            const parsed = std.json.parseFromSlice(messages.CopyMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .copy = .{ .paneId = parsed.value.paneId } },
+                .cleanup = .{ .none = {} },
+            };
+        } else if (std.mem.eql(u8, type_str, "clipboard_paste")) {
+            const parsed = std.json.parseFromSlice(messages.ClipboardPasteMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            defer parsed.deinit();
+            return .{
+                .msg = .{ .clipboard_paste = .{
+                    .paneId = parsed.value.paneId,
+                    .clipboard = parsed.value.clipboard,
+                } },
+                .cleanup = .{ .none = {} },
             };
         }
 
@@ -1592,8 +1671,58 @@ pub const EventLoop = struct {
                 const do_terminal_selection = mouse_events == .none or mouse_msg.shift;
 
                 if (do_terminal_selection) {
-                    // Handle terminal selection (bypasses app when shift held)
-                    // Only left button (0) triggers selection
+                    // Handle terminal operations when not in mouse reporting mode
+                    // (or when shift is held to bypass mouse reporting)
+
+                    // Middle-click (button 1) pastes from primary clipboard
+                    if (mouse_msg.button == 1) {
+                        const is_down = std.mem.eql(u8, mouse_msg.state, "down");
+                        if (is_down) {
+                            // Paste from primary clipboard
+                            if (self.ipc_clipboard_p) |text| {
+                                if (log_config.log_clipboard) {
+                                    dlog.info("Middle-click paste: pane={d} text_len={d}", .{
+                                        mouse_msg.paneId,
+                                        text.len,
+                                    });
+                                }
+
+                                // Write to PTY with bracketed paste support
+                                if (pane.terminal.modes.get(.bracketed_paste)) {
+                                    const PASTE_START = "\x1b[200~";
+                                    const PASTE_END = "\x1b[201~";
+
+                                    self.session.logPtySend(pane.id, PASTE_START);
+                                    self.session.logPtySend(pane.id, text);
+                                    self.session.logPtySend(pane.id, PASTE_END);
+
+                                    pane.writeInput(PASTE_START) catch |e| {
+                                        logRecoverable("write paste start for middle-click", e);
+                                        return;
+                                    };
+                                    pane.writeInput(text) catch |e| {
+                                        logRecoverable("write text for middle-click paste", e);
+                                        return;
+                                    };
+                                    pane.writeInput(PASTE_END) catch |e| {
+                                        logRecoverable("write paste end for middle-click", e);
+                                    };
+                                } else {
+                                    self.session.logPtySend(pane.id, text);
+                                    pane.writeInput(text) catch |e| {
+                                        logRecoverable("write text for middle-click paste", e);
+                                    };
+                                }
+
+                                log.debug("Middle-click pasted to pane {d}: {d} chars", .{ pane.id, text.len });
+                            } else {
+                                log.debug("Middle-click paste: primary clipboard is empty", .{});
+                            }
+                        }
+                        return;
+                    }
+
+                    // Left button (0) triggers selection
                     if (mouse_msg.button == 0) {
                         const is_down = std.mem.eql(u8, mouse_msg.state, "down");
                         const is_move = std.mem.eql(u8, mouse_msg.state, "move");
@@ -1627,6 +1756,10 @@ pub const EventLoop = struct {
                                 // This is important when mouseMove events are disabled on client
                                 pane.updateSelection(mouse_msg.x, mouse_msg.y, mouse_msg.alt);
                                 pane.endSelection();
+
+                                // Auto-update primary (p) clipboard with selection text
+                                // This is standard X11 terminal behavior - select to copy to primary
+                                self.updatePrimaryClipboardFromSelection(pane);
                             }
                             // Final broadcast
                             self.broadcastPaneUpdate(pane) catch |e| {
@@ -1791,6 +1924,119 @@ pub const EventLoop = struct {
                     kind,
                     clip_msg.data.len,
                 });
+            },
+            .copy => |copy_msg| {
+                // Client requesting to copy selection to clipboard
+                const pane = self.session.getPaneById(copy_msg.paneId) orelse {
+                    log.warn("copy for unknown pane {d}", .{copy_msg.paneId});
+                    return;
+                };
+
+                // Get the selected text from the terminal
+                const selected_text = pane.getSelectionText() catch |e| {
+                    logRecoverable("get selection text for copy", e);
+                    return;
+                };
+
+                if (selected_text) |text| {
+                    defer pane.allocator.free(text);
+
+                    if (log_config.log_clipboard) {
+                        dlog.info("Copy: pane={d} text_len={d}", .{ copy_msg.paneId, text.len });
+                    }
+
+                    // Store in ipc_clipboard_c (system clipboard)
+                    const text_copy = self.allocator.dupe(u8, text) catch |e| {
+                        logRecoverable("allocate clipboard text", e);
+                        return;
+                    };
+                    if (self.ipc_clipboard_c) |old| {
+                        self.allocator.free(old);
+                    }
+                    self.ipc_clipboard_c = text_copy;
+
+                    // Broadcast clipboard SET to all clients
+                    const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
+                    const base64_data = self.allocator.alloc(u8, encoded_len) catch |e| {
+                        logRecoverable("allocate base64 for copy", e);
+                        return;
+                    };
+                    defer self.allocator.free(base64_data);
+                    _ = std.base64.standard.Encoder.encode(base64_data, text);
+
+                    const clipboard_msg = snapshot.generateClipboardMessage(
+                        self.allocator,
+                        copy_msg.paneId,
+                        "set",
+                        'c',
+                        base64_data,
+                    ) catch |e| {
+                        logRecoverable("generate clipboard message for copy", e);
+                        return;
+                    };
+                    defer self.allocator.free(clipboard_msg);
+
+                    for (self.clients.items) |*c| {
+                        c.ws.sendBinary(clipboard_msg) catch |e| {
+                            logClientError("broadcast copy", e);
+                        };
+                    }
+
+                    log.debug("Copied selection from pane {d}: {d} chars", .{ copy_msg.paneId, text.len });
+                } else {
+                    log.debug("Copy: no selection in pane {d}", .{copy_msg.paneId});
+                }
+            },
+            .clipboard_paste => |paste_msg| {
+                // Client requesting to paste from server clipboard to PTY
+                const pane = self.session.getPaneById(paste_msg.paneId) orelse {
+                    log.warn("clipboard_paste for unknown pane {d}", .{paste_msg.paneId});
+                    return;
+                };
+
+                const kind: u8 = if (paste_msg.clipboard.len > 0) paste_msg.clipboard[0] else 'c';
+                const text = if (kind == 'p') self.ipc_clipboard_p else self.ipc_clipboard_c;
+
+                if (text) |data| {
+                    if (log_config.log_clipboard) {
+                        dlog.info("Clipboard paste: pane={d} kind='{c}' text_len={d}", .{
+                            paste_msg.paneId,
+                            kind,
+                            data.len,
+                        });
+                    }
+
+                    // Write to PTY with bracketed paste support
+                    if (pane.terminal.modes.get(.bracketed_paste)) {
+                        const PASTE_START = "\x1b[200~";
+                        const PASTE_END = "\x1b[201~";
+
+                        self.session.logPtySend(pane.id, PASTE_START);
+                        self.session.logPtySend(pane.id, data);
+                        self.session.logPtySend(pane.id, PASTE_END);
+
+                        pane.writeInput(PASTE_START) catch |e| {
+                            logRecoverable("write paste start to PTY", e);
+                            return;
+                        };
+                        pane.writeInput(data) catch |e| {
+                            logRecoverable("write clipboard text to PTY", e);
+                            return;
+                        };
+                        pane.writeInput(PASTE_END) catch |e| {
+                            logRecoverable("write paste end to PTY", e);
+                        };
+                    } else {
+                        self.session.logPtySend(pane.id, data);
+                        pane.writeInput(data) catch |e| {
+                            logRecoverable("write clipboard text to PTY", e);
+                        };
+                    }
+
+                    log.debug("Pasted '{c}' clipboard to pane {d}: {d} chars", .{ kind, paste_msg.paneId, data.len });
+                } else {
+                    log.debug("Clipboard paste: '{c}' clipboard is empty", .{kind});
+                }
             },
             .unknown => {},
         }

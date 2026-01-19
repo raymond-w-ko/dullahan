@@ -7,7 +7,7 @@ import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
   copyInternalToSystem,
-  copySystemToInternal,
+  pasteClipboardToTerminal,
   type ClipboardEntry,
 } from "../store";
 
@@ -35,8 +35,8 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
     void copyInternalToSystem(kind);
   };
 
-  const handleCopyFromSystem = () => {
-    void copySystemToInternal(kind);
+  const handlePasteToTerminal = () => {
+    pasteClipboardToTerminal(kind);
   };
 
   return (
@@ -61,8 +61,9 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
         </button>
         <button
           class="clipboard-btn"
-          onClick={handleCopyFromSystem}
-          title={`Copy system clipboard to '${kind}'`}
+          onClick={handlePasteToTerminal}
+          disabled={!entry}
+          title={`Paste '${kind}' to terminal`}
         >
           {"\u2193"}
         </button>

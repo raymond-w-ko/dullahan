@@ -139,11 +139,14 @@ export interface ActionContext {
   /** Get current selection text (if any) */
   getSelection: () => string | null;
 
-  /** Read from clipboard */
+  /** Read from clipboard (navigator.clipboard) */
   readClipboard: () => Promise<string>;
 
-  /** Write to clipboard */
+  /** Write to clipboard (navigator.clipboard) */
   writeClipboard: (text: string) => Promise<void>;
+
+  /** Send copy message to server (server extracts selection) */
+  sendCopy: (paneId: number) => void;
 
   /** Switch to a window by ID */
   switchWindow: (windowId: number) => void;
@@ -335,10 +338,9 @@ export async function executeAction(
 // ============================================================================
 
 async function handleCopy(ctx: ActionContext): Promise<void> {
-  const selection = ctx.getSelection();
-  if (selection) {
-    await ctx.writeClipboard(selection);
-  }
+  // Send copy message to server - server extracts selection and broadcasts to all clients
+  // The clipboard SET event handler will then write to navigator.clipboard
+  ctx.sendCopy(ctx.paneId);
 }
 
 async function handlePaste(ctx: ActionContext): Promise<void> {

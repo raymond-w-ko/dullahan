@@ -60,6 +60,9 @@ function createMockActionContext(): ActionContext & {
     getSelection: () => null,
     readClipboard: async () => "",
     writeClipboard: async () => {},
+    sendCopy: (paneId: number) => {
+      calls.push({ action: "sendCopy", args: paneId });
+    },
     switchWindow: (id: number) => {
       calls.push({ action: "switchWindow", args: id });
     },
@@ -452,8 +455,9 @@ describe("KeyboardHandler", () => {
       });
       element.triggerKeyDown(event);
 
-      // copy_to_clipboard doesn't call sendText
-      expect(ctx.calls.length).toBe(0);
+      // copy_to_clipboard calls sendCopy (not sendText)
+      expect(ctx.calls.length).toBe(1);
+      expect(ctx.calls[0]?.action).toBe("sendCopy");
     });
 
     test("different keybinds work independently", () => {

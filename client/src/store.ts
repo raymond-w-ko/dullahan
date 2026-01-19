@@ -513,6 +513,25 @@ export async function copyInternalToSystem(kind: "c" | "p"): Promise<boolean> {
   }
 }
 
+/**
+ * Paste from server's clipboard to the active terminal.
+ * Sends clipboard_paste message to server which writes to PTY.
+ */
+export function pasteClipboardToTerminal(kind: "c" | "p"): void {
+  const conn = store.connection;
+  if (!conn || !conn.isConnected) {
+    debug.warn("Cannot paste to terminal: not connected");
+    return;
+  }
+  if (!conn.isMaster) {
+    debug.warn("Cannot paste to terminal: not master");
+    return;
+  }
+  const paneId = store.focusedPaneId;
+  conn.sendClipboardPaste(paneId, kind);
+  debug.log(`Pasting '${kind}' clipboard to pane ${paneId}`);
+}
+
 /** Copy navigator.clipboard to internal clipboard */
 export async function copySystemToInternal(kind: "c" | "p"): Promise<boolean> {
   try {
@@ -535,10 +554,10 @@ export async function copySystemToInternal(kind: "c" | "p"): Promise<boolean> {
 /** Sync clipboard to server for persistence across reconnects */
 function syncClipboardToServer(kind: "c" | "p", text: string): void {
   const conn = store.connection;
-  if (!conn) return;
+  if (!conn || !conn.isConnected) return;
   try {
     const base64Data = btoa(text);
-    conn.send({ type: "clipboard_set", clipboard: kind, data: base64Data });
+    conn.sendClipboardSet(kind, base64Data);
     debug.log(`Synced clipboard '${kind}' to server: ${text.length} chars`);
   } catch (err) {
     debug.warn(`Failed to sync clipboard '${kind}' to server:`, err);
@@ -606,7 +625,7 @@ export function initConnection() {
 
   // OSC 52 clipboard handlers
   conn.on("clipboardSet", async (paneId, clipboard, base64Data) => {
-    // Terminal wants to write to clipboard
+    // Terminal/server wants to update clipboard
     try {
       const text = atob(base64Data);
       const kind = clipboard.charAt(0) as "c" | "p";
@@ -614,7 +633,16 @@ export function initConnection() {
       // Store in internal clipboard
       if (kind === "c") {
         setClipboardC(text);
+        // Also write to navigator.clipboard for 'c' (system clipboard)
+        // This ensures keybind copy updates the system clipboard
+        try {
+          await navigator.clipboard.writeText(text);
+          debug.log(`Clipboard SET: wrote ${text.length} chars to navigator.clipboard`);
+        } catch (clipErr) {
+          debug.warn("Failed to write to navigator.clipboard:", clipErr);
+        }
       } else if (kind === "p") {
+        // Primary selection only updates internal mirror, not navigator.clipboard
         setClipboardP(text);
       } else {
         // Unknown kind, default to 'c'

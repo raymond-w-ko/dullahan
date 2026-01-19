@@ -16,6 +16,7 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     getSelection: () => null,
     readClipboard: async () => "",
     writeClipboard: async () => {},
+    sendCopy: () => {},
     switchWindow: () => {},
     getWindowIds: () => [0],
     getActiveWindowId: () => 0,

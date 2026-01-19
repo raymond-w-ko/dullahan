@@ -26,8 +26,6 @@ import {
   closeWindow,
   setFocusedPane,
   toggleFullscreen,
-  getMostRecentClipboard,
-  setClipboardBothAndSync,
 } from "../store";
 import { cellsToRuns } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
@@ -131,18 +129,17 @@ export function TerminalView({
         return getDOMSelection();
       },
       readClipboard: async () => {
-        // Use most recent internal clipboard if available
-        const recent = getMostRecentClipboard();
-        if (recent) {
-          return recent.text;
-        }
-        // Fall back to system clipboard
+        // Always read from navigator.clipboard for keybind paste
+        // This matches standard terminal emulator behavior
         return pasteFromClipboard();
       },
       writeClipboard: async (text: string) => {
         await copyToClipboard(text);
-        // Update both internal clipboards and sync to server
-        setClipboardBothAndSync(text);
+      },
+      sendCopy: (targetPaneId: number) => {
+        if (connection?.isConnected) {
+          connection.sendCopy(targetPaneId);
+        }
         // Clear selection after copy if configured
         if (config.get("selectionClearOnCopy")) {
           clearSelection();

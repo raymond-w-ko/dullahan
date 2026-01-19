@@ -147,6 +147,37 @@ export interface ClipboardResponseMessage {
   data: string; // base64-encoded clipboard contents
 }
 
+/**
+ * Copy selection to clipboard.
+ * Sent when the client wants to copy the current selection.
+ * Server extracts selection text and broadcasts to all clients.
+ */
+export interface CopyMessage {
+  type: "copy";
+  paneId: number;
+}
+
+/**
+ * Paste from clipboard to PTY.
+ * Sent when the client wants to paste from the server's clipboard to the terminal.
+ * Server reads from its clipboard and writes to PTY with bracketed paste support.
+ */
+export interface ClipboardPasteMessage {
+  type: "clipboard_paste";
+  paneId: number;
+  clipboard: "c" | "p"; // Which clipboard to paste from
+}
+
+/**
+ * Set clipboard on server (from ClipboardBar).
+ * Syncs the client's internal clipboard to the server for persistence.
+ */
+export interface ClipboardSetMessage {
+  type: "clipboard_set";
+  clipboard: "c" | "p";
+  data: string; // base64-encoded text
+}
+
 /** Union of all client → server message types */
 export type ClientMessage =
   | KeyMessage
@@ -163,7 +194,10 @@ export type ClientMessage =
   | PingMessage
   | SelectAllMessage
   | ClearSelectionMessage
-  | ClipboardResponseMessage;
+  | ClipboardResponseMessage
+  | CopyMessage
+  | ClipboardPasteMessage
+  | ClipboardSetMessage;
 
 // =============================================================================
 // Server → Client Messages

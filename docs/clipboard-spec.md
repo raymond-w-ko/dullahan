@@ -208,36 +208,36 @@ Terminal emits: ESC ] 52 ; c ; ? ESC \
 
 ### New Features Required
 
-- [ ] **Server**: Handle `copy` message
-  - Read selection from pane terminal state (`pane.getSelectedText()`)
+- [x] **Server**: Handle `copy` message
+  - Read selection from pane terminal state (`pane.getSelectionText()`)
   - Store in `ipc_clipboard_c`
   - Broadcast clipboard SET to ALL clients
 
-- [ ] **Server**: Handle `clipboard_paste` message
+- [x] **Server**: Handle `clipboard_paste` message
   - Read `ipc_clipboard_c` or `_p`
   - Write to target pane's PTY with bracketed paste support
 
-- [ ] **Server**: Auto-update `p` clipboard on selection change
+- [x] **Server**: Auto-update `p` clipboard on selection change
   - Detect when selection changes
   - Update when: not in mouse reporting mode, OR shift+select bypass
   - Extract selected text and store in `ipc_clipboard_p`
   - Broadcast clipboard SET to ALL clients
 
-- [ ] **Client**: Trigger `navigator.clipboard.writeText` on receiving `c` clipboard SET
+- [x] **Client**: Trigger `navigator.clipboard.writeText` on receiving `c` clipboard SET
   - Only write to navigator.clipboard for `c` clipboard, not `p`
   - No special case needed — idempotent operation
 
-- [ ] **Client**: Update keybind copy to send `copy` message
+- [x] **Client**: Update keybind copy to send `copy` message
   - Change from local selection extraction to server-side
 
-- [ ] **Client**: Update ClipboardBar down arrow to send `clipboard_paste`
+- [x] **Client**: Update ClipboardBar down arrow to send `clipboard_paste`
   - Change from `copySystemToInternal()` to new paste-to-PTY action
 
-- [ ] **Client**: Update keybind paste to always use `navigator.clipboard`
+- [x] **Client**: Update keybind paste to always use `navigator.clipboard`
   - Remove fallback to internal clipboard mirrors
 
-- [ ] **Client**: Handle middle-click to paste from `p` clipboard
-  - Send `{ type: "clipboard_paste", paneId, clipboard: "p" }`
+- [x] **Client**: Handle middle-click to paste from `p` clipboard
+  - Server handles this in mouse event processing
   - Only when not in mouse reporting mode
 
 ### Existing Features (Verify Correct)

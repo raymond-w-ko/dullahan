@@ -803,6 +803,38 @@ export class TerminalConnection {
   }
 
   /**
+   * Request server to copy selection to clipboard.
+   * Server extracts selection text and broadcasts to all clients.
+   * Only master can copy.
+   */
+  sendCopy(paneId: number): void {
+    if (!this.isMaster) return;
+    this.send({ type: "copy", paneId });
+  }
+
+  /**
+   * Request server to paste from clipboard to PTY.
+   * Server reads from its clipboard and writes to PTY with bracketed paste.
+   * Only master can paste.
+   * @param paneId Target pane to paste into
+   * @param clipboard Which clipboard to paste from ('c' or 'p')
+   */
+  sendClipboardPaste(paneId: number, clipboard: "c" | "p"): void {
+    if (!this.isMaster) return;
+    this.send({ type: "clipboard_paste", paneId, clipboard });
+  }
+
+  /**
+   * Set clipboard on server (sync from client).
+   * Used to persist clipboard state to server.
+   * @param clipboard Which clipboard to set ('c' or 'p')
+   * @param data Base64-encoded text
+   */
+  sendClipboardSet(clipboard: "c" | "p", data: string): void {
+    this.send({ type: "clipboard_set", clipboard, data });
+  }
+
+  /**
    * Request delta update from server for a specific pane.
    * @param paneId Target pane ID
    * @param gen Client's current generation for this pane

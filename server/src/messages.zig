@@ -84,6 +84,19 @@ pub const ClipboardSetMessage = struct {
     data: []const u8, // base64-encoded text
 };
 
+/// Copy selection to clipboard (from keybind copy action)
+pub const CopyMessage = struct {
+    type: []const u8,
+    paneId: u16,
+};
+
+/// Paste from clipboard to PTY (from clipboard bar down arrow or middle-click)
+pub const ClipboardPasteMessage = struct {
+    type: []const u8,
+    paneId: u16,
+    clipboard: []const u8, // "c" or "p"
+};
+
 pub const MessageType = struct {
     type: []const u8,
 };
@@ -111,6 +124,8 @@ pub const ParsedMessage = union(enum) {
     clear_selection: ParsedClearSelection,
     clipboard_response: ParsedClipboardResponse,
     clipboard_set: ParsedClipboardSet,
+    copy: ParsedCopy,
+    clipboard_paste: ParsedClipboardPaste,
     unknown: void,
 };
 
@@ -193,6 +208,15 @@ pub const ParsedClipboardResponse = struct {
 pub const ParsedClipboardSet = struct {
     clipboard: []const u8,
     data: []const u8,
+};
+
+pub const ParsedCopy = struct {
+    paneId: u16,
+};
+
+pub const ParsedClipboardPaste = struct {
+    paneId: u16,
+    clipboard: []const u8,
 };
 
 /// Cleanup helper for JSON parsed messages.
