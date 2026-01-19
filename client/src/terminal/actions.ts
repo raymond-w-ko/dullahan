@@ -215,9 +215,10 @@ export function canPerformAction(
 ): boolean {
   switch (action.type) {
     case "copy_to_clipboard": {
-      // Always allow - server will extract selection from terminal state
-      // and handle the case where there's no selection
-      return true;
+      // Only performable if there's a selection to copy
+      // This allows performable:ctrl+c to pass through as SIGINT when no selection
+      const selection = ctx.getSelection();
+      return selection !== null && selection.length > 0;
     }
 
     case "switch_window": {

@@ -13,7 +13,6 @@ import {
   getSelection as getDOMSelection,
   copyToClipboard,
   pasteFromClipboard,
-  clearSelection,
   getTerminalSelectionText,
 } from "../terminal/clipboard";
 import type { ActionContext } from "../terminal/actions";
@@ -139,10 +138,10 @@ export function TerminalView({
       sendCopy: (targetPaneId: number) => {
         if (connection?.isConnected) {
           connection.sendCopy(targetPaneId);
-        }
-        // Clear selection after copy if configured
-        if (config.get("selectionClearOnCopy")) {
-          clearSelection();
+          // Clear server-side selection after copy if configured
+          if (config.get("selectionClearOnCopy")) {
+            connection.clearSelection(targetPaneId);
+          }
         }
       },
       switchWindow: (windowId: number) => switchWindow(windowId),
