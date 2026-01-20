@@ -17,16 +17,32 @@ pub const TailscaleInfo = struct {
     }
 };
 
+/// Paths to try for the Tailscale CLI
+const tailscale_paths = &[_][]const u8{
+    "tailscale", // Linux/Homebrew (in PATH)
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale", // macOS App Store
+};
+
 /// Detect Tailscale and get the IPv4 address.
 /// Returns null if Tailscale is not available or not connected.
 pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
-    // Try to run `tailscale ip -4`
+    // Try each known Tailscale path
+    for (tailscale_paths) |tailscale_path| {
+        if (tryTailscale(allocator, tailscale_path)) |info| {
+            return info;
+        }
+    }
+    return null;
+}
+
+/// Try to get Tailscale IP using a specific executable path
+fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?TailscaleInfo {
     const result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "tailscale", "ip", "-4" },
+        .argv = &.{ tailscale_path, "ip", "-4" },
         .max_output_bytes = 256,
     }) catch |e| {
-        log.debug("Failed to run tailscale command: {}", .{e});
+        log.debug("Failed to run {s}: {}", .{ tailscale_path, e });
         return null;
     };
     defer allocator.free(result.stdout);
@@ -34,20 +50,20 @@ pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
 
     // Check if command succeeded
     if (result.term.Exited != 0) {
-        log.debug("tailscale command exited with code {}", .{result.term.Exited});
+        log.debug("{s} exited with code {}", .{ tailscale_path, result.term.Exited });
         return null;
     }
 
     // Parse the IP from stdout (trim whitespace)
     const ip_raw = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
     if (ip_raw.len == 0) {
-        log.debug("tailscale returned empty IP", .{});
+        log.debug("{s} returned empty IP", .{tailscale_path});
         return null;
     }
 
     // Validate it looks like an IP address (basic check)
     if (!isValidIpv4(ip_raw)) {
-        log.debug("tailscale returned invalid IP: {s}", .{ip_raw});
+        log.debug("{s} returned invalid IP: {s}", .{ tailscale_path, ip_raw });
         return null;
     }
 
@@ -57,7 +73,7 @@ pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
         return null;
     };
 
-    log.info("Detected Tailscale IP: {s}", .{ip});
+    log.info("Detected Tailscale IP via {s}: {s}", .{ tailscale_path, ip });
     return TailscaleInfo{
         .ip = ip,
         .allocator = allocator,
