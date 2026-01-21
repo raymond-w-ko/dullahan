@@ -4,6 +4,33 @@
 
 import { h } from "preact";
 import { getStore, switchWindow, setLayoutPickerOpen, openContextMenu } from "../store";
+import type { WindowState } from "../store";
+import { countPanes } from "../../../protocol/schema/layout";
+
+/** Calculate number of hidden panes in a window */
+function getHiddenPaneCount(win: WindowState): number {
+  const totalPanes = win.paneIds.length;
+  const visiblePanes = win.layout ? countPanes(win.layout.nodes) : totalPanes;
+  return Math.max(0, totalPanes - visiblePanes);
+}
+
+/** Format window tab label */
+function getWindowLabel(win: WindowState): string {
+  const hidden = getHiddenPaneCount(win);
+  if (hidden > 0) {
+    return `${win.id} (+${hidden})`;
+  }
+  return String(win.id);
+}
+
+/** Format window tab tooltip */
+function getWindowTooltip(win: WindowState): string {
+  const hidden = getHiddenPaneCount(win);
+  if (hidden > 0) {
+    return `Window ${win.id} (${hidden} pane${hidden > 1 ? "s" : ""} hidden) - right-click for options`;
+  }
+  return `Window ${win.id} - right-click for options`;
+}
 
 export function WindowSwitcher() {
   const store = getStore();
@@ -26,17 +53,26 @@ export function WindowSwitcher() {
 
   return (
     <div class="window-switcher">
-      {windowList.map((win) => (
-        <button
-          key={win.id}
-          class={`window-tab ${win.id === activeWindowId ? "window-tab--active" : ""}`}
-          onClick={() => switchWindow(win.id)}
-          onContextMenu={(e) => handleContextMenu(e, win.id)}
-          title={`Window ${win.id} (right-click for options)`}
-        >
-          {win.id}
-        </button>
-      ))}
+      {windowList.map((win) => {
+        const hidden = getHiddenPaneCount(win);
+        const classes = [
+          "window-tab",
+          win.id === activeWindowId ? "window-tab--active" : "",
+          hidden > 0 ? "window-tab--has-hidden" : "",
+        ].filter(Boolean).join(" ");
+
+        return (
+          <button
+            key={win.id}
+            class={classes}
+            onClick={() => switchWindow(win.id)}
+            onContextMenu={(e) => handleContextMenu(e, win.id)}
+            title={getWindowTooltip(win)}
+          >
+            {getWindowLabel(win)}
+          </button>
+        );
+      })}
       {isMaster && (
         <button
           class="window-tab window-tab--add"

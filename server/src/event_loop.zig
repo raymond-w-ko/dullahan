@@ -1927,49 +1927,38 @@ pub const EventLoop = struct {
                     return;
                 };
 
-                // Check if template requires different number of panes than window has
+                // Check if template requires more panes than window has
                 const required_panes = template.countPanes();
                 const current_panes = window.paneCount();
 
-                if (required_panes != current_panes) {
-                    // Need to adjust pane count
-                    if (required_panes > current_panes) {
-                        // Add panes
-                        const to_add = required_panes - current_panes;
-                        var i: usize = 0;
-                        while (i < to_add) : (i += 1) {
-                            const new_pane_id = self.session.pane_registry.createShellPane() catch |e| {
-                                logRecoverable("create pane for layout change", e);
-                                return;
-                            };
-                            window.addPane(new_pane_id) catch |e| {
-                                logRecoverable("add pane to window for layout change", e);
-                                return;
-                            };
-                            // Send initial snapshot for new pane
-                            if (self.session.pane_registry.get(new_pane_id)) |new_pane| {
-                                for (self.clients.items) |*c| {
-                                    self.sendSnapshot(&c.ws, new_pane) catch |e| {
-                                        logClientError("send snapshot for new pane", e);
-                                    };
-                                    c.setGeneration(new_pane_id, new_pane.generation);
-                                }
+                if (required_panes > current_panes) {
+                    // Add panes to fill the layout
+                    const to_add = required_panes - current_panes;
+                    var i: usize = 0;
+                    while (i < to_add) : (i += 1) {
+                        const new_pane_id = self.session.pane_registry.createShellPane() catch |e| {
+                            logRecoverable("create pane for layout change", e);
+                            return;
+                        };
+                        window.addPane(new_pane_id) catch |e| {
+                            logRecoverable("add pane to window for layout change", e);
+                            return;
+                        };
+                        // Send initial snapshot for new pane
+                        if (self.session.pane_registry.get(new_pane_id)) |new_pane| {
+                            for (self.clients.items) |*c| {
+                                self.sendSnapshot(&c.ws, new_pane) catch |e| {
+                                    logClientError("send snapshot for new pane", e);
+                                };
+                                c.setGeneration(new_pane_id, new_pane.generation);
                             }
                         }
-                        log.info("Added {d} panes to window {d} for layout '{s}'", .{ to_add, window_id, template_id });
-                    } else {
-                        // Remove panes (from the end)
-                        const to_remove = current_panes - required_panes;
-                        var i: usize = 0;
-                        while (i < to_remove) : (i += 1) {
-                            if (window.pane_ids.items.len > 0) {
-                                const pane_id = window.pane_ids.items[window.pane_ids.items.len - 1];
-                                window.removePane(pane_id);
-                                self.session.pane_registry.destroy(pane_id);
-                            }
-                        }
-                        log.info("Removed {d} panes from window {d} for layout '{s}'", .{ to_remove, window_id, template_id });
                     }
+                    log.info("Added {d} panes to window {d} for layout '{s}'", .{ to_add, window_id, template_id });
+                } else if (required_panes < current_panes) {
+                    // Extra panes become hidden (not rendered in layout, but still exist)
+                    const hidden = current_panes - required_panes;
+                    log.info("Window {d} has {d} hidden panes after layout change to '{s}'", .{ window_id, hidden, template_id });
                 }
 
                 // Apply the new layout
