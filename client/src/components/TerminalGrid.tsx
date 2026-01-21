@@ -32,14 +32,14 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
   if (fullscreenPaneId !== null && window.paneIds.includes(fullscreenPaneId)) {
     return (
       <div class="terminal-grid terminal-grid--fullscreen">
-        <TerminalPane key={fullscreenPaneId} paneId={fullscreenPaneId} />
+        <TerminalPane key={fullscreenPaneId} paneId={fullscreenPaneId} windowId={windowId} />
       </div>
     );
   }
 
   // Use LayoutRenderer if window has a layout tree
   if (window.layout?.nodes) {
-    return <LayoutRenderer nodes={window.layout.nodes} />;
+    return <LayoutRenderer nodes={window.layout.nodes} windowId={windowId} />;
   }
 
   // Fallback: simple grid layout (legacy)
@@ -51,7 +51,7 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
   return (
     <div class="terminal-grid" style={gridStyle}>
       {window.paneIds.map((paneId) => (
-        <TerminalPane key={paneId} paneId={paneId} />
+        <TerminalPane key={paneId} paneId={paneId} windowId={windowId} />
       ))}
     </div>
   );

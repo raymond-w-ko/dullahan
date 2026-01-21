@@ -839,6 +839,20 @@ export class TerminalConnection {
     this.send({ type: "set_layout", windowId, templateId });
   }
 
+  /**
+   * Swap two panes' positions in a window's pane list.
+   * This affects which panes are visible vs hidden when using smaller layouts.
+   * Only the master client can swap panes.
+   * @param windowId The ID of the window containing the panes
+   * @param paneId1 First pane ID to swap
+   * @param paneId2 Second pane ID to swap
+   */
+  swapPanes(windowId: number, paneId1: number, paneId2: number): void {
+    if (!this.isMaster) return;
+    debug.log("Swapping panes", paneId1, "and", paneId2, "in window", windowId);
+    this.send({ type: "swap_panes", windowId, paneId1, paneId2 });
+  }
+
   sendPing(): void {
     this.send({ type: "ping" });
   }

@@ -295,6 +295,24 @@ html, body {
   color: var(--c3);  /* yellow - indicates hidden panes */
 }
 
+.window-tab-hidden {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--c3);
+  opacity: 0.8;
+}
+
+.window-tab-hidden--clickable {
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 0.2rem;
+}
+
+.window-tab-hidden--clickable:hover {
+  background: rgba(255, 255, 0, 0.2);
+  opacity: 1;
+}
+
 /* ==========================================================================
    Main Content
    ========================================================================== */
@@ -1365,6 +1383,16 @@ html, body {
   background: var(--c8);
   min-width: 0;
   min-height: 0;
+}
+
+.context-menu-header {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--c8);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
 }
 
 /* ============================================================================

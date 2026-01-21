@@ -51,14 +51,15 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var session = try Session.init(allocator, &pane_registry, .{});
     defer session.deinit();
 
-    // Create initial window with debug pane + 2 shell panes
+    // Create initial window with debug pane + 3 shell panes (2x2 grid)
     // This uses the reusable createWindowWithPanes() method
     const initial = try session.createWindowWithPanes();
-    log.info("Created window {d} with panes: debug={d}, shell1={d}, shell2={d}", .{
+    log.info("Created window {d} with panes: debug={d}, shell1={d}, shell2={d}, shell3={d}", .{
         initial.window_id,
         initial.debug_pane_id,
         initial.shell1_pane_id,
         initial.shell2_pane_id,
+        initial.shell3_pane_id,
     });
 
     // Initialize debug pane with welcome message and set up unified logging

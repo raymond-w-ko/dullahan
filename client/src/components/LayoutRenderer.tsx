@@ -9,12 +9,13 @@ import { isContainer, isPane } from "../../../protocol/schema/layout";
 export interface LayoutRendererProps {
   nodes: LayoutNode[];
   level?: number; // Nesting level (0 = root, horizontal)
+  windowId?: number; // Window ID for pane context menus
 }
 
 /**
  * Render a single layout node (container or pane)
  */
-function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Element {
+function renderNode(node: LayoutNode, level: number, index: number, windowId?: number): h.JSX.Element {
   // Even levels = horizontal, odd levels = vertical
   const isHorizontal = level % 2 === 0;
 
@@ -31,7 +32,7 @@ function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Eleme
         style={style}
       >
         {node.paneId !== undefined ? (
-          <TerminalPane paneId={node.paneId} />
+          <TerminalPane paneId={node.paneId} windowId={windowId} />
         ) : (
           <div class="terminal--empty">
             <span class="terminal-placeholder-text">No pane assigned</span>
@@ -56,7 +57,7 @@ function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Eleme
         class={containerClass}
         style={style}
       >
-        {node.children.map((child, i) => renderNode(child, childLevel, i))}
+        {node.children.map((child, i) => renderNode(child, childLevel, i, windowId))}
       </div>
     );
   }
@@ -74,7 +75,7 @@ function renderNode(node: LayoutNode, level: number, index: number): h.JSX.Eleme
  * - Level 2: horizontal again
  * - etc.
  */
-export function LayoutRenderer({ nodes, level = 0 }: LayoutRendererProps) {
+export function LayoutRenderer({ nodes, level = 0, windowId }: LayoutRendererProps) {
   // Root level determines initial direction
   const isHorizontal = level % 2 === 0;
   const rootClass = isHorizontal
@@ -83,7 +84,7 @@ export function LayoutRenderer({ nodes, level = 0 }: LayoutRendererProps) {
 
   return (
     <div class={rootClass}>
-      {nodes.map((node, i) => renderNode(node, level, i))}
+      {nodes.map((node, i) => renderNode(node, level, i, windowId))}
     </div>
   );
 }

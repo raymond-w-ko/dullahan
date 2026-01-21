@@ -79,6 +79,7 @@ const NewWindowMessage = messages.NewWindowMessage;
 const CloseWindowMessage = messages.CloseWindowMessage;
 const ClosePaneMessage = messages.ClosePaneMessage;
 const SetLayoutMessage = messages.SetLayoutMessage;
+const SwapPanesMessage = messages.SwapPanesMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
 const ClipboardSetMessage = messages.ClipboardSetMessage;
 const MessageType = messages.MessageType;
@@ -1302,6 +1303,18 @@ pub const EventLoop = struct {
                 } },
                 .cleanup = .{ .json_set_layout = parsed },
             };
+        } else if (std.mem.eql(u8, type_str, "swap_panes")) {
+            const parsed = std.json.parseFromSlice(SwapPanesMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            return .{
+                .msg = .{ .swap_panes = .{
+                    .windowId = parsed.value.windowId,
+                    .paneId1 = parsed.value.paneId1,
+                    .paneId2 = parsed.value.paneId2,
+                } },
+                .cleanup = .{ .json_swap_panes = parsed },
+            };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
             const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -1514,6 +1527,21 @@ pub const EventLoop = struct {
                 .msg = .{ .set_layout = .{
                     .windowId = window_id,
                     .templateId = template_id,
+                } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "swap_panes")) {
+            const window_id_payload = (payload.mapGet("windowId") catch return null) orelse return null;
+            const pane_id1_payload = (payload.mapGet("paneId1") catch return null) orelse return null;
+            const pane_id2_payload = (payload.mapGet("paneId2") catch return null) orelse return null;
+            const window_id: u16 = @intCast(window_id_payload.getUint() catch return null);
+            const pane_id1: u16 = @intCast(pane_id1_payload.getUint() catch return null);
+            const pane_id2: u16 = @intCast(pane_id2_payload.getUint() catch return null);
+            return .{
+                .msg = .{ .swap_panes = .{
+                    .windowId = window_id,
+                    .paneId1 = pane_id1,
+                    .paneId2 = pane_id2,
                 } },
                 .payload = payload,
             };
@@ -1768,14 +1796,14 @@ pub const EventLoop = struct {
                     return;
                 }
 
-                // Get template ID (default to 3-col if not specified)
-                const template_id = new_window_msg.templateId orelse "3-col";
+                // Get template ID (default to 2x2 if not specified)
+                const template_id = new_window_msg.templateId orelse "2x2";
 
                 // Look up the template
                 const template = self.layouts.get(template_id) orelse blk: {
-                    log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
-                    break :blk self.layouts.get("3-col") orelse {
-                        log.err("Fallback template '3-col' not found", .{});
+                    log.warn("Template '{s}' not found, falling back to 2x2", .{template_id});
+                    break :blk self.layouts.get("2x2") orelse {
+                        log.err("Fallback template '2x2' not found", .{});
                         return;
                     };
                 };
@@ -1972,6 +2000,45 @@ pub const EventLoop = struct {
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
                     logRecoverable("broadcast layout after set_layout", e);
+                };
+            },
+            .swap_panes => |swap_msg| {
+                // Only master can swap panes
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting swap_panes from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                const window_id = swap_msg.windowId;
+                const pane_id1 = swap_msg.paneId1;
+                const pane_id2 = swap_msg.paneId2;
+
+                // Get the window
+                const window = self.session.getWindow(window_id) orelse {
+                    log.warn("Window {d} not found for swap_panes", .{window_id});
+                    return;
+                };
+
+                // Swap the pane positions
+                if (!window.swapPanePositions(pane_id1, pane_id2)) {
+                    log.warn("Failed to swap panes {d} and {d} in window {d}: one or both panes not found", .{ pane_id1, pane_id2, window_id });
+                    return;
+                }
+
+                log.info("Swapped panes {d} and {d} in window {d}", .{ pane_id1, pane_id2, window_id });
+
+                // Re-apply layout with new pane order
+                if (self.layouts.get(window.template_id orelse "")) |template| {
+                    window.setLayoutFromTemplate(template) catch |e| {
+                        logRecoverable("re-apply layout after swap_panes", e);
+                        return;
+                    };
+                }
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    logRecoverable("broadcast layout after swap_panes", e);
                 };
             },
             .mouse => |mouse_msg| {

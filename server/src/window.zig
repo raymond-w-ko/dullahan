@@ -118,6 +118,31 @@ pub const Window = struct {
         return false;
     }
 
+    /// Swap two panes' positions in the pane list
+    /// Returns true if successful, false if either pane is not in this window
+    pub fn swapPanePositions(self: *Window, pane_id1: u16, pane_id2: u16) bool {
+        var idx1: ?usize = null;
+        var idx2: ?usize = null;
+
+        for (self.pane_ids.items, 0..) |id, i| {
+            if (id == pane_id1) idx1 = i;
+            if (id == pane_id2) idx2 = i;
+        }
+
+        if (idx1 == null or idx2 == null) {
+            return false;
+        }
+
+        // Swap the positions
+        const index1 = idx1.?;
+        const index2 = idx2.?;
+        const tmp = self.pane_ids.items[index1];
+        self.pane_ids.items[index1] = self.pane_ids.items[index2];
+        self.pane_ids.items[index2] = tmp;
+
+        return true;
+    }
+
     /// Get pane count
     pub fn paneCount(self: *const Window) usize {
         return self.pane_ids.items.len;

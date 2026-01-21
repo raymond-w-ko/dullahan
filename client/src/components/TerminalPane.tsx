@@ -13,14 +13,16 @@ import {
   setPaneDimensions,
   setBellActive,
   setFocusedPane,
+  openPaneContextMenu,
 } from "../store";
 import { getBellFeatures } from "../config";
 
 export interface TerminalPaneProps {
   paneId: number;
+  windowId?: number; // Optional for backward compatibility (fullscreen, legacy grid)
 }
 
-export function TerminalPane({ paneId }: TerminalPaneProps) {
+export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
   useStoreSubscription();
   const terminalRef = useRef<HTMLDivElement>(null);
 
@@ -101,6 +103,15 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
     }
   }, [connection, paneId]);
 
+  // Handle right-click on titlebar for pane context menu
+  const handleTitlebarContextMenu = useCallback((e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (windowId !== undefined && connection?.isMaster) {
+      openPaneContextMenu(windowId, paneId, e.clientX, e.clientY);
+    }
+  }, [windowId, paneId, connection]);
+
   const displayDims = dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
   const isFocused = focusedPaneId === paneId;
 
@@ -109,7 +120,7 @@ export function TerminalPane({ paneId }: TerminalPaneProps) {
       class={`terminal-pane${hasBell ? " bell-active" : ""}${isReadOnly ? " terminal-pane--readonly" : ""}${isFocused ? " terminal-pane--focused" : ""}`}
       onClick={handlePaneClick}
     >
-      <div class="terminal-titlebar">
+      <div class="terminal-titlebar" onContextMenu={handleTitlebarContextMenu}>
         <span
           class="terminal-title"
           onClick={hasBell ? handleKeyInput : undefined}

@@ -3,7 +3,7 @@
 // Right-click on tabs opens context menu with layout options
 
 import { h } from "preact";
-import { getStore, switchWindow, setLayoutPickerOpen, openContextMenu } from "../store";
+import { getStore, switchWindow, setLayoutPickerOpen, openWindowContextMenu, openHiddenPanesPicker } from "../store";
 import type { WindowState } from "../store";
 import { countPanes } from "../../../protocol/schema/layout";
 
@@ -48,7 +48,12 @@ export function WindowSwitcher() {
 
   const handleContextMenu = (e: MouseEvent, windowId: number) => {
     e.preventDefault();
-    openContextMenu(windowId, e.clientX, e.clientY);
+    openWindowContextMenu(windowId, e.clientX, e.clientY);
+  };
+
+  const handleHiddenClick = (e: MouseEvent, windowId: number) => {
+    e.stopPropagation(); // Don't trigger window switch
+    openHiddenPanesPicker(windowId, e.clientX, e.clientY);
   };
 
   return (
@@ -69,7 +74,19 @@ export function WindowSwitcher() {
             onContextMenu={(e) => handleContextMenu(e, win.id)}
             title={getWindowTooltip(win)}
           >
-            {getWindowLabel(win)}
+            {win.id}
+            {hidden > 0 && (
+              <span
+                class={`window-tab-hidden${isMaster ? " window-tab-hidden--clickable" : ""}`}
+                onClick={isMaster ? (e) => handleHiddenClick(e, win.id) : undefined}
+                title={isMaster
+                  ? `${hidden} hidden pane${hidden > 1 ? "s" : ""} - click to show`
+                  : `${hidden} hidden pane${hidden > 1 ? "s" : ""}`
+                }
+              >
+                +{hidden}
+              </span>
+            )}
           </button>
         );
       })}

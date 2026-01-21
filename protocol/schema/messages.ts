@@ -136,6 +136,14 @@ export interface SetLayoutMessage {
   templateId: string;
 }
 
+/** Swap two panes' positions in a window */
+export interface SwapPanesMessage {
+  type: "swap_panes";
+  windowId: number;
+  paneId1: number;
+  paneId2: number;
+}
+
 /** Ping for keepalive */
 export interface PingMessage {
   type: "ping";
@@ -210,6 +218,7 @@ export type ClientMessage =
   | CloseWindowMessage
   | ClosePaneMessage
   | SetLayoutMessage
+  | SwapPanesMessage
   | PingMessage
   | SelectAllMessage
   | ClearSelectionMessage

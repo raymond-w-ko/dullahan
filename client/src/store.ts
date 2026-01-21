@@ -47,8 +47,9 @@ export interface ProgressState {
   value: number; // 0-100
 }
 
-/** Context menu state */
-export interface ContextMenuState {
+/** Context menu state for window tabs */
+export interface WindowContextMenuState {
+  kind: "window";
   /** X position in viewport pixels */
   x: number;
   /** Y position in viewport pixels */
@@ -56,6 +57,33 @@ export interface ContextMenuState {
   /** Window ID this menu is for */
   windowId: number;
 }
+
+/** Context menu state for pane titlebars */
+export interface PaneContextMenuState {
+  kind: "pane";
+  /** X position in viewport pixels */
+  x: number;
+  /** Y position in viewport pixels */
+  y: number;
+  /** Window ID this pane belongs to */
+  windowId: number;
+  /** Pane ID this menu is for */
+  paneId: number;
+}
+
+/** Hidden panes picker state (triggered by clicking +N indicator) */
+export interface HiddenPanesPickerState {
+  kind: "hidden_picker";
+  /** X position in viewport pixels */
+  x: number;
+  /** Y position in viewport pixels */
+  y: number;
+  /** Window ID to show hidden panes for */
+  windowId: number;
+}
+
+/** Union of all context menu states */
+export type ContextMenuState = WindowContextMenuState | PaneContextMenuState | HiddenPanesPickerState;
 
 export interface Store {
   // Connection state
@@ -338,8 +366,21 @@ export function setSettingsOpen(open: boolean) {
 // Context menu
 // ============================================================================
 
-export function openContextMenu(windowId: number, x: number, y: number) {
-  store.contextMenu = { windowId, x, y };
+/** Open window context menu (right-click on window tab) */
+export function openWindowContextMenu(windowId: number, x: number, y: number) {
+  store.contextMenu = { kind: "window", windowId, x, y };
+  notify();
+}
+
+/** Open pane context menu (right-click on pane titlebar) */
+export function openPaneContextMenu(windowId: number, paneId: number, x: number, y: number) {
+  store.contextMenu = { kind: "pane", windowId, paneId, x, y };
+  notify();
+}
+
+/** Open hidden panes picker (click on +N indicator) */
+export function openHiddenPanesPicker(windowId: number, x: number, y: number) {
+  store.contextMenu = { kind: "hidden_picker", windowId, x, y };
   notify();
 }
 
@@ -350,6 +391,12 @@ export function closeContextMenu() {
 
 export function setWindowLayout(windowId: number, templateId: string) {
   store.connection?.setWindowLayout(windowId, templateId);
+  closeContextMenu();
+}
+
+/** Swap two panes' positions in a window */
+export function swapPanes(windowId: number, paneId1: number, paneId2: number) {
+  store.connection?.swapPanes(windowId, paneId1, paneId2);
   closeContextMenu();
 }
 
