@@ -1,4 +1,4 @@
-.PHONY: all build clean dev prod server client fmt themes dist coverage coverage-server coverage-client
+.PHONY: all build clean dev prod server client fmt themes dist install coverage coverage-server coverage-client
 
 all: build
 
@@ -49,6 +49,12 @@ dist-client: themes
 	cp client/src/dullahan.css dist/client/
 	cp client/src/themes.css dist/client/
 	@echo "Built dist/client/ (standalone web client)"
+
+# Install to ~/bin
+install: dist
+	@mkdir -p ~/bin
+	cp dist/dullahan ~/bin/
+	@echo "Installed to ~/bin/dullahan"
 
 # =============================================================================
 # Utilities
