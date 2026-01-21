@@ -1219,6 +1219,151 @@ html, body {
 }
 
 /* ============================================================================
+   Context Menu
+   ============================================================================ */
+
+.context-menu {
+  position: fixed;
+  min-width: 160px;
+  max-width: 280px;
+  z-index: 1200;
+  padding: var(--space-1);
+  border-radius: 6px;
+  animation: contextMenuFadeIn 0.1s ease-out;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--term-fg);
+  font-family: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+
+.context-menu-item:hover {
+  background: color-mix(in srgb, var(--term-selection-bg) 60%, transparent);
+}
+
+.context-menu-item--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.context-menu-item--disabled:hover {
+  background: transparent;
+}
+
+.context-menu-item--submenu {
+  cursor: default;
+}
+
+.context-menu-item-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu-arrow {
+  font-size: 0.6rem;
+  color: var(--c8);
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: color-mix(in srgb, var(--c8) 30%, transparent);
+  margin: var(--space-1) 0;
+}
+
+/* Submenu positioning */
+.context-submenu {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  margin-left: 2px;
+  min-width: 180px;
+  max-width: 240px;
+  padding: var(--space-1);
+  border-radius: 6px;
+  animation: contextMenuFadeIn 0.1s ease-out;
+}
+
+.context-submenu--left {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 2px;
+}
+
+.context-submenu--above {
+  top: auto;
+  bottom: 0;
+}
+
+/* Layout preview in context menu (smaller version) */
+.context-menu-item--layout {
+  flex-direction: row;
+  gap: var(--space-2);
+}
+
+.context-menu-preview-root {
+  display: flex;
+  flex-direction: row;
+  width: 32px;
+  height: 24px;
+  flex-shrink: 0;
+  gap: 1px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--c8) 20%, transparent);
+}
+
+.context-menu-preview-container {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  gap: 1px;
+}
+
+.context-menu-preview-horizontal {
+  flex-direction: row;
+}
+
+.context-menu-preview-vertical {
+  flex-direction: column;
+}
+
+.context-menu-preview-pane {
+  box-sizing: border-box;
+  background: var(--c8);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ============================================================================
    Progress Bar (OSC 9;4)
    ============================================================================ */
 

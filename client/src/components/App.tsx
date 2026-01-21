@@ -10,6 +10,7 @@ import { WindowSwitcher } from "./WindowSwitcher";
 import { ClipboardBar } from "./ClipboardBar";
 import { LayoutPickerModal } from "./LayoutPickerModal";
 import { ToastContainer } from "./ToastContainer";
+import { ContextMenu } from "./ContextMenu";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import {
   getStore,
@@ -56,6 +57,7 @@ export function App() {
 
         <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <LayoutPickerModal />
+        <ContextMenu />
       </ErrorBoundary>
 
       <ToastContainer />

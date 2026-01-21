@@ -78,6 +78,7 @@ const HelloMessage = messages.HelloMessage;
 const NewWindowMessage = messages.NewWindowMessage;
 const CloseWindowMessage = messages.CloseWindowMessage;
 const ClosePaneMessage = messages.ClosePaneMessage;
+const SetLayoutMessage = messages.SetLayoutMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
 const ClipboardSetMessage = messages.ClipboardSetMessage;
 const MessageType = messages.MessageType;
@@ -1290,6 +1291,17 @@ pub const EventLoop = struct {
                 .msg = .{ .close_pane = .{ .paneId = parsed.value.paneId } },
                 .cleanup = .{ .none = {} },
             };
+        } else if (std.mem.eql(u8, type_str, "set_layout")) {
+            const parsed = std.json.parseFromSlice(SetLayoutMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            return .{
+                .msg = .{ .set_layout = .{
+                    .windowId = parsed.value.windowId,
+                    .templateId = parsed.value.templateId,
+                } },
+                .cleanup = .{ .json_set_layout = parsed },
+            };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
             const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
                 .ignore_unknown_fields = true,
@@ -1491,6 +1503,18 @@ pub const EventLoop = struct {
             const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
             return .{
                 .msg = .{ .close_pane = .{ .paneId = pane_id } },
+                .payload = payload,
+            };
+        } else if (std.mem.eql(u8, type_str, "set_layout")) {
+            const window_id_payload = (payload.mapGet("windowId") catch return null) orelse return null;
+            const template_id_payload = (payload.mapGet("templateId") catch return null) orelse return null;
+            const window_id: u16 = @intCast(window_id_payload.getUint() catch return null);
+            const template_id = template_id_payload.asStr() catch return null;
+            return .{
+                .msg = .{ .set_layout = .{
+                    .windowId = window_id,
+                    .templateId = template_id,
+                } },
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
@@ -1878,6 +1902,87 @@ pub const EventLoop = struct {
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
                     logRecoverable("broadcast layout after close pane", e);
+                };
+            },
+            .set_layout => |set_layout_msg| {
+                // Only master can change layouts
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting set_layout from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                const window_id = set_layout_msg.windowId;
+                const template_id = set_layout_msg.templateId;
+
+                // Look up the template
+                const template = self.layouts.get(template_id) orelse {
+                    log.warn("Template '{s}' not found for set_layout", .{template_id});
+                    return;
+                };
+
+                // Get the window
+                const window = self.session.getWindow(window_id) orelse {
+                    log.warn("Window {d} not found for set_layout", .{window_id});
+                    return;
+                };
+
+                // Check if template requires different number of panes than window has
+                const required_panes = template.countPanes();
+                const current_panes = window.paneCount();
+
+                if (required_panes != current_panes) {
+                    // Need to adjust pane count
+                    if (required_panes > current_panes) {
+                        // Add panes
+                        const to_add = required_panes - current_panes;
+                        var i: usize = 0;
+                        while (i < to_add) : (i += 1) {
+                            const new_pane_id = self.session.pane_registry.createShellPane() catch |e| {
+                                logRecoverable("create pane for layout change", e);
+                                return;
+                            };
+                            window.addPane(new_pane_id) catch |e| {
+                                logRecoverable("add pane to window for layout change", e);
+                                return;
+                            };
+                            // Send initial snapshot for new pane
+                            if (self.session.pane_registry.get(new_pane_id)) |new_pane| {
+                                for (self.clients.items) |*c| {
+                                    self.sendSnapshot(&c.ws, new_pane) catch |e| {
+                                        logClientError("send snapshot for new pane", e);
+                                    };
+                                    c.setGeneration(new_pane_id, new_pane.generation);
+                                }
+                            }
+                        }
+                        log.info("Added {d} panes to window {d} for layout '{s}'", .{ to_add, window_id, template_id });
+                    } else {
+                        // Remove panes (from the end)
+                        const to_remove = current_panes - required_panes;
+                        var i: usize = 0;
+                        while (i < to_remove) : (i += 1) {
+                            if (window.pane_ids.items.len > 0) {
+                                const pane_id = window.pane_ids.items[window.pane_ids.items.len - 1];
+                                window.removePane(pane_id);
+                                self.session.pane_registry.destroy(pane_id);
+                            }
+                        }
+                        log.info("Removed {d} panes from window {d} for layout '{s}'", .{ to_remove, window_id, template_id });
+                    }
+                }
+
+                // Apply the new layout
+                window.setLayoutFromTemplate(template) catch |e| {
+                    logRecoverable("set layout from template", e);
+                    return;
+                };
+
+                log.info("Changed window {d} layout to '{s}'", .{ window_id, template_id });
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    logRecoverable("broadcast layout after set_layout", e);
                 };
             },
             .mouse => |mouse_msg| {

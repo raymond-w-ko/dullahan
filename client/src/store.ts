@@ -47,6 +47,16 @@ export interface ProgressState {
   value: number; // 0-100
 }
 
+/** Context menu state */
+export interface ContextMenuState {
+  /** X position in viewport pixels */
+  x: number;
+  /** Y position in viewport pixels */
+  y: number;
+  /** Window ID this menu is for */
+  windowId: number;
+}
+
 export interface Store {
   // Connection state
   connection: TerminalConnection | null;
@@ -78,6 +88,7 @@ export interface Store {
   dimensionVersion: number; // Incremented when font settings change
   toasts: ToastNotification[]; // Active toast notifications
   progress: ProgressState | null; // Active progress bar
+  contextMenu: ContextMenuState | null; // Context menu state
 
   // Config (mirrored from config module for reactivity)
   theme: string;
@@ -132,6 +143,7 @@ const store: Store = {
   dimensionVersion: 0, // Incremented when font settings change to trigger recalc
   toasts: [],
   progress: null,
+  contextMenu: null,
 
   theme: config.get("theme") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
@@ -320,6 +332,25 @@ export function getProgress(): ProgressState | null {
 export function setSettingsOpen(open: boolean) {
   store.settingsOpen = open;
   notify();
+}
+
+// ============================================================================
+// Context menu
+// ============================================================================
+
+export function openContextMenu(windowId: number, x: number, y: number) {
+  store.contextMenu = { windowId, x, y };
+  notify();
+}
+
+export function closeContextMenu() {
+  store.contextMenu = null;
+  notify();
+}
+
+export function setWindowLayout(windowId: number, templateId: string) {
+  store.connection?.setWindowLayout(windowId, templateId);
+  closeContextMenu();
 }
 
 export function setFullscreenPane(paneId: number | null) {

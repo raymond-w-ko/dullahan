@@ -77,6 +77,12 @@ pub const ClosePaneMessage = struct {
     paneId: u16,
 };
 
+pub const SetLayoutMessage = struct {
+    type: []const u8,
+    windowId: u16,
+    templateId: []const u8,
+};
+
 pub const ClipboardResponseMessage = struct {
     type: []const u8,
     paneId: u16,
@@ -127,6 +133,7 @@ pub const ParsedMessage = union(enum) {
     new_window: ParsedNewWindow,
     close_window: ParsedCloseWindow,
     close_pane: ParsedClosePane,
+    set_layout: ParsedSetLayout,
     mouse: ParsedMouse,
     select_all: ParsedSelectAll,
     clear_selection: ParsedClearSelection,
@@ -192,6 +199,11 @@ pub const ParsedClosePane = struct {
     paneId: u16,
 };
 
+pub const ParsedSetLayout = struct {
+    windowId: u16,
+    templateId: []const u8,
+};
+
 pub const ParsedMouse = struct {
     paneId: u16,
     button: u8,
@@ -243,6 +255,7 @@ pub const JsonCleanup = union(enum) {
     json_text: std.json.Parsed(TextMessage),
     json_hello: std.json.Parsed(HelloMessage),
     json_new_window: std.json.Parsed(NewWindowMessage),
+    json_set_layout: std.json.Parsed(SetLayoutMessage),
     json_mouse: std.json.Parsed(MouseMessage),
     json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
     json_clipboard_set: std.json.Parsed(ClipboardSetMessage),
@@ -254,6 +267,7 @@ pub const JsonCleanup = union(enum) {
             .json_text => |*p| p.deinit(),
             .json_hello => |*p| p.deinit(),
             .json_new_window => |*p| p.deinit(),
+            .json_set_layout => |*p| p.deinit(),
             .json_mouse => |*p| p.deinit(),
             .json_clipboard_response => |*p| p.deinit(),
             .json_clipboard_set => |*p| p.deinit(),

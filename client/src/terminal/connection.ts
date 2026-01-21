@@ -826,6 +826,19 @@ export class TerminalConnection {
     this.send({ type: "close_pane", paneId });
   }
 
+  /**
+   * Change a window's layout to a different template.
+   * Only the master client can change layouts. Non-masters will have
+   * their requests silently ignored by the server.
+   * @param windowId The ID of the window to change
+   * @param templateId The layout template ID (e.g., "2-col", "2x2", "single")
+   */
+  setWindowLayout(windowId: number, templateId: string): void {
+    if (!this.isMaster) return;
+    debug.log("Requesting layout change for window", windowId, "to template:", templateId);
+    this.send({ type: "set_layout", windowId, templateId });
+  }
+
   sendPing(): void {
     this.send({ type: "ping" });
   }

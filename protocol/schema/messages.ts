@@ -129,6 +129,13 @@ export interface ClosePaneMessage {
   paneId: number;
 }
 
+/** Set window layout template */
+export interface SetLayoutMessage {
+  type: "set_layout";
+  windowId: number;
+  templateId: string;
+}
+
 /** Ping for keepalive */
 export interface PingMessage {
   type: "ping";
@@ -202,6 +209,7 @@ export type ClientMessage =
   | NewWindowMessage
   | CloseWindowMessage
   | ClosePaneMessage
+  | SetLayoutMessage
   | PingMessage
   | SelectAllMessage
   | ClearSelectionMessage
