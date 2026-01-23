@@ -29,13 +29,14 @@ html, body {
    ========================================================================== */
 
 :root {
-  /* Terminal colors - overridden by themes via data-theme attribute */
-  --term-bg: #282c34;
-  --term-fg: #abb2bf;
-  --term-cursor-bg: #528bff;
-  --term-cursor-fg: #282c34;
-  --term-selection-bg: #3e4451;
-  --term-selection-fg: #abb2bf;
+  /* Terminal colors - overridden by themes via data-theme attribute
+     Default: Dracula */
+  --term-bg: #282a36;
+  --term-fg: #f8f8f2;
+  --term-cursor-bg: #f8f8f2;
+  --term-cursor-fg: #282a36;
+  --term-selection-bg: #44475a;
+  --term-selection-fg: #ffffff;
 
   /* Font settings */
   --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", monospace;
