@@ -25,7 +25,10 @@ Thumbs.db
 *.sublime-*
 
 # AI Agents
-.claude/settings.json
+.claude/**
+.codex/**
+*.mcp.json
+opencode.json
 
 # Logs
 *.log
