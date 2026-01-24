@@ -4,7 +4,7 @@
 //! to the debug pane and log files. Set to `true` to enable logging.
 
 /// Log DSR (Device Status Report) queries and responses
-pub const log_dsr: bool = true;
+pub const log_dsr: bool = false;
 
 /// Log window creation events
 pub const log_window_creation: bool = true;
