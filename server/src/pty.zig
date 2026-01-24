@@ -170,7 +170,10 @@ pub const Pty = struct {
 fn setTerminalEnv() void {
     // Set TERM_PROGRAM to identify as Ghostty
     _ = c.setenv("TERM_PROGRAM", "ghostty", 1);
-    
+
+    // Enable 24-bit true color support
+    _ = c.setenv("COLORTERM", "truecolor", 1);
+
     // Set TERM to xterm-ghostty for terminfo lookup
     _ = c.setenv("TERM", "xterm-ghostty", 1);
     
