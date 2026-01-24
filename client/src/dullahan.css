@@ -599,6 +599,21 @@ html, body {
   font-weight: 500;
 }
 
+.pane-id-bubble {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25em;
+  height: 1.25em;
+  padding: 0 0.35em;
+  margin-right: 0.5em;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--c8);
+  background: color-mix(in srgb, var(--term-fg) 10%, transparent);
+  border-radius: 0.6em;
+}
+
 .terminal-sync-stats {
   color: var(--c6);
   font-size: 0.7rem;

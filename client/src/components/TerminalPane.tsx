@@ -121,6 +121,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
       onClick={handlePaneClick}
     >
       <div class="terminal-titlebar" onContextMenu={handleTitlebarContextMenu}>
+        <span class="pane-id-bubble" title={`Pane ${paneId}`}>{paneId}</span>
         <span
           class="terminal-title"
           onClick={hasBell ? handleKeyInput : undefined}
