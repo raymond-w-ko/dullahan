@@ -53,6 +53,36 @@ fn logRecoverable(comptime context: []const u8, err: anyerror) void {
     log.info("[recoverable] {s}: {any}", .{ context, err });
 }
 
+/// Log layout dimensions for debugging (info level for visibility)
+fn logLayoutDimensions(nodes: []const layout_db.LayoutNode, indent: usize) void {
+    for (nodes) |node| {
+        switch (node) {
+            .pane => |p| {
+                log.info("{s}pane: width={d:.1}% height={d:.1}% id={?}", .{
+                    indentStr(indent),
+                    p.width,
+                    p.height,
+                    p.pane_id,
+                });
+            },
+            .container => |c| {
+                log.info("{s}container: width={d:.1}% height={d:.1}%", .{
+                    indentStr(indent),
+                    c.width,
+                    c.height,
+                });
+                logLayoutDimensions(c.children, indent + 1);
+            },
+        }
+    }
+}
+
+fn indentStr(indent: usize) []const u8 {
+    const spaces = "                ";
+    const len = @min(indent * 2, spaces.len);
+    return spaces[0..len];
+}
+
 /// Log a client-related error. May result in client disconnect.
 fn logClientError(comptime context: []const u8, err: anyerror) void {
     log.warn("[client] {s}: {any}", .{ context, err });
@@ -2221,13 +2251,25 @@ pub const EventLoop = struct {
                     log.info("Window {d} has {d} hidden panes after layout change to '{s}'", .{ window_id, hidden, template_id });
                 }
 
-                // Apply the new layout
+                // Log current dimensions before reset (for debugging)
+                if (window.layout_nodes) |old_nodes| {
+                    log.info("Before reset - current layout dimensions:", .{});
+                    logLayoutDimensions(old_nodes, 0);
+                }
+
+                // Apply the new layout (clones fresh nodes from template with original dimensions)
                 window.setLayoutFromTemplate(template) catch |e| {
                     logRecoverable("set layout from template", e);
                     return;
                 };
 
-                log.info("Changed window {d} layout to '{s}'", .{ window_id, template_id });
+                // Log the new layout dimensions for debugging
+                if (window.layout_nodes) |nodes| {
+                    log.info("Changed window {d} layout to '{s}' - reset to template dimensions", .{ window_id, template_id });
+                    logLayoutDimensions(nodes, 0);
+                } else {
+                    log.info("Changed window {d} layout to '{s}'", .{ window_id, template_id });
+                }
 
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
