@@ -502,6 +502,62 @@ html, body {
 }
 
 /* ==========================================================================
+   Layout Dividers (for pane resizing)
+   ========================================================================== */
+
+.layout-divider {
+  flex: 0 0 4px;
+  background: transparent;
+  z-index: 100;
+  position: relative;
+  transition: background 0.1s;
+}
+
+.layout-divider::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Expand hit area for easier grabbing */
+  margin: -2px;
+}
+
+/* Horizontal divider (between horizontally-arranged panes) */
+.layout-divider--horizontal {
+  cursor: col-resize;
+}
+
+/* Vertical divider (between vertically-arranged panes) */
+.layout-divider--vertical {
+  cursor: row-resize;
+}
+
+/* Hover state */
+.layout-divider:hover {
+  background: var(--c4);
+  opacity: 0.4;
+}
+
+/* Active dragging state */
+.layout-divider--dragging {
+  background: var(--c4);
+  opacity: 0.6;
+}
+
+/* During drag, show resize cursor on entire document */
+body.layout-resizing-horizontal,
+body.layout-resizing-horizontal * {
+  cursor: col-resize !important;
+}
+
+body.layout-resizing-vertical,
+body.layout-resizing-vertical * {
+  cursor: row-resize !important;
+}
+
+/* ==========================================================================
    Terminal Grid (legacy, fallback)
    ========================================================================== */
 

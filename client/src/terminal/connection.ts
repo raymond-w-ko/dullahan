@@ -840,6 +840,18 @@ export class TerminalConnection {
   }
 
   /**
+   * Resize layout nodes (update pane sizes from divider drag).
+   * Only the master client can resize layouts.
+   * @param windowId The ID of the window to resize
+   * @param nodes The full updated layout tree with new dimensions
+   */
+  resizeLayout(windowId: number, nodes: import("../../../protocol/schema/layout").LayoutNode[]): void {
+    if (!this.isMaster) return;
+    debug.log("Resizing layout for window", windowId);
+    this.send({ type: "resize_layout", windowId, nodes });
+  }
+
+  /**
    * Swap two panes' positions in a window's pane list.
    * This affects which panes are visible vs hidden when using smaller layouts.
    * Only the master client can swap panes.

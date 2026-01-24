@@ -81,6 +81,7 @@ const CloseWindowMessage = messages.CloseWindowMessage;
 const ClosePaneMessage = messages.ClosePaneMessage;
 const SetLayoutMessage = messages.SetLayoutMessage;
 const SwapPanesMessage = messages.SwapPanesMessage;
+const ResizeLayoutMessage = messages.ResizeLayoutMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
 const ClipboardSetMessage = messages.ClipboardSetMessage;
 const MessageType = messages.MessageType;
@@ -869,6 +870,184 @@ pub const EventLoop = struct {
         self.wsBroadcastAll(msg);
     }
 
+    // ========================================================================
+    // Layout Resize Helpers
+    // ========================================================================
+
+    const LayoutNode = layout_db.LayoutNode;
+
+    /// Error type for layout parsing
+    const LayoutParseError = error{
+        InvalidLayoutNodes,
+        InvalidLayoutNode,
+        MissingType,
+        InvalidType,
+        MissingWidth,
+        MissingHeight,
+        InvalidWidth,
+        InvalidHeight,
+        MissingChildren,
+        InvalidNodeType,
+        OutOfMemory,
+    };
+
+    /// Parse layout nodes from JSON value
+    fn parseLayoutNodesFromJson(self: *EventLoop, json_nodes: std.json.Value) LayoutParseError![]LayoutNode {
+        if (json_nodes != .array) return error.InvalidLayoutNodes;
+
+        const nodes = self.allocator.alloc(LayoutNode, json_nodes.array.items.len) catch return error.OutOfMemory;
+        errdefer self.allocator.free(nodes);
+
+        for (json_nodes.array.items, 0..) |item, i| {
+            nodes[i] = try self.parseLayoutNodeFromJson(item);
+        }
+
+        return nodes;
+    }
+
+    /// Parse a single layout node from JSON
+    fn parseLayoutNodeFromJson(self: *EventLoop, json_node: std.json.Value) LayoutParseError!LayoutNode {
+        if (json_node != .object) return error.InvalidLayoutNode;
+
+        const obj = json_node.object;
+        const type_val = obj.get("type") orelse return error.MissingType;
+        if (type_val != .string) return error.InvalidType;
+
+        const width_val = obj.get("width") orelse return error.MissingWidth;
+        const height_val = obj.get("height") orelse return error.MissingHeight;
+
+        const width: f32 = switch (width_val) {
+            .integer => |i| @floatFromInt(i),
+            .float => |f| @floatCast(f),
+            else => return error.InvalidWidth,
+        };
+
+        const height: f32 = switch (height_val) {
+            .integer => |i| @floatFromInt(i),
+            .float => |f| @floatCast(f),
+            else => return error.InvalidHeight,
+        };
+
+        if (std.mem.eql(u8, type_val.string, "pane")) {
+            const pane_id: ?u16 = if (obj.get("paneId")) |pid| blk: {
+                if (pid != .integer) break :blk null;
+                break :blk @intCast(pid.integer);
+            } else null;
+
+            return .{ .pane = .{
+                .width = width,
+                .height = height,
+                .pane_id = pane_id,
+            } };
+        } else if (std.mem.eql(u8, type_val.string, "container")) {
+            const children_val = obj.get("children") orelse return error.MissingChildren;
+            const children = try self.parseLayoutNodesFromJson(children_val);
+
+            return .{ .container = .{
+                .width = width,
+                .height = height,
+                .children = children,
+            } };
+        }
+
+        return error.InvalidNodeType;
+    }
+
+    /// Free layout nodes recursively
+    fn freeLayoutNodes(self: *EventLoop, nodes: []LayoutNode) void {
+        for (nodes) |*node| {
+            if (node.* == .container) {
+                self.freeLayoutNodes(node.container.children);
+            }
+        }
+        self.allocator.free(nodes);
+    }
+
+    /// Validate layout percentages (each sibling group should sum close to 100%)
+    fn validateLayoutPercentages(_: *EventLoop, nodes: []const LayoutNode) bool {
+        return validateLayoutPercentagesImpl(nodes);
+    }
+
+    fn validateLayoutPercentagesImpl(nodes: []const LayoutNode) bool {
+        if (nodes.len == 0) return true;
+
+        // Check width/height percentages
+        var width_sum: f32 = 0;
+        var height_sum: f32 = 0;
+
+        for (nodes) |node| {
+            switch (node) {
+                .pane => |p| {
+                    width_sum += p.width;
+                    height_sum += p.height;
+                    // Validate min size (5%)
+                    if (p.width < 5 or p.height < 5) return false;
+                },
+                .container => |c| {
+                    width_sum += c.width;
+                    height_sum += c.height;
+                    // Validate min size
+                    if (c.width < 5 or c.height < 5) return false;
+                    // Recursively validate children
+                    if (!validateLayoutPercentagesImpl(c.children)) return false;
+                },
+            }
+        }
+
+        // At least one dimension should sum close to 100% (allow 5% tolerance)
+        const width_ok = @abs(width_sum - 100.0) < 5.0;
+        const height_ok = @abs(height_sum - 100.0) < 5.0;
+
+        // Width sums for horizontal splits, height sums for vertical splits
+        // (depends on nesting level, so we allow either to be valid)
+        return width_ok or height_ok;
+    }
+
+    /// Copy dimensions from new_nodes to old_nodes in place, preserving pane IDs
+    fn copyLayoutDimensions(_: *EventLoop, old_nodes: []LayoutNode, new_nodes: []const LayoutNode) !void {
+        if (old_nodes.len != new_nodes.len) return error.LayoutMismatch;
+
+        for (old_nodes, new_nodes) |*old, new| {
+            switch (old.*) {
+                .pane => |*p| {
+                    if (new != .pane) return error.LayoutTypeMismatch;
+                    // Update dimensions, keep pane_id
+                    p.width = new.pane.width;
+                    p.height = new.pane.height;
+                },
+                .container => |*c| {
+                    if (new != .container) return error.LayoutTypeMismatch;
+                    // Update dimensions
+                    c.width = new.container.width;
+                    c.height = new.container.height;
+                    // Recursively update children
+                    try copyLayoutDimensionsStatic(c.children, new.container.children);
+                },
+            }
+        }
+    }
+
+    /// Static version for recursive calls
+    fn copyLayoutDimensionsStatic(old_nodes: []LayoutNode, new_nodes: []const LayoutNode) !void {
+        if (old_nodes.len != new_nodes.len) return error.LayoutMismatch;
+
+        for (old_nodes, new_nodes) |*old, new| {
+            switch (old.*) {
+                .pane => |*p| {
+                    if (new != .pane) return error.LayoutTypeMismatch;
+                    p.width = new.pane.width;
+                    p.height = new.pane.height;
+                },
+                .container => |*c| {
+                    if (new != .container) return error.LayoutTypeMismatch;
+                    c.width = new.container.width;
+                    c.height = new.container.height;
+                    try copyLayoutDimensionsStatic(c.children, new.container.children);
+                },
+            }
+        }
+    }
+
     /// Broadcast pane update (snapshot/delta) to all connected clients.
     /// Used for selection changes and other immediate updates.
     fn broadcastPaneUpdate(self: *EventLoop, pane: *Pane) !void {
@@ -1350,6 +1529,17 @@ pub const EventLoop = struct {
                     .paneId2 = parsed.value.paneId2,
                 } },
                 .cleanup = .{ .json_swap_panes = parsed },
+            };
+        } else if (std.mem.eql(u8, type_str, "resize_layout")) {
+            const parsed = std.json.parseFromSlice(ResizeLayoutMessage, self.allocator, data, .{
+                .ignore_unknown_fields = true,
+            }) catch return null;
+            return .{
+                .msg = .{ .resize_layout = .{
+                    .windowId = parsed.value.windowId,
+                    .nodes = parsed.value.nodes,
+                } },
+                .cleanup = .{ .json_resize_layout = parsed },
             };
         } else if (std.mem.eql(u8, type_str, "mouse")) {
             const parsed = std.json.parseFromSlice(MouseMessage, self.allocator, data, .{
@@ -2081,6 +2271,54 @@ pub const EventLoop = struct {
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {
                     logRecoverable("broadcast layout after swap_panes", e);
+                };
+            },
+            .resize_layout => |resize_msg| {
+                // Only master can resize layout
+                const client_id = client.client_id orelse return;
+                if (!self.isMaster(client_id)) {
+                    log.debug("Rejecting resize_layout from non-master client {s}", .{client.shortId()});
+                    return;
+                }
+
+                const window_id = resize_msg.windowId;
+
+                // Get the window
+                const window = self.session.getWindow(window_id) orelse {
+                    log.warn("Window {d} not found for resize_layout", .{window_id});
+                    return;
+                };
+
+                // Parse and validate the new layout nodes
+                const new_nodes = self.parseLayoutNodesFromJson(resize_msg.nodes) catch |e| {
+                    log.warn("Failed to parse resize_layout nodes: {any}", .{e});
+                    return;
+                };
+                defer self.freeLayoutNodes(new_nodes);
+
+                // Validate percentages (each sibling group should sum to ~100%)
+                if (!self.validateLayoutPercentages(new_nodes)) {
+                    log.warn("Invalid layout percentages in resize_layout", .{});
+                    return;
+                }
+
+                // Update window's layout nodes in place
+                if (window.layout_nodes) |old_nodes| {
+                    // Deep copy new dimensions into existing layout, preserving pane IDs
+                    self.copyLayoutDimensions(old_nodes, new_nodes) catch |e| {
+                        log.warn("Failed to copy layout dimensions: {any}", .{e});
+                        return;
+                    };
+                } else {
+                    log.warn("Window {d} has no layout to resize", .{window_id});
+                    return;
+                }
+
+                log.info("Resized layout for window {d}", .{window_id});
+
+                // Broadcast updated layout to all clients
+                self.broadcastLayout() catch |e| {
+                    logRecoverable("broadcast layout after resize_layout", e);
                 };
             },
             .mouse => |mouse_msg| {

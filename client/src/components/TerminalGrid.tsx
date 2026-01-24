@@ -2,10 +2,12 @@
 // Renders panes from a window's layout tree or falls back to simple grid
 
 import { h } from "preact";
+import { useCallback } from "preact/hooks";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
-import { getWindow, getStore } from "../store";
+import { getWindow, getStore, getConnection } from "../store";
+import type { LayoutNode } from "../../../protocol/schema/layout";
 
 export interface TerminalGridProps {
   windowId: number;
@@ -37,9 +39,26 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
     );
   }
 
+  // Callback to send resize_layout message to server
+  const handleResizeLayout = useCallback(
+    (nodes: LayoutNode[]) => {
+      const connection = getConnection();
+      if (connection) {
+        connection.resizeLayout(windowId, nodes);
+      }
+    },
+    [windowId]
+  );
+
   // Use LayoutRenderer if window has a layout tree
   if (window.layout?.nodes) {
-    return <LayoutRenderer nodes={window.layout.nodes} windowId={windowId} />;
+    return (
+      <LayoutRenderer
+        nodes={window.layout.nodes}
+        windowId={windowId}
+        onResizeLayout={handleResizeLayout}
+      />
+    );
   }
 
   // Fallback: simple grid layout (legacy)

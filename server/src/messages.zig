@@ -92,6 +92,13 @@ pub const SwapPanesMessage = struct {
     paneId2: u16,
 };
 
+/// Resize layout message - sent when user drags dividers
+pub const ResizeLayoutMessage = struct {
+    type: []const u8,
+    windowId: u16,
+    nodes: std.json.Value, // Raw JSON array of layout nodes
+};
+
 pub const ClipboardResponseMessage = struct {
     type: []const u8,
     paneId: u16,
@@ -143,6 +150,7 @@ pub const ParsedMessage = union(enum) {
     close_window: ParsedCloseWindow,
     close_pane: ParsedClosePane,
     set_layout: ParsedSetLayout,
+    resize_layout: ParsedResizeLayout,
     swap_panes: ParsedSwapPanes,
     mouse: ParsedMouse,
     select_all: ParsedSelectAll,
@@ -222,6 +230,11 @@ pub const ParsedSwapPanes = struct {
     paneId2: u16,
 };
 
+pub const ParsedResizeLayout = struct {
+    windowId: u16,
+    nodes: std.json.Value, // Raw JSON array - parsed into LayoutNode[] by handler
+};
+
 pub const ParsedMouse = struct {
     paneId: u16,
     button: u8,
@@ -274,6 +287,7 @@ pub const JsonCleanup = union(enum) {
     json_hello: std.json.Parsed(HelloMessage),
     json_new_window: std.json.Parsed(NewWindowMessage),
     json_set_layout: std.json.Parsed(SetLayoutMessage),
+    json_resize_layout: std.json.Parsed(ResizeLayoutMessage),
     json_swap_panes: std.json.Parsed(SwapPanesMessage),
     json_mouse: std.json.Parsed(MouseMessage),
     json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
@@ -287,6 +301,7 @@ pub const JsonCleanup = union(enum) {
             .json_hello => |*p| p.deinit(),
             .json_new_window => |*p| p.deinit(),
             .json_set_layout => |*p| p.deinit(),
+            .json_resize_layout => |*p| p.deinit(),
             .json_swap_panes => |*p| p.deinit(),
             .json_mouse => |*p| p.deinit(),
             .json_clipboard_response => |*p| p.deinit(),

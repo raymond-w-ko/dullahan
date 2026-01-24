@@ -138,6 +138,13 @@ export interface SetLayoutMessage {
   templateId: string;
 }
 
+/** Resize layout nodes (drag dividers to adjust pane sizes) */
+export interface ResizeLayoutMessage {
+  type: "resize_layout";
+  windowId: number;
+  nodes: LayoutNode[];  // Full updated layout tree with new dimensions
+}
+
 /** Swap two panes' positions in a window */
 export interface SwapPanesMessage {
   type: "swap_panes";
@@ -220,6 +227,7 @@ export type ClientMessage =
   | CloseWindowMessage
   | ClosePaneMessage
   | SetLayoutMessage
+  | ResizeLayoutMessage
   | SwapPanesMessage
   | PingMessage
   | SelectAllMessage
