@@ -60,6 +60,8 @@ pub const HelloMessage = struct {
     clientId: []const u8,
     themeFg: ?[]const u8 = null,
     themeBg: ?[]const u8 = null,
+    /// Optional auth token for future authentication support
+    token: ?[]const u8 = null,
 };
 
 pub const NewWindowMessage = struct {
@@ -193,6 +195,8 @@ pub const ParsedHello = struct {
     themeFg: ?[]const u8 = null,
     /// Theme background color (e.g., "#282c34")
     themeBg: ?[]const u8 = null,
+    /// Optional auth token for future authentication support
+    token: ?[]const u8 = null,
 };
 
 pub const ParsedNewWindow = struct {

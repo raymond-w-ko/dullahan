@@ -33,6 +33,7 @@ const messages = @import("messages.zig");
 const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
 const ipc_commands = @import("ipc_commands.zig");
+const ws_proxy = @import("ws_proxy.zig");
 
 const log = std.log.scoped(.event_loop);
 
@@ -115,6 +116,14 @@ pub const ClientState = struct {
     /// UUIDv4 format, e.g. "550e8400-e29b-41d4-a716-446655440000"
     client_id: ?[]const u8 = null,
 
+    /// Whether the client has been authenticated.
+    /// In dev mode, clients are auto-authenticated on hello.
+    /// Future: will require token validation.
+    authenticated: bool = false,
+
+    /// Auth token from hello message (for future token validation)
+    auth_token: ?[]const u8 = null,
+
     pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
         return .{
             .ws = ws,
@@ -127,6 +136,10 @@ pub const ClientState = struct {
         // Free client ID if allocated
         if (self.client_id) |id| {
             self.allocator.free(id);
+        }
+        // Free auth token if allocated
+        if (self.auth_token) |token| {
+            self.allocator.free(token);
         }
         self.pane_generations.deinit();
         self.ws.close();
@@ -141,6 +154,16 @@ pub const ClientState = struct {
         }
         // Allocate and copy new ID
         self.client_id = try self.allocator.dupe(u8, id);
+    }
+
+    /// Set the auth token (called when "hello" message is received with token)
+    pub fn setAuthToken(self: *ClientState, token: []const u8) !void {
+        // Free old token if any
+        if (self.auth_token) |old_token| {
+            self.allocator.free(old_token);
+        }
+        // Allocate and copy new token
+        self.auth_token = try self.allocator.dupe(u8, token);
     }
 
     /// Get short client ID for logging (first 8 chars or "anonymous")
@@ -249,6 +272,37 @@ pub const EventLoop = struct {
 
     pub fn uptime(self: *const EventLoop) i64 {
         return std.time.timestamp() - self.start_time;
+    }
+
+    // ========================================================================
+    // WebSocket Proxy Methods
+    // ========================================================================
+    // These methods centralize WebSocket send operations, enabling:
+    // - Authentication checks before message processing
+    // - Permission validation (master vs slave)
+    // - Future extensibility (rate limiting, audit logging, metrics)
+
+    /// Broadcast binary message to all clients (including unauthenticated).
+    /// Use for messages that everyone should receive, like during initial connection.
+    fn wsBroadcastAll(self: *EventLoop, msg: []const u8) void {
+        ws_proxy.WsProxy.broadcastAll(&self.clients, msg);
+    }
+
+    /// Broadcast binary message to all authenticated clients only.
+    fn wsBroadcast(self: *EventLoop, msg: []const u8) void {
+        ws_proxy.WsProxy.broadcast(&self.clients, msg);
+    }
+
+    /// Send to a single client without auth check.
+    /// Use for initial connection handshake messages.
+    fn wsSendUnchecked(self: *EventLoop, client: *ClientState, msg: []const u8) !void {
+        _ = self;
+        try ws_proxy.WsProxy.sendUnchecked(client, msg);
+    }
+
+    /// Send to master client only. Returns true if sent successfully.
+    fn wsSendToMaster(self: *EventLoop, msg: []const u8) bool {
+        return ws_proxy.WsProxy.sendToMaster(&self.clients, self.master_id, msg);
     }
 
     /// Assign layouts to existing windows that don't have layouts yet.
@@ -480,11 +534,7 @@ pub const EventLoop = struct {
         // Handle broadcast if needed
         if (result.broadcast_data) |broadcast_msg| {
             defer alloc.free(broadcast_msg);
-            for (self.clients.items) |*client| {
-                client.ws.sendBinary(broadcast_msg) catch |e| {
-                    logClientError("broadcast", e);
-                };
-            }
+            self.wsBroadcastAll(broadcast_msg);
         }
 
         return result.response;
@@ -521,7 +571,7 @@ pub const EventLoop = struct {
                 return;
             };
             defer self.allocator.free(layout_msg);
-            client.ws.sendBinary(layout_msg) catch |e| {
+            self.wsSendUnchecked(&client, layout_msg) catch |e| {
                 logClientError("send layout message", e);
                 client.deinit();
                 return;
@@ -536,7 +586,7 @@ pub const EventLoop = struct {
                 return;
             };
             defer self.allocator.free(master_msg);
-            client.ws.sendBinary(master_msg) catch |e| {
+            self.wsSendUnchecked(&client, master_msg) catch |e| {
                 logClientError("send master_changed message", e);
                 client.deinit();
                 return;
@@ -568,6 +618,15 @@ pub const EventLoop = struct {
                 if (self.parseJsonMessage(frame.payload)) |result| {
                     var cleanup = result.cleanup;
                     defer cleanup.deinit();
+
+                    // Auth gate: only allow hello messages from unauthenticated clients
+                    if (!client.authenticated) {
+                        if (result.msg != .hello) {
+                            log.warn("Dropping non-hello message from unauthenticated client {s}", .{client.shortId()});
+                            return;
+                        }
+                    }
+
                     try self.handleParsedMessage(result.msg, client);
                     try self.sendClientUpdates(client);
                 }
@@ -575,6 +634,15 @@ pub const EventLoop = struct {
             .binary => {
                 if (self.parseMsgpackMessage(frame.payload)) |result| {
                     defer result.payload.free(self.allocator);
+
+                    // Auth gate: only allow hello messages from unauthenticated clients
+                    if (!client.authenticated) {
+                        if (result.msg != .hello) {
+                            log.warn("Dropping non-hello message from unauthenticated client {s}", .{client.shortId()});
+                            return;
+                        }
+                    }
+
                     try self.handleParsedMessage(result.msg, client);
                     try self.sendClientUpdates(client);
                 }
@@ -749,12 +817,7 @@ pub const EventLoop = struct {
     fn broadcastMasterChanged(self: *EventLoop) !void {
         const msg = try snapshot.generateMasterChangedMessage(self.allocator, self.master_id);
         defer self.allocator.free(msg);
-
-        for (self.clients.items) |*client| {
-            client.ws.sendBinary(msg) catch |e| {
-                logClientError("broadcast master_changed", e);
-            };
-        }
+        self.wsBroadcastAll(msg);
     }
 
     /// Parse a hex color string like "#rrggbb" into [r, g, b] bytes.
@@ -803,12 +866,7 @@ pub const EventLoop = struct {
     fn broadcastLayout(self: *EventLoop) !void {
         const msg = try snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts);
         defer self.allocator.free(msg);
-
-        for (self.clients.items) |*client| {
-            client.ws.sendBinary(msg) catch |e| {
-                logClientError("broadcast layout", e);
-            };
-        }
+        self.wsBroadcastAll(msg);
     }
 
     /// Broadcast pane update (snapshot/delta) to all connected clients.
@@ -1038,12 +1096,7 @@ pub const EventLoop = struct {
                 return;
             };
             defer self.allocator.free(msg);
-
-            for (self.clients.items) |*c| {
-                c.ws.sendBinary(msg) catch |e| {
-                    logClientError("broadcast primary clipboard", e);
-                };
-            }
+            self.wsBroadcastAll(msg);
 
             log.debug("Updated primary clipboard from selection: {d} chars", .{text.len});
         }
@@ -1077,12 +1130,7 @@ pub const EventLoop = struct {
                     return;
                 };
                 defer pane.allocator.free(msg);
-
-                for (self.clients.items) |*client| {
-                    client.ws.sendBinary(msg) catch |e| {
-                        logClientError("broadcast clipboard SET", e);
-                    };
-                }
+                self.wsBroadcastAll(msg);
             }
             pane.clearClipboardSet();
         }
@@ -1106,15 +1154,8 @@ pub const EventLoop = struct {
                 };
                 defer pane.allocator.free(msg);
 
-                for (self.clients.items) |*client| {
-                    const is_master = if (client.client_id) |id| self.isMaster(id) else false;
-                    if (is_master) {
-                        client.ws.sendBinary(msg) catch |e| {
-                            logClientError("send clipboard GET to master", e);
-                        };
-                        pane.markClipboardGetSent();
-                        break;
-                    }
+                if (self.wsSendToMaster(msg)) {
+                    pane.markClipboardGetSent();
                 }
             }
         }
@@ -1162,13 +1203,7 @@ pub const EventLoop = struct {
             return;
         };
         defer self.allocator.free(msg);
-
-        // Broadcast to all clients
-        for (self.clients.items) |*client| {
-            client.ws.sendBinary(msg) catch |e| {
-                logClientError("broadcast shell integration", e);
-            };
-        }
+        self.wsBroadcastAll(msg);
 
         pane.clearShellEvent();
     }
@@ -1261,6 +1296,7 @@ pub const EventLoop = struct {
                     .clientId = parsed.value.clientId,
                     .themeFg = parsed.value.themeFg,
                     .themeBg = parsed.value.themeBg,
+                    .token = parsed.value.token,
                 } },
                 .cleanup = .{ .json_hello = parsed },
             };
@@ -1492,8 +1528,9 @@ pub const EventLoop = struct {
         } else if (std.mem.eql(u8, type_str, "hello")) {
             const client_id_payload = (payload.mapGet("clientId") catch return null) orelse return null;
             const client_id_str = client_id_payload.asStr() catch return null;
+            const token: ?[]const u8 = if (payload.mapGet("token") catch null) |p| (p.asStr() catch null) else null;
             return .{
-                .msg = .{ .hello = .{ .clientId = client_id_str } },
+                .msg = .{ .hello = .{ .clientId = client_id_str, .token = token } },
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "request_master")) {
@@ -1746,6 +1783,11 @@ pub const EventLoop = struct {
                     logClientError("set client ID", e);
                     return;
                 };
+
+                // Mark client as authenticated (dev mode: auto-auth on valid hello)
+                // Future: validate hello_msg.token here before setting authenticated
+                client.authenticated = true;
+
                 if (log_config.log_client_join) {
                     log.info("Client identified: {s}", .{client.shortId()});
                     dlog.info("Client identified: {s}", .{client.shortId()});
@@ -2376,12 +2418,7 @@ pub const EventLoop = struct {
                         return;
                     };
                     defer self.allocator.free(clipboard_msg);
-
-                    for (self.clients.items) |*c| {
-                        c.ws.sendBinary(clipboard_msg) catch |e| {
-                            logClientError("broadcast copy", e);
-                        };
-                    }
+                    self.wsBroadcastAll(clipboard_msg);
 
                     log.debug("Copied selection from pane {d}: {d} chars", .{ copy_msg.paneId, text.len });
                 } else {

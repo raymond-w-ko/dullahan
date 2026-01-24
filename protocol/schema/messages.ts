@@ -104,6 +104,8 @@ export interface HelloMessage {
   themeFg?: string;
   /** Theme background color (e.g., "#282c34") */
   themeBg?: string;
+  /** Optional auth token for future authentication support */
+  token?: string;
 }
 
 /** Request to become master */
