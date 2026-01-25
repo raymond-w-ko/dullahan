@@ -775,6 +775,27 @@ export class TerminalConnection {
   }
 
   /**
+   * Clear the resize cache for all or specific panes.
+   * This forces the next resize calculation to always send to the server,
+   * even if the dimensions haven't changed. Useful when switching windows
+   * or when layout changes significantly.
+   * @param paneIds If provided, only clear cache for these panes. Otherwise clear all.
+   */
+  clearResizeCache(paneIds?: number[]): void {
+    if (paneIds) {
+      for (const paneId of paneIds) {
+        this._lastSentResizes.delete(paneId);
+        this._pendingResizes.delete(paneId);
+      }
+      debug.log(`Cleared resize cache for panes: ${paneIds.join(", ")}`);
+    } else {
+      this._lastSentResizes.clear();
+      this._pendingResizes.clear();
+      debug.log("Cleared all resize cache");
+    }
+  }
+
+  /**
    * Scroll the terminal viewport by delta rows.
    * Negative values scroll up (toward history), positive scroll down.
    * Only master can scroll.

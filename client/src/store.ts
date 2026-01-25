@@ -507,8 +507,17 @@ export function setLayout(layout: LayoutUpdate) {
 }
 
 export function switchWindow(windowId: number) {
-  if (store.windows.has(windowId)) {
+  const window = store.windows.get(windowId);
+  if (window) {
     store.activeWindowId = windowId;
+    // Increment dimensionVersion to force pane dimension recalculation
+    // This ensures panes recalculate their sizes when becoming visible
+    store.dimensionVersion++;
+    // Clear resize cache for panes in this window to ensure fresh calculations
+    // are sent to the server, avoiding stale cached values
+    if (store.connection) {
+      store.connection.clearResizeCache(window.paneIds);
+    }
     notify();
   }
 }
