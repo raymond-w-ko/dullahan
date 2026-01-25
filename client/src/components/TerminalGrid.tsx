@@ -2,12 +2,27 @@
 // Renders panes from a window's layout tree or falls back to simple grid
 
 import { h } from "preact";
-import { useCallback } from "preact/hooks";
+import { useCallback, useMemo } from "preact/hooks";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import { getWindow, getStore, getConnection } from "../store";
 import type { LayoutNode } from "../../../protocol/schema/layout";
+
+/** Generate a key from layout dimensions to force re-render on dimension changes */
+function getLayoutKey(nodes: LayoutNode[]): string {
+  const parts: string[] = [];
+  function collect(ns: LayoutNode[]) {
+    for (const n of ns) {
+      parts.push(`${n.width.toFixed(1)}-${n.height.toFixed(1)}`);
+      if (n.type === "container" && n.children) {
+        collect(n.children);
+      }
+    }
+  }
+  collect(nodes);
+  return parts.join(":");
+}
 
 export interface TerminalGridProps {
   windowId: number;
@@ -52,8 +67,11 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
 
   // Use LayoutRenderer if window has a layout tree
   if (window.layout?.nodes) {
+    // Key includes dimensions to force re-render when layout is reset
+    const layoutKey = getLayoutKey(window.layout.nodes);
     return (
       <LayoutRenderer
+        key={layoutKey}
         nodes={window.layout.nodes}
         windowId={windowId}
         onResizeLayout={handleResizeLayout}
