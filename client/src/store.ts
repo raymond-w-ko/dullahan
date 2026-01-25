@@ -3,6 +3,9 @@
 
 import { debug } from "./debug";
 import { TerminalConnection } from "./terminal/connection";
+
+const clipboardLog = debug.category('clipboard');
+const storeLog = debug.category('store');
 import { AUDIO } from "./constants";
 import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
@@ -592,10 +595,10 @@ export async function copyInternalToSystem(kind: "c" | "p"): Promise<boolean> {
   if (!entry) return false;
   try {
     await copyToClipboard(entry.text);
-    debug.log(`Copied internal '${kind}' to system clipboard: ${entry.text.length} chars`);
+    clipboardLog.log(`Copied internal '${kind}' to system: ${entry.text.length} chars`);
     return true;
   } catch (err) {
-    debug.warn(`Failed to copy '${kind}' to system clipboard:`, err);
+    clipboardLog.warn(`Failed to copy '${kind}' to system:`, err);
     return false;
   }
 }
@@ -607,16 +610,16 @@ export async function copyInternalToSystem(kind: "c" | "p"): Promise<boolean> {
 export function pasteClipboardToTerminal(kind: "c" | "p"): void {
   const conn = store.connection;
   if (!conn || !conn.isConnected) {
-    debug.warn("Cannot paste to terminal: not connected");
+    clipboardLog.warn("Cannot paste: not connected");
     return;
   }
   if (!conn.isMaster) {
-    debug.warn("Cannot paste to terminal: not master");
+    clipboardLog.warn("Cannot paste: not master");
     return;
   }
   const paneId = store.focusedPaneId;
   conn.sendClipboardPaste(paneId, kind);
-  debug.log(`Pasting '${kind}' clipboard to pane ${paneId}`);
+  clipboardLog.log(`Pasting '${kind}' to pane ${paneId}`);
 }
 
 /** Copy navigator.clipboard to internal clipboard */
@@ -630,10 +633,10 @@ export async function copySystemToInternal(kind: "c" | "p"): Promise<boolean> {
     }
     // Sync to server so it persists across reconnects
     syncClipboardToServer(kind, text);
-    debug.log(`Copied system clipboard to internal '${kind}': ${text.length} chars`);
+    clipboardLog.log(`Copied system to internal '${kind}': ${text.length} chars`);
     return true;
   } catch (err) {
-    debug.warn(`Failed to copy system clipboard to '${kind}':`, err);
+    clipboardLog.warn(`Failed to copy system to '${kind}':`, err);
     return false;
   }
 }
@@ -645,9 +648,9 @@ function syncClipboardToServer(kind: "c" | "p", text: string): void {
   try {
     const base64Data = btoa(text);
     conn.sendClipboardSet(kind, base64Data);
-    debug.log(`Synced clipboard '${kind}' to server: ${text.length} chars`);
+    clipboardLog.log(`Synced '${kind}' to server: ${text.length} chars`);
   } catch (err) {
-    debug.warn(`Failed to sync clipboard '${kind}' to server:`, err);
+    clipboardLog.warn(`Failed to sync '${kind}' to server:`, err);
   }
 }
 
@@ -724,9 +727,9 @@ export function initConnection() {
         // This ensures keybind copy updates the system clipboard
         try {
           await navigator.clipboard.writeText(text);
-          debug.log(`Clipboard SET: wrote ${text.length} chars to navigator.clipboard`);
+          clipboardLog.log(`SET: wrote ${text.length} chars to navigator.clipboard`);
         } catch (clipErr) {
-          debug.warn("Failed to write to navigator.clipboard:", clipErr);
+          clipboardLog.warn("Failed to write to navigator.clipboard:", clipErr);
         }
       } else if (kind === "p") {
         // Primary selection only updates internal mirror, not navigator.clipboard
@@ -736,9 +739,9 @@ export function initConnection() {
         setClipboardC(text);
       }
 
-      debug.log(`Clipboard SET from pane ${paneId}: ${text.length} chars to '${clipboard}'`);
+      clipboardLog.log(`SET from pane ${paneId}: ${text.length} chars to '${clipboard}'`);
     } catch (err) {
-      debug.warn("Clipboard SET failed:", err);
+      clipboardLog.warn("SET failed:", err);
     }
   });
 
@@ -746,7 +749,7 @@ export function initConnection() {
     // Terminal wants to read from clipboard
     // Only master should respond to avoid race conditions
     if (!conn.isMaster) {
-      debug.log(`Clipboard GET ignored (not master) for pane ${paneId}`);
+      clipboardLog.log(`GET ignored (not master) for pane ${paneId}`);
       return;
     }
 
@@ -757,16 +760,16 @@ export function initConnection() {
       // Return from internal clipboard
       const base64Data = btoa(entry.text);
       conn.sendClipboardResponse(paneId, clipboard, base64Data);
-      debug.log(`Clipboard GET for pane ${paneId}: sent ${entry.text.length} chars from internal '${kind}'`);
+      clipboardLog.log(`GET pane ${paneId}: sent ${entry.text.length} chars from internal '${kind}'`);
     } else {
       // Internal clipboard empty, try system clipboard as fallback
       try {
         const text = await pasteFromClipboard();
         const base64Data = btoa(text);
         conn.sendClipboardResponse(paneId, clipboard, base64Data);
-        debug.log(`Clipboard GET for pane ${paneId}: sent ${text.length} chars from system clipboard (fallback)`);
+        clipboardLog.log(`GET pane ${paneId}: sent ${text.length} chars from system (fallback)`);
       } catch (err) {
-        debug.warn("Clipboard GET failed:", err);
+        clipboardLog.warn("GET failed:", err);
         // Send empty response on failure so terminal doesn't hang
         conn.sendClipboardResponse(paneId, clipboard, "");
       }
@@ -833,6 +836,6 @@ function playBellAudio() {
     oscillator.start(ctx.currentTime);
     oscillator.stop(ctx.currentTime + AUDIO.DECAY_TIME);
   } catch (e) {
-    debug.warn("Failed to play bell audio:", e);
+    storeLog.warn("Failed to play bell audio:", e);
   }
 }

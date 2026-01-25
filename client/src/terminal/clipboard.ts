@@ -10,6 +10,8 @@
 
 import { debug } from "../debug";
 import { cellToChar } from "../../../protocol/schema/cell";
+
+const clipboardLog = debug.category('clipboard');
 import type { Cell, GraphemeTable } from "../../../protocol/schema/cell";
 import {
   normalizeSelectionBounds,
@@ -52,7 +54,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     }
     return success;
   } catch (err) {
-    debug.warn("Clipboard write failed:", err);
+    clipboardLog.warn("Clipboard write failed:", err);
     // Try fallback on permission error
     const success = fallbackCopy(text);
     if (!success) {
@@ -76,7 +78,7 @@ export async function pasteFromClipboard(): Promise<string> {
     return "";
   } catch (err) {
     // Permission denied or not in secure context
-    debug.warn("Clipboard read failed:", err);
+    clipboardLog.warn("Clipboard read failed:", err);
     window.alert(`Paste failed: ${err instanceof Error ? err.message : "Permission denied or not in secure context"}`);
     return "";
   }
@@ -107,7 +109,7 @@ function fallbackCopy(text: string): boolean {
     document.body.removeChild(textarea);
     return success;
   } catch (err) {
-    debug.warn("Fallback copy failed:", err);
+    clipboardLog.warn("Fallback copy failed:", err);
     return false;
   }
 }
@@ -170,7 +172,7 @@ export function getTerminalSelectionText(
     selection.startY >= termRows ||
     selection.endY >= termRows
   ) {
-    debug.warn(
+    clipboardLog.warn(
       `Selection bounds out of range: (${selection.startX},${selection.startY})-(${selection.endX},${selection.endY}) for ${cols}x${termRows} terminal`
     );
     return "";

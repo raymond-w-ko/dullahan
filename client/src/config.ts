@@ -7,6 +7,8 @@
 
 import { debug } from "./debug";
 
+const configLog = debug.category('config');
+
 // Type definitions for config values
 export interface ConfigSchema {
   // Theme
@@ -169,7 +171,7 @@ export function set<K extends ConfigKey>(key: K, value: ConfigValue<K>): void {
     }));
   } catch {
     // localStorage might be unavailable
-    debug.warn(`Failed to save config: ${key}`);
+    configLog.warn(`Failed to save config: ${key}`);
   }
 }
 
@@ -184,7 +186,7 @@ export function remove(key: ConfigKey): void {
       detail: { key, value: DEFAULTS[key] } 
     }));
   } catch {
-    debug.warn(`Failed to remove config: ${key}`);
+    configLog.warn(`Failed to remove config: ${key}`);
   }
 }
 

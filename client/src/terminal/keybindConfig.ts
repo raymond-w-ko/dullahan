@@ -8,6 +8,8 @@
 
 import { debug } from "../debug";
 import type { KeybindEntry } from "./keyboard";
+
+const keybindLog = debug.category('keybind');
 import type { TerminalAction } from "./actions";
 import { parseKeybind } from "./keybinds";
 import { parseStringLiteral } from "./stringLiteral";
@@ -157,7 +159,7 @@ export function parseAction(actionStr: string): TerminalAction | null {
         try {
           return { type: "send_text", text: parseStringLiteral(param) };
         } catch (err) {
-          debug.warn(`Invalid text: action: ${err}`);
+          keybindLog.warn(`Invalid text: action: ${err}`);
           return null;
         }
       }
@@ -169,7 +171,7 @@ export function parseAction(actionStr: string): TerminalAction | null {
         try {
           return { type: "send_text", text: "\x1b[" + parseStringLiteral(param) };
         } catch (err) {
-          debug.warn(`Invalid csi: action: ${err}`);
+          keybindLog.warn(`Invalid csi: action: ${err}`);
           return null;
         }
       }
@@ -181,14 +183,14 @@ export function parseAction(actionStr: string): TerminalAction | null {
         try {
           return { type: "send_text", text: "\x1b" + parseStringLiteral(param) };
         } catch (err) {
-          debug.warn(`Invalid esc: action: ${err}`);
+          keybindLog.warn(`Invalid esc: action: ${err}`);
           return null;
         }
       }
       return null;
 
     default:
-      debug.warn(`Unknown keybind action: ${actionStr}`);
+      keybindLog.warn(`Unknown keybind action: ${actionStr}`);
       return null;
   }
 }
@@ -212,7 +214,7 @@ export function parseKeybindConfig(configStr: string): KeybindEntry | null {
 
   const eqIdx = str.indexOf("=");
   if (eqIdx < 0) {
-    debug.warn(`Invalid keybind config (no '='): ${configStr}`);
+    keybindLog.warn(`Invalid keybind config (no '='): ${configStr}`);
     return null;
   }
 
@@ -220,7 +222,7 @@ export function parseKeybindConfig(configStr: string): KeybindEntry | null {
   const actionStr = str.slice(eqIdx + 1).trim();
 
   if (!keybindStr || !actionStr) {
-    debug.warn(`Invalid keybind config (empty parts): ${configStr}`);
+    keybindLog.warn(`Invalid keybind config (empty parts): ${configStr}`);
     return null;
   }
 
@@ -234,7 +236,7 @@ export function parseKeybindConfig(configStr: string): KeybindEntry | null {
 
     return { keybind, action, performable };
   } catch (err) {
-    debug.warn(`Failed to parse keybind config: ${configStr}`, err);
+    keybindLog.warn(`Failed to parse keybind config: ${configStr}`, err);
     return null;
   }
 }
@@ -298,7 +300,7 @@ export function setCustomKeybinds(keybinds: string[] | null): void {
       new CustomEvent("keybinds-change", { detail: { keybinds } })
     );
   } catch {
-    debug.warn("Failed to save custom keybinds");
+    keybindLog.warn("Failed to save custom keybinds");
   }
 }
 

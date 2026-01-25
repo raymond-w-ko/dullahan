@@ -4,6 +4,8 @@
 import { Component, type ComponentChildren } from "preact";
 import { debug } from "../debug";
 
+const errorLog = debug.category('error');
+
 interface Props {
   children: ComponentChildren;
   fallback?: (error: Error, reset: () => void) => ComponentChildren;
@@ -21,9 +23,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
-    debug.error("React error boundary caught:", error);
+    errorLog.error("React error boundary caught:", error);
     if (errorInfo.componentStack) {
-      debug.error("Component stack:", errorInfo.componentStack);
+      errorLog.error("Component stack:", errorInfo.componentStack);
     }
   }
 

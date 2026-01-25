@@ -7,6 +7,8 @@
 
 import { debug } from "../debug";
 import { getCellDimensions, getPadding } from "./dimensions";
+
+const mouseLog = debug.category('mouse');
 import { get as getConfig } from "../config";
 import { isValidHyperlinkUrl } from "./hyperlink";
 import type { MouseMessage } from "../../../protocol/schema/messages";
@@ -230,8 +232,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
 
     // Debug output
     const buttonName = ["left", "middle", "right"][e.button] ?? `button${e.button}`;
-    debug.log(
-      `[mouse] pane=${this._paneId} ${buttonName} down at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
+    mouseLog.log(
+      `pane=${this._paneId} ${buttonName} down at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
         (e.shiftKey ? " +shift" : "") +
@@ -261,7 +263,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
     ) {
       const url = this.hyperlinkLookup?.(coords.x, coords.y);
       if (url && isValidHyperlinkUrl(url)) {
-        debug.log(`[mouse] hyperlink click at (${coords.x}, ${coords.y}): ${url}`);
+        mouseLog.log(`[mouse] hyperlink click at (${coords.x}, ${coords.y}): ${url}`);
         window.open(url, "_blank", "noopener,noreferrer");
         this.mouseDownCell = null;
         // Restore focus to IME textarea
@@ -291,8 +293,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
 
     // Debug output
     const buttonName = ["left", "middle", "right"][e.button] ?? `button${e.button}`;
-    debug.log(
-      `[mouse] pane=${this._paneId} ${buttonName} up at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
+    mouseLog.log(
+      `pane=${this._paneId} ${buttonName} up at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
         (e.shiftKey ? " +shift" : "") +
@@ -379,8 +381,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       timestamp: performance.now(),
     };
 
-    debug.log(
-      `[mouse] pane=${this._paneId} move at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
+    mouseLog.log(
+      `pane=${this._paneId} move at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (this.buttonsPressed ? ` buttons=${this.buttonsPressed}` : "") +
         (e.ctrlKey ? " +ctrl" : "") +
         (e.altKey ? " +alt" : "") +
@@ -430,8 +432,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
         timestamp: performance.now(),
       };
 
-      debug.log(
-        `[mouse] pane=${this._paneId} wheel ${e.deltaY < 0 ? "up" : "down"} at (${coords.x}, ${coords.y})` +
+      mouseLog.log(
+        `pane=${this._paneId} wheel ${e.deltaY < 0 ? "up" : "down"} at (${coords.x}, ${coords.y})` +
           (e.ctrlKey ? " +ctrl" : "") +
           (e.altKey ? " +alt" : "") +
           (e.shiftKey ? " +shift" : "") +
@@ -460,8 +462,8 @@ export class MouseHandler implements InputHandler<MouseCallback> {
         timestamp: performance.now(),
       };
 
-      debug.log(
-        `[mouse] pane=${this._paneId} wheel ${e.deltaX < 0 ? "left" : "right"} at (${coords.x}, ${coords.y})` +
+      mouseLog.log(
+        `pane=${this._paneId} wheel ${e.deltaX < 0 ? "left" : "right"} at (${coords.x}, ${coords.y})` +
           (e.ctrlKey ? " +ctrl" : "") +
           (e.altKey ? " +alt" : "") +
           (e.shiftKey ? " +shift" : "") +
