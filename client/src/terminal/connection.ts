@@ -418,6 +418,8 @@ export class TerminalConnection {
         const paneId = msg.paneId;
         const paneState = this.getPaneState(paneId);
 
+        // Always log snapshot dimensions for debugging pane size issues
+        console.log(`[snapshot] pane ${paneId}: server says ${msg.cols}x${msg.rows}`);
         debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
@@ -773,7 +775,8 @@ export class TerminalConnection {
     }
 
     for (const [paneId, size] of this._pendingResizes) {
-      debug.log(`Sending resize for pane ${paneId}: ${size.cols}x${size.rows}`);
+      // Always log resize sends for debugging
+      console.log(`[resize] pane ${paneId}: sending ${size.cols}x${size.rows} to server`);
       this.send({ type: "resize", paneId, cols: size.cols, rows: size.rows });
       this._lastSentResizes.set(paneId, size);
     }

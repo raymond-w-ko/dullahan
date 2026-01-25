@@ -69,6 +69,8 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
         if (!isActive) return;
 
         const size = connection.calculatePaneSize(container);
+        // Always log dimension calculations for debugging
+        console.log(`[dim] pane ${currentPaneId}: measured ${size.cols}x${size.rows}, container: ${container.clientWidth}x${container.clientHeight}`);
         if (size.cols > 0 && size.rows > 0) {
           // Update store and notify server with the captured paneId
           setPaneDimensions(currentPaneId, size.cols, size.rows);
