@@ -33,6 +33,8 @@ const messages = @import("messages.zig");
 const dlog = @import("dlog.zig");
 const ipc_commands = @import("ipc_commands.zig");
 const ws_proxy = @import("ws_proxy.zig");
+const client_state = @import("client_state.zig");
+const ClientState = client_state.ClientState;
 
 const log = std.log.scoped(.event_loop);
 
@@ -137,89 +139,6 @@ const ParsedSelectAll = messages.ParsedSelectAll;
 const ParsedClearSelection = messages.ParsedClearSelection;
 const ParsedClipboardResponse = messages.ParsedClipboardResponse;
 const JsonCleanup = messages.JsonCleanup;
-
-// ============================================================================
-// Client State
-// ============================================================================
-
-pub const ClientState = struct {
-    ws: websocket.Connection,
-    pane_generations: std.AutoHashMap(u16, u64),
-    connected: bool = true,
-    allocator: std.mem.Allocator,
-
-    /// Client's unique ID (set when client sends "hello" message)
-    /// UUIDv4 format, e.g. "550e8400-e29b-41d4-a716-446655440000"
-    client_id: ?[]const u8 = null,
-
-    /// Whether the client has been authenticated.
-    /// In dev mode, clients are auto-authenticated on hello.
-    /// Future: will require token validation.
-    authenticated: bool = false,
-
-    /// Auth token from hello message (for future token validation)
-    auth_token: ?[]const u8 = null,
-
-    pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
-        return .{
-            .ws = ws,
-            .pane_generations = std.AutoHashMap(u16, u64).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *ClientState) void {
-        // Free client ID if allocated
-        if (self.client_id) |id| {
-            self.allocator.free(id);
-        }
-        // Free auth token if allocated
-        if (self.auth_token) |token| {
-            self.allocator.free(token);
-        }
-        self.pane_generations.deinit();
-        self.ws.close();
-        self.connected = false;
-    }
-
-    /// Set the client ID (called when "hello" message is received)
-    pub fn setClientId(self: *ClientState, id: []const u8) !void {
-        // Free old ID if any
-        if (self.client_id) |old_id| {
-            self.allocator.free(old_id);
-        }
-        // Allocate and copy new ID
-        self.client_id = try self.allocator.dupe(u8, id);
-    }
-
-    /// Set the auth token (called when "hello" message is received with token)
-    pub fn setAuthToken(self: *ClientState, token: []const u8) !void {
-        // Free old token if any
-        if (self.auth_token) |old_token| {
-            self.allocator.free(old_token);
-        }
-        // Allocate and copy new token
-        self.auth_token = try self.allocator.dupe(u8, token);
-    }
-
-    /// Get short client ID for logging (first 8 chars or "anonymous")
-    pub fn shortId(self: *const ClientState) []const u8 {
-        if (self.client_id) |id| {
-            return if (id.len >= 8) id[0..8] else id;
-        }
-        return "anon";
-    }
-
-    pub fn getGeneration(self: *ClientState, pane_id: u16) u64 {
-        return self.pane_generations.get(pane_id) orelse 0;
-    }
-
-    pub fn setGeneration(self: *ClientState, pane_id: u16, gen: u64) void {
-        self.pane_generations.put(pane_id, gen) catch |e| {
-            logRecoverable("pane generation tracking", e);
-        };
-    }
-};
 
 // ============================================================================
 // Event Loop
