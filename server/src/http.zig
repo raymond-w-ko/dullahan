@@ -223,8 +223,12 @@ pub const Server = struct {
 
     /// Serve a static file (from embedded assets or filesystem)
     fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) void {
+        // Strip query string if present (e.g., "/?debug" -> "/")
+        const query_idx = std.mem.indexOf(u8, url_path, "?");
+        const path_only = if (query_idx) |idx| url_path[0..idx] else url_path;
+
         // Try embedded assets first (for single-binary distribution)
-        if (self.serveEmbeddedFile(stream, url_path, request)) {
+        if (self.serveEmbeddedFile(stream, path_only, request)) {
             return;
         }
 
@@ -234,7 +238,7 @@ pub const Server = struct {
         };
 
         // Sanitize path - remove leading slash, handle directory traversal
-        var clean_path = url_path;
+        var clean_path = path_only;
         if (clean_path.len > 0 and clean_path[0] == '/') {
             clean_path = clean_path[1..];
         }
