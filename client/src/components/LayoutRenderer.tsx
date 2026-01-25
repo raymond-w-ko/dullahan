@@ -145,6 +145,7 @@ function NodeRenderer({
 
   if (isPane(node)) {
     // Pane node - render terminal
+    // Key includes windowId to force complete remount when switching windows
     return (
       <div
         key={`pane-${node.paneId ?? index}`}
@@ -152,7 +153,7 @@ function NodeRenderer({
         style={style}
       >
         {node.paneId !== undefined ? (
-          <TerminalPane paneId={node.paneId} windowId={windowId} />
+          <TerminalPane key={`${windowId}-${node.paneId}`} paneId={node.paneId} windowId={windowId} />
         ) : (
           <div class="terminal--empty">
             <span class="terminal-placeholder-text">No pane assigned</span>
