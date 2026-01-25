@@ -5,17 +5,9 @@
 
 const std = @import("std");
 const posix = std.posix;
-const builtin = @import("builtin");
-const msgpack = @import("msgpack");
-
-const sys = @cImport({
-    @cInclude("sys/ioctl.h");
-});
 const constants = @import("constants.zig");
 const ipc = @import("ipc.zig");
 const http = @import("http.zig");
-const paths = @import("paths.zig");
-const shell = @import("shell.zig");
 const websocket = @import("websocket.zig");
 const snapshot = @import("snapshot.zig");
 const layout_db = @import("layout_db.zig");
@@ -23,15 +15,8 @@ const layout_helpers = @import("layout_helpers.zig");
 const message_parsing = @import("message_parsing.zig");
 const message_handlers = @import("message_handlers.zig");
 const Session = @import("session.zig").Session;
-const Window = @import("window.zig").Window;
-const pane_mod = @import("pane.zig");
-const Pane = pane_mod.Pane;
-const MouseEvents = pane_mod.MouseEvents;
-const MouseFormat = pane_mod.MouseFormat;
-const ShellIntegrationEvent = pane_mod.ShellIntegrationEvent;
+const Pane = @import("pane.zig").Pane;
 const signal = @import("signal.zig");
-const mouse = @import("mouse.zig");
-const keyboard = @import("keyboard.zig");
 const messages = @import("messages.zig");
 const dlog = @import("dlog.zig");
 const ipc_commands = @import("ipc_commands.zig");
@@ -44,79 +29,18 @@ const log = std.log.scoped(.event_loop);
 // Category-scoped debug loggers
 const conn_log = dlog.scoped(.connection);
 const clip_log = dlog.scoped(.clipboard);
-const window_log = dlog.scoped(.window);
 const theme_log = dlog.scoped(.theme);
 
-// ============================================================================
-// Error Handling Helpers
-// ============================================================================
-//
-// Standardized error handling to ensure consistent logging and behavior.
-// Categories:
-//   - fatal: Server should exit (e.g., failed to start IPC)
-//   - client: Log and potentially disconnect client
-//   - recoverable: Log at info/debug level and continue
-//   - silent: Truly ignorable (e.g., failed to send close frame)
-
-/// Log a recoverable error with context. Server continues operation.
+// Error helpers
 fn logRecoverable(comptime context: []const u8, err: anyerror) void {
     log.info("[recoverable] {s}: {any}", .{ context, err });
 }
 
-
-/// Log a client-related error. May result in client disconnect.
 fn logClientError(comptime context: []const u8, err: anyerror) void {
     log.warn("[client] {s}: {any}", .{ context, err });
 }
 
-/// Log and handle a fatal error. Server should exit after this.
-fn logFatal(comptime context: []const u8, err: anyerror) noreturn {
-    log.err("[FATAL] {s}: {any}", .{ context, err });
-    std.process.exit(1);
-}
-
-// ============================================================================
-// Message Types (imported from messages.zig)
-// ============================================================================
-
-const KeyEvent = messages.KeyEvent;
-const TextMessage = messages.TextMessage;
-const ResizeMessage = messages.ResizeMessage;
-const ScrollMessage = messages.ScrollMessage;
-const SyncMessage = messages.SyncMessage;
-const FocusMessage = messages.FocusMessage;
-const MouseMessage = messages.MouseMessage;
-const HelloMessage = messages.HelloMessage;
-const NewWindowMessage = messages.NewWindowMessage;
-const CloseWindowMessage = messages.CloseWindowMessage;
-const ClosePaneMessage = messages.ClosePaneMessage;
-const SetLayoutMessage = messages.SetLayoutMessage;
-const SwapPanesMessage = messages.SwapPanesMessage;
-const ResizeLayoutMessage = messages.ResizeLayoutMessage;
-const ClipboardResponseMessage = messages.ClipboardResponseMessage;
-const ClipboardSetMessage = messages.ClipboardSetMessage;
-const MessageType = messages.MessageType;
-
 const ParsedMessage = messages.ParsedMessage;
-const ParsedKeyEvent = messages.ParsedKeyEvent;
-const ParsedText = messages.ParsedText;
-const ParsedResize = messages.ParsedResize;
-const ParsedScroll = messages.ParsedScroll;
-const ParsedSync = messages.ParsedSync;
-const ParsedFocus = messages.ParsedFocus;
-const ParsedHello = messages.ParsedHello;
-const ParsedNewWindow = messages.ParsedNewWindow;
-const ParsedCloseWindow = messages.ParsedCloseWindow;
-const ParsedClosePane = messages.ParsedClosePane;
-const ParsedMouse = messages.ParsedMouse;
-const ParsedSelectAll = messages.ParsedSelectAll;
-const ParsedClearSelection = messages.ParsedClearSelection;
-const ParsedClipboardResponse = messages.ParsedClipboardResponse;
-const JsonCleanup = messages.JsonCleanup;
-
-// ============================================================================
-// Event Loop
-// ============================================================================
 
 pub const EventLoop = struct {
     allocator: std.mem.Allocator,
@@ -203,16 +127,7 @@ pub const EventLoop = struct {
         return std.time.timestamp() - self.start_time;
     }
 
-    // ========================================================================
-    // WebSocket Proxy Methods
-    // ========================================================================
-    // These methods centralize WebSocket send operations, enabling:
-    // - Authentication checks before message processing
-    // - Permission validation (master vs slave)
-    // - Future extensibility (rate limiting, audit logging, metrics)
-
-    /// Broadcast binary message to all clients (including unauthenticated).
-    /// Use for messages that everyone should receive, like during initial connection.
+    // WebSocket proxy methods
     pub fn wsBroadcastAll(self: *EventLoop, msg: []const u8) void {
         ws_proxy.WsProxy.broadcastAll(&self.clients, msg);
     }
@@ -475,80 +390,52 @@ pub const EventLoop = struct {
 
         var client = ClientState.init(self.allocator, ws_conn.?);
 
-        // Send initial snapshots for all panes via registry
-        log.info("Sending initial snapshots for {d} panes", .{self.session.pane_registry.count()});
+        // Send initial snapshots for all panes
         var pane_it = self.session.pane_registry.iterator();
         while (pane_it.next()) |pane_ptr| {
             const pane = pane_ptr.*;
-            log.info("Sending snapshot for pane {d}, gen={d}", .{ pane.id, pane.generation });
             self.sendSnapshot(&client.ws, pane) catch |e| {
                 logClientError("send initial snapshot", e);
                 client.deinit();
                 return;
             };
-            // Don't call clearDirtyRows() here - initial snapshot sends full state,
-            // and clearing would reset dirty_base_gen which affects broadcast deltas
-            // for other clients or subsequent updates
             client.setGeneration(pane.id, pane.generation);
         }
 
-        // Send layout message (window→pane mappings + available templates)
-        {
-            // Log current window layout dimensions for debugging
-            var win_it = self.session.windows.iterator();
-            while (win_it.next()) |entry| {
-                const win_id = entry.key_ptr.*;
-                const win = entry.value_ptr;
-                if (win.layout_nodes) |nodes| {
-                    log.info("Sending layout to client {s} - window {d} dimensions:", .{ client.shortId(), win_id });
-                    layout_helpers.logLayoutDimensions(nodes, 0);
-                }
-            }
-
-            const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
-                logClientError("generate layout message", e);
-                client.deinit();
-                return;
-            };
-            defer self.allocator.free(layout_msg);
-            self.wsSendUnchecked(&client, layout_msg) catch |e| {
-                logClientError("send layout message", e);
-                client.deinit();
-                return;
-            };
-        }
+        // Send layout message
+        const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
+            logClientError("generate layout message", e);
+            client.deinit();
+            return;
+        };
+        defer self.allocator.free(layout_msg);
+        self.wsSendUnchecked(&client, layout_msg) catch |e| {
+            logClientError("send layout message", e);
+            client.deinit();
+            return;
+        };
 
         // Send current master state
-        {
-            const master_msg = snapshot.generateMasterChangedMessage(self.allocator, self.master_id) catch |e| {
-                logClientError("generate master_changed message", e);
-                client.deinit();
-                return;
-            };
-            defer self.allocator.free(master_msg);
-            self.wsSendUnchecked(&client, master_msg) catch |e| {
-                logClientError("send master_changed message", e);
-                client.deinit();
-                return;
-            };
-        }
+        const master_msg = snapshot.generateMasterChangedMessage(self.allocator, self.master_id) catch |e| {
+            logClientError("generate master_changed message", e);
+            client.deinit();
+            return;
+        };
+        defer self.allocator.free(master_msg);
+        self.wsSendUnchecked(&client, master_msg) catch |e| {
+            logClientError("send master_changed message", e);
+            client.deinit();
+            return;
+        };
 
-        // Set short read/write timeouts so the event loop doesn't block
-        // This allows the loop to check for shutdown signals even if:
-        // - A client sends an incomplete WebSocket frame (read blocks)
-        // - A client disconnects while we're trying to send (write blocks)
         client.ws.setTimeouts(100);
-
         try self.clients.append(self.allocator, client);
-        log.info("Client connected, total clients: {d}", .{self.clients.items.len});
-        conn_log.info("Client connected, total clients: {d}", .{self.clients.items.len});
+        conn_log.info("Client connected, total: {d}", .{self.clients.items.len});
     }
 
     fn handleWsClient(self: *EventLoop, client_idx: usize) !void {
         var client = &self.clients.items[client_idx];
-        var ws = &client.ws;
-
-        const frame = try ws.readFrame();
+        const frame = try client.ws.readFrame();
         defer self.allocator.free(frame.payload);
 
         switch (frame.opcode) {
@@ -556,15 +443,7 @@ pub const EventLoop = struct {
                 if (message_parsing.parseJsonMessage(self.allocator, frame.payload)) |result| {
                     var cleanup = result.cleanup;
                     defer cleanup.deinit();
-
-                    // Auth gate: only allow hello messages from unauthenticated clients
-                    if (!client.authenticated) {
-                        if (result.msg != .hello) {
-                            log.warn("Dropping non-hello message from unauthenticated client {s}", .{client.shortId()});
-                            return;
-                        }
-                    }
-
+                    if (!client.authenticated and result.msg != .hello) return;
                     try self.handleParsedMessage(result.msg, client);
                     try self.sendClientUpdates(client);
                 }
@@ -572,81 +451,46 @@ pub const EventLoop = struct {
             .binary => {
                 if (message_parsing.parseMsgpackMessage(self.allocator, frame.payload)) |result| {
                     defer result.payload.free(self.allocator);
-
-                    // Auth gate: only allow hello messages from unauthenticated clients
-                    if (!client.authenticated) {
-                        if (result.msg != .hello) {
-                            log.warn("Dropping non-hello message from unauthenticated client {s}", .{client.shortId()});
-                            return;
-                        }
-                    }
-
+                    if (!client.authenticated and result.msg != .hello) return;
                     try self.handleParsedMessage(result.msg, client);
                     try self.sendClientUpdates(client);
                 }
             },
-            .ping => {
-                ws.sendPong(frame.payload) catch {};
-            },
+            .ping => client.ws.sendPong(frame.payload) catch {},
             .pong => {},
             .close => {
-                ws.sendClose() catch {};
+                client.ws.sendClose() catch {};
                 return error.ConnectionClosed;
             },
-            else => {
-                log.warn("Unknown opcode: {any}", .{@intFromEnum(frame.opcode)});
-            },
+            else => {},
         }
     }
 
     fn handlePtyData(self: *EventLoop, pane: *Pane) !void {
         var buf: [constants.buffer.general]u8 = undefined;
+        const pty = &(pane.pty orelse return);
 
-        if (pane.pty) |*pty| {
-            const n = pty.read(&buf) catch |e| {
-                if (e == error.WouldBlock) {
-                    // Non-blocking read with no data - this is normal
-                    return;
-                }
-                if (e == error.InputOutput or e == error.BrokenPipe) {
-                    log.info("PTY closed for pane {d}", .{pane.id});
-                    _ = pane.isAlive();
-                }
-                return e;
-            };
+        const n = pty.read(&buf) catch |e| {
+            if (e == error.WouldBlock) return;
+            if (e == error.InputOutput or e == error.BrokenPipe) _ = pane.isAlive();
+            return e;
+        };
+        if (n == 0) return;
 
-            if (n > 0) {
-                self.session.logPtyRecv(pane.id, buf[0..n]);
-                try pane.feed(buf[0..n]);
+        self.session.logPtyRecv(pane.id, buf[0..n]);
+        try pane.feed(buf[0..n]);
 
-                // Check for synchronized output mode (DECSET 2026) transitions
-                // Returns true if sync mode just ended (need to flush immediately)
-                const sync_just_ended = pane.checkSyncModeTransition();
+        const sync_just_ended = pane.checkSyncModeTransition();
+        self.handlePaneClipboard(pane);
+        self.handlePaneShellIntegration(pane);
 
-                // Handle clipboard operations (OSC 52) BEFORE sending pane updates
-                // This ensures clipboard messages are broadcast to all clients immediately
-                self.handlePaneClipboard(pane);
-
-                // Handle shell integration events (OSC 133) - broadcast to all clients
-                self.handlePaneShellIntegration(pane);
-
-                // Send updates only if not in sync mode, OR if sync just ended
-                // When sync mode is enabled, updates are deferred until mode is disabled
-                if (!pane.sync_output_enabled or sync_just_ended) {
-                    // Send updates for both the PTY pane and the debug pane
-                    // (debug pane was updated by logPtyRecv)
-                    const debug_pane = self.session.getDebugPane();
-                    for (self.clients.items) |*client| {
-                        self.sendPaneUpdate(client, pane) catch |e| {
-                            logClientError("send pane update", e);
-                        };
-                        if (debug_pane) |dp| {
-                            if (dp.id != pane.id) { // Don't send twice if this IS the debug pane
-                                self.sendPaneUpdate(client, dp) catch |e| {
-                                    logClientError("send debug pane update", e);
-                                };
-                            }
-                        }
+        if (!pane.sync_output_enabled or sync_just_ended) {
+            const debug_pane = self.session.getDebugPane();
+            for (self.clients.items) |*client| {
+                self.sendPaneUpdate(client, pane) catch |e| logClientError("send pane update", e);
+                if (debug_pane) |dp| {
+                    if (dp.id != pane.id) {
+                        self.sendPaneUpdate(client, dp) catch |e| logClientError("send debug update", e);
                     }
                 }
             }
@@ -914,44 +758,24 @@ pub const EventLoop = struct {
     /// Send current IPC clipboard state to a client.
     /// Called when a client first connects (after hello) to sync clipboard state.
     pub fn sendIpcClipboardState(self: *EventLoop, client: *ClientState) !void {
-        // Send clipboard 'c' if set
-        if (self.ipc_clipboard_c) |text| {
-            const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
-            const base64_data = try self.allocator.alloc(u8, encoded_len);
-            defer self.allocator.free(base64_data);
-            _ = std.base64.standard.Encoder.encode(base64_data, text);
+        // Send both clipboard types if set
+        const clipboards = [_]struct { kind: u8, text: ?[]const u8 }{
+            .{ .kind = 'c', .text = self.ipc_clipboard_c },
+            .{ .kind = 'p', .text = self.ipc_clipboard_p },
+        };
+        for (clipboards) |cb| {
+            if (cb.text) |text| {
+                const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
+                const base64_data = try self.allocator.alloc(u8, encoded_len);
+                defer self.allocator.free(base64_data);
+                _ = std.base64.standard.Encoder.encode(base64_data, text);
 
-            const msg = try snapshot.generateClipboardMessage(
-                self.allocator,
-                0, // pane_id doesn't matter for IPC clipboard
-                "set",
-                'c',
-                base64_data,
-            );
-            defer self.allocator.free(msg);
+                const msg = try snapshot.generateClipboardMessage(self.allocator, 0, "set", cb.kind, base64_data);
+                defer self.allocator.free(msg);
 
-            try client.ws.sendBinary(msg);
-            clip_log.info("Sent IPC clipboard 'c' to new client: {d} bytes", .{text.len});
-        }
-
-        // Send clipboard 'p' if set
-        if (self.ipc_clipboard_p) |text| {
-            const encoded_len = std.base64.standard.Encoder.calcSize(text.len);
-            const base64_data = try self.allocator.alloc(u8, encoded_len);
-            defer self.allocator.free(base64_data);
-            _ = std.base64.standard.Encoder.encode(base64_data, text);
-
-            const msg = try snapshot.generateClipboardMessage(
-                self.allocator,
-                0,
-                "set",
-                'p',
-                base64_data,
-            );
-            defer self.allocator.free(msg);
-
-            try client.ws.sendBinary(msg);
-            clip_log.info("Sent IPC clipboard 'p' to new client: {d} bytes", .{text.len});
+                try client.ws.sendBinary(msg);
+                clip_log.info("Sent IPC clipboard '{c}' to new client: {d} bytes", .{ cb.kind, text.len });
+            }
         }
     }
 
@@ -1130,13 +954,7 @@ pub const EventLoop = struct {
         pane.clearShellEvent();
     }
 
-
-    // ========================================================================
-    // Unified Message Handler (delegated to message_handlers.zig)
-    // ========================================================================
-
-    /// Handle a parsed message (works for both JSON and msgpack protocols).
-    /// Delegates to message_handlers.handleParsedMessage for the actual handling.
+    // Message handler delegation
     fn handleParsedMessage(self: *EventLoop, msg: ParsedMessage, client: *ClientState) !void {
         try message_handlers.handleParsedMessage(self, msg, client);
     }
