@@ -4,6 +4,7 @@ import { useModalBehavior } from "../hooks/useModalBehavior";
 import { useSettings } from "../hooks/useSettings";
 import type { SettingsState } from "../hooks/useSettings";
 import { THEMES } from "../themes";
+import { isDebug, setDebug } from "../debug";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -21,6 +22,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [isDragging, setIsDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const modalRef = useRef<HTMLDivElement>(null);
+
+  // Debug state (for checkbox reactivity)
+  const [debugEnabled, setDebugEnabled] = useState(isDebug());
 
   // Reset position when modal opens
   useEffect(() => {
@@ -309,6 +313,24 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 onChange={(e) => setSetting("mouseMove", inputChecked(e))}
               />
               <span class="settings-label">Send mouse move events</span>
+            </label>
+          </div>
+
+          {/* Developer */}
+          <div class="settings-section">
+            <h3>Developer</h3>
+
+            <label class="settings-field settings-field--checkbox">
+              <input
+                type="checkbox"
+                checked={debugEnabled}
+                onChange={(e) => {
+                  const enabled = inputChecked(e);
+                  setDebugEnabled(enabled);
+                  setDebug(enabled);
+                }}
+              />
+              <span class="settings-label">Enable debug logging (console)</span>
             </label>
           </div>
         </div>
