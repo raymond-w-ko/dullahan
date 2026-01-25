@@ -596,6 +596,17 @@ pub const EventLoop = struct {
 
         // Send layout message (window→pane mappings + available templates)
         {
+            // Log current window layout dimensions for debugging
+            var win_it = self.session.windows.iterator();
+            while (win_it.next()) |entry| {
+                const win_id = entry.key_ptr.*;
+                const win = entry.value_ptr;
+                if (win.layout_nodes) |nodes| {
+                    log.info("Sending layout to client {s} - window {d} dimensions:", .{ client.shortId(), win_id });
+                    logLayoutDimensions(nodes, 0);
+                }
+            }
+
             const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
                 logClientError("generate layout message", e);
                 client.deinit();
@@ -2356,7 +2367,10 @@ pub const EventLoop = struct {
                     return;
                 }
 
-                log.info("Resized layout for window {d}", .{window_id});
+                log.info("Resized layout for window {d} - new dimensions:", .{window_id});
+                if (window.layout_nodes) |nodes| {
+                    logLayoutDimensions(nodes, 0);
+                }
 
                 // Broadcast updated layout to all clients
                 self.broadcastLayout() catch |e| {

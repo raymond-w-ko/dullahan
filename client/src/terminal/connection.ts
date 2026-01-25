@@ -606,6 +606,15 @@ export class TerminalConnection {
           templates: msg.templates,
         };
         debug.log("Layout received:", msg.windows.length, "windows,", msg.templates?.length ?? 0, "templates, active:", msg.activeWindowId);
+        // Log layout dimensions for debugging
+        for (const win of windows) {
+          if (win.layout?.nodes) {
+            const dims = win.layout.nodes.map((n: { width: number; height: number }) =>
+              `${n.width.toFixed(1)}x${n.height.toFixed(1)}`
+            ).join(", ");
+            debug.log(`  Window ${win.id} layout dimensions: [${dims}]`);
+          }
+        }
         this.emit("layout", this._layout);
         break;
       }
