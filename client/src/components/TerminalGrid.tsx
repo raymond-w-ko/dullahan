@@ -2,7 +2,7 @@
 // Renders panes from a window's layout tree or falls back to simple grid
 
 import { h } from "preact";
-import { useCallback, useMemo } from "preact/hooks";
+import { useCallback } from "preact/hooks";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutRenderer } from "./LayoutRenderer";
 import { useStoreSubscription } from "../hooks/useStoreSubscription";

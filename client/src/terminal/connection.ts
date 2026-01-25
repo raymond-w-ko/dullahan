@@ -328,22 +328,23 @@ export class TerminalConnection {
     return this._panes.get(paneId)?.resyncCount ?? 0;
   }
 
-  /** Total delta count across all panes */
-  get totalDeltaCount(): number {
+  /** Sum a numeric property across all panes */
+  private _sumPaneProperty(prop: keyof PaneState): number {
     let total = 0;
     for (const pane of this._panes.values()) {
-      total += pane.deltaCount;
+      total += pane[prop] as number;
     }
     return total;
   }
 
+  /** Total delta count across all panes */
+  get totalDeltaCount(): number {
+    return this._sumPaneProperty("deltaCount");
+  }
+
   /** Total resync count across all panes */
   get totalResyncCount(): number {
-    let total = 0;
-    for (const pane of this._panes.values()) {
-      total += pane.resyncCount;
-    }
-    return total;
+    return this._sumPaneProperty("resyncCount");
   }
 
   /** Get cached row by ID for a pane, or undefined if not cached */

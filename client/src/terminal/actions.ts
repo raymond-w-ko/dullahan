@@ -335,6 +335,18 @@ export async function executeAction(
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/** Compute next/prev index with wraparound */
+function cycleIndex(current: number, length: number, direction: "next" | "prev"): number {
+  if (direction === "next") {
+    return (current + 1) % length;
+  }
+  return (current - 1 + length) % length;
+}
+
+// ============================================================================
 // Individual Action Handlers
 // ============================================================================
 
@@ -401,13 +413,7 @@ function handleCycleWindow(
   const currentIdx = windowIds.indexOf(activeId);
   if (currentIdx === -1) return;
 
-  let nextIdx: number;
-  if (action.direction === "next") {
-    nextIdx = (currentIdx + 1) % windowIds.length;
-  } else {
-    nextIdx = (currentIdx - 1 + windowIds.length) % windowIds.length;
-  }
-
+  const nextIdx = cycleIndex(currentIdx, windowIds.length, action.direction);
   const targetId = windowIds[nextIdx];
   if (targetId !== undefined) {
     ctx.switchWindow(targetId);
@@ -422,16 +428,10 @@ function handleFocusPane(action: FocusPaneAction, ctx: ActionContext): void {
   const currentIdx = paneIds.indexOf(focusedId);
   if (currentIdx === -1) return;
 
-  let nextIdx: number;
-  if (action.direction === "next") {
-    nextIdx = (currentIdx + 1) % paneIds.length;
-  } else if (action.direction === "prev") {
-    nextIdx = (currentIdx - 1 + paneIds.length) % paneIds.length;
-  } else {
-    // Directional focus (up/down/left/right) needs layout awareness
-    // For now, just cycle
-    nextIdx = (currentIdx + 1) % paneIds.length;
-  }
+  // Directional focus (up/down/left/right) needs layout awareness
+  // For now, treat all directions as next/prev cycling
+  const direction = action.direction === "prev" ? "prev" : "next";
+  const nextIdx = cycleIndex(currentIdx, paneIds.length, direction);
 
   const targetId = paneIds[nextIdx];
   if (targetId !== undefined) {

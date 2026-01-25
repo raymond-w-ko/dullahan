@@ -503,27 +503,8 @@ export interface DeltaUpdate {
 // Row ID Utilities
 // =============================================================================
 
-/**
- * Decode row IDs from a packed Uint8Array.
- * Row IDs are packed as little-endian u64 values (8 bytes each).
- */
-export function decodeRowIdsFromBytes(data: Uint8Array): bigint[] {
-  if (!data || data.length === 0) {
-    return [];
-  }
-
-  const rowIds: bigint[] = [];
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-
-  for (let i = 0; i < data.length; i += 8) {
-    const lo = view.getUint32(i, true);
-    const hi = view.getUint32(i + 4, true);
-    const rowId = BigInt(lo) | (BigInt(hi) << 32n);
-    rowIds.push(rowId);
-  }
-
-  return rowIds;
-}
+// Re-export from cell.ts to maintain backward compatibility
+export { decodeRowIds as decodeRowIdsFromBytes } from "./cell";
 
 /**
  * Encode row IDs to a packed Uint8Array.

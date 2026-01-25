@@ -131,18 +131,14 @@ export interface Store {
 
 type Listener = () => void;
 
-// Create initial pane state
-function createPaneState(
-  id: number,
-  title: string,
-  isReadOnly: boolean
-): PaneState {
+// Create initial pane state with default values
+function createPaneState(id: number): PaneState {
   return {
     id,
-    title,
+    title: `Pane ${id}`,
     snapshot: null,
     syncStats: { deltas: 0, resyncs: 0, gen: 0 },
-    isReadOnly,
+    isReadOnly: false,
     dimensions: { cols: 80, rows: 24 },
   };
 }
@@ -228,14 +224,7 @@ export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
   // Create pane if it doesn't exist (snapshots may arrive before layout)
   let pane = store.panes.get(paneId);
   if (!pane) {
-    pane = {
-      id: paneId,
-      title: `Pane ${paneId}`,
-      snapshot: null,
-      syncStats: { deltas: 0, resyncs: 0, gen: 0 },
-      isReadOnly: false,
-      dimensions: { cols: 80, rows: 24 },
-    };
+    pane = createPaneState(paneId);
     store.panes.set(paneId, pane);
   }
 
@@ -495,14 +484,7 @@ export function setLayout(layout: LayoutUpdate) {
   // Create pane states for any new panes we haven't seen
   for (const paneId of activePaneIds) {
     if (!store.panes.has(paneId)) {
-      store.panes.set(paneId, {
-        id: paneId,
-        title: `Pane ${paneId}`,
-        snapshot: null,
-        syncStats: { deltas: 0, resyncs: 0, gen: 0 },
-        isReadOnly: false,
-        dimensions: { cols: 80, rows: 24 },
-      });
+      store.panes.set(paneId, createPaneState(paneId));
     }
   }
 
