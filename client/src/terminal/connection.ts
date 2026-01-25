@@ -409,6 +409,10 @@ export class TerminalConnection {
   }
 
   private handleBinaryMessage(msg: ServerMessage): void {
+    // Log all message types for debugging
+    if (msg.type !== "snapshot" && msg.type !== "delta") {
+      console.log("[dullahan] Received message type:", msg.type);
+    }
     switch (msg.type) {
       case "snapshot": {
         const paneId = msg.paneId;
