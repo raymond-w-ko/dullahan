@@ -136,8 +136,9 @@ Server logs go to **three channels**:
    - Visible in browser UI
 
 3. **Stderr**
-   - Only for errors and `missing` level (unimplemented features)
-   - Ensures critical issues are visible even without log file
+   - In **release builds**: Only errors and `missing` level (unimplemented features)
+   - In **debug builds** (`zig build` without `-Doptimize`): **ALL logs** go to stderr
+   - Debug build behavior makes development easier - see all output in terminal
 
 ### API Reference
 

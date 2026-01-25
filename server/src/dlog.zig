@@ -3,7 +3,10 @@
 //! Provides logging to three channels:
 //! 1. Log file (/tmp/dullahan-<uid>/dullahan-dlog.log) - always
 //! 2. Debug console (pane 0) - when session is set
-//! 3. Stderr - for errors and unimplemented features
+//! 3. Stderr - for errors, unimplemented features, AND all logs in debug builds
+//!
+//! In debug builds (zig build without -Doptimize), ALL logs go to stderr
+//! for easier development. In release builds, only errors go to stderr.
 //!
 //! Category-scoped logging (preferred):
 //!   const log = @import("dlog.zig").scoped(.clipboard);
@@ -20,9 +23,14 @@
 //!   dullahan debug-log +all,-delta  (IPC command)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Pane = @import("pane.zig").Pane;
 const paths = @import("paths.zig");
 const debug_config = @import("debug_config.zig");
+
+/// Comptime check: are we in a debug build?
+/// In debug builds, all logs go to stderr for easier development.
+const is_debug_build = builtin.mode == .Debug;
 
 pub const Category = debug_config.Category;
 
@@ -135,8 +143,8 @@ fn logImpl(
         p.feedDirect(term_line) catch {};
     }
 
-    // 3. Log to stderr if requested (errors, missing features)
-    if (to_stderr) {
+    // 3. Log to stderr if requested (errors, missing features) or in debug builds
+    if (to_stderr or is_debug_build) {
         if (category != null) {
             std.debug.print("{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), cat_prefix, msg });
         } else {
