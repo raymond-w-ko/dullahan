@@ -11,7 +11,7 @@
  * - Bare ?debug (no value) defaults to +all for backward compatibility
  *
  * Categories: connection, sync, snapshot, delta, mouse, keyboard, keybind,
- *             clipboard, config, ime, resize, layout, store
+ *             clipboard, config, ime, resize, layout, store, shell
  */
 
 /** All known debug categories */
@@ -29,6 +29,7 @@ export const DEBUG_CATEGORIES = [
   'resize',      // Terminal resizing
   'layout',      // Layout messages
   'store',       // State store operations
+  'shell',       // Shell integration (OSC 133)
 ] as const;
 
 export type DebugCategory = (typeof DEBUG_CATEGORIES)[number];

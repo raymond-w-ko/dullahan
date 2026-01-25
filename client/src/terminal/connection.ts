@@ -8,6 +8,7 @@ const deltaLog = debug.category('delta');
 const syncLog = debug.category('sync');
 const resizeLog = debug.category('resize');
 const layoutLog = debug.category('layout');
+const shellLog = debug.category('shell');
 // WebSocket connection to dullahan server
 // Uses binary msgpack for efficient data transmission
 // Messages are compressed with Snappy
@@ -576,13 +577,8 @@ export class TerminalConnection {
         break;
       case "shell_integration": {
         // OSC 133 shell integration event
-        // Always log to console for debugging (TODO: remove after verification)
         const exitStr = msg.exitCode !== undefined ? ` exit=${msg.exitCode}` : "";
-        console.log(
-          `%c[shell]%c pane=${msg.paneId} event=${msg.event}${exitStr}`,
-          "color: #00aa00; font-weight: bold",
-          "color: inherit"
-        );
+        shellLog.log(`pane=${msg.paneId} event=${msg.event}${exitStr}`);
         this.emit("shellIntegration", msg.paneId, msg.event, msg.exitCode);
         break;
       }

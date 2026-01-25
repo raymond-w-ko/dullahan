@@ -258,6 +258,7 @@ console.log(getDebugConfig());  // Current config string
 | `resize` | Terminal resizing | Layout issues |
 | `layout` | Layout messages | Pane arrangement |
 | `store` | State store operations | State management |
+| `shell` | Shell integration (OSC 133) | Prompt/command events |
 
 ### Output
 
