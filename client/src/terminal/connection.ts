@@ -418,8 +418,6 @@ export class TerminalConnection {
         const paneId = msg.paneId;
         const paneState = this.getPaneState(paneId);
 
-        // Always log snapshot dimensions for debugging pane size issues
-        console.log(`[snapshot] pane ${paneId}: server says ${msg.cols}x${msg.rows}`);
         debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
@@ -736,14 +734,8 @@ export class TerminalConnection {
       return;
     }
 
-    // Log dimension changes for debugging pane confusion issues
-    if (lastSent) {
-      debug.log(`Pane ${paneId} resize: ${lastSent.cols}x${lastSent.rows} -> ${cols}x${rows}`);
-    } else {
-      debug.log(`Pane ${paneId} initial resize: ${cols}x${rows}`);
-    }
-
     // Queue the resize
+    debug.log(`Queued resize for pane ${paneId}: ${cols}x${rows}`);
     this._pendingResizes.set(paneId, { cols, rows });
 
     // Schedule debounced flush to avoid resize cascades in dev builds
@@ -775,8 +767,7 @@ export class TerminalConnection {
     }
 
     for (const [paneId, size] of this._pendingResizes) {
-      // Always log resize sends for debugging
-      console.log(`[resize] pane ${paneId}: sending ${size.cols}x${size.rows} to server`);
+      debug.log(`Sending resize for pane ${paneId}: ${size.cols}x${size.rows}`);
       this.send({ type: "resize", paneId, cols: size.cols, rows: size.rows });
       this._lastSentResizes.set(paneId, size);
     }

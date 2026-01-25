@@ -53,61 +53,35 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
 
     // Track the current paneId to prevent stale callbacks from affecting wrong panes
     const currentPaneId = paneId;
-    let rafId: number | null = null;
     let isActive = true;
 
-    const calculate = (source: string) => {
+    const calculate = () => {
       // Skip if this effect has been cleaned up (component unmounted or deps changed)
       if (!isActive) return;
 
-      // Use requestAnimationFrame to ensure layout is settled before measuring
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
+      const size = connection.calculatePaneSize(container);
+      if (size.cols > 0 && size.rows > 0) {
+        // Update store and notify server with the captured paneId
+        setPaneDimensions(currentPaneId, size.cols, size.rows);
+        connection.setPaneSize(currentPaneId, size.cols, size.rows);
       }
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        if (!isActive) return;
-
-        const size = connection.calculatePaneSize(container);
-        // Always log dimension calculations for debugging
-        console.log(`[dim] pane ${currentPaneId} (${source}): measured ${size.cols}x${size.rows}, container: ${container.clientWidth}x${container.clientHeight}`);
-        if (size.cols > 0 && size.rows > 0) {
-          // Update store and notify server with the captured paneId
-          setPaneDimensions(currentPaneId, size.cols, size.rows);
-          connection.setPaneSize(currentPaneId, size.cols, size.rows);
-        } else {
-          // Container not ready, schedule another attempt
-          console.log(`[dim] pane ${currentPaneId}: container not ready, will retry`);
-        }
-      });
     };
 
-    // Initial calculation
-    calculate("initial");
-
-    // Delayed recalculation - handles cases where layout hasn't settled yet
-    // (new windows, varying layouts, initial connection)
-    const delayedTimer = window.setTimeout(() => calculate("delayed-100ms"), 100);
-
-    // Additional delayed recalculation for slower layouts
-    const delayedTimer2 = window.setTimeout(() => calculate("delayed-300ms"), 300);
-
-    // Observe resize
+    // ResizeObserver is the primary mechanism - fires when container gets sized
     const observer = new ResizeObserver(() => {
-      calculate("resize-observer");
+      requestAnimationFrame(calculate);
     });
     observer.observe(container);
 
-    // Also recalculate when fonts load
-    document.fonts.ready.then(() => calculate("fonts-ready"));
+    // Fallback: delayed calculation for cases where ResizeObserver doesn't fire
+    // (e.g., container already at final size when observed)
+    const fallbackTimer = window.setTimeout(() => {
+      requestAnimationFrame(calculate);
+    }, 50);
 
     return () => {
       isActive = false;
-      window.clearTimeout(delayedTimer);
-      window.clearTimeout(delayedTimer2);
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-      }
+      window.clearTimeout(fallbackTimer);
       observer.disconnect();
     };
   }, [connection, paneId, isReadOnly, dimensionVersion]);
