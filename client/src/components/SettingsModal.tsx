@@ -171,7 +171,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 type="number"
                 min="1"
                 max="3"
-                step="0.1"
+                step="0.05"
                 value={settings.lineHeight}
                 onChange={(e) => setSetting("lineHeight", inputFloat(e))}
               />
