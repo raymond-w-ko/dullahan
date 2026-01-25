@@ -39,12 +39,14 @@ function NodesWithDividers({
   windowId,
   containerRef,
   onResize,
+  onDragEnd: parentDragEnd,
 }: {
   nodes: LayoutNode[];
   level: number;
   windowId?: number;
   containerRef: { current: HTMLElement | null };
   onResize: (index: number, deltaPercent: number) => void;
+  onDragEnd?: () => void;
 }) {
   const isHorizontal = level % 2 === 0;
   const direction = isHorizontal ? "horizontal" : "vertical";
@@ -75,7 +77,11 @@ function NodesWithDividers({
   const handleDragEnd = useCallback(() => {
     setActiveDivider(null);
     startSizesRef.current = null;
-  }, []);
+    // Notify parent that drag ended so it can send to server
+    if (parentDragEnd) {
+      parentDragEnd();
+    }
+  }, [parentDragEnd]);
 
   const elements: h.JSX.Element[] = [];
 
@@ -276,6 +282,7 @@ function ContainerRenderer({
         windowId={windowId}
         containerRef={containerRef}
         onResize={handleResize}
+        onDragEnd={handleDragEnd}
       />
     </div>
   );
@@ -376,6 +383,7 @@ export function LayoutRenderer({
         windowId={windowId}
         containerRef={containerRef}
         onResize={handleResize}
+        onDragEnd={handleDragEnd}
       />
     </div>
   );
