@@ -22,7 +22,6 @@ const process = @import("process.zig");
 const dlog = @import("dlog.zig");
 const shell = @import("shell.zig");
 const terminal_mod = @import("terminal.zig");
-const log_config = @import("log_config.zig");
 const clipboard_mod = @import("clipboard.zig");
 
 /// Re-exported for convenience
@@ -30,6 +29,12 @@ pub const ClipboardOp = clipboard_mod.ClipboardOp;
 pub const ClipboardHandler = clipboard_mod.ClipboardHandler;
 
 const log = std.log.scoped(.pane);
+
+// Category-scoped debug loggers
+const plog = dlog.scoped(.pane);
+const dsr_log = dlog.scoped(.dsr);
+const clip_log = dlog.scoped(.clipboard);
+const delta_log = dlog.scoped(.delta);
 
 /// Shell integration event (OSC 133)
 /// Sent by shells with semantic prompt integration to mark prompt/command regions
@@ -454,15 +459,13 @@ pub const Pane = struct {
             }
         }
 
-        if (log_config.log_delta) {
-            if (full_clear or ghostty_dirty_count > 0) {
-                log.debug("Pane {d}: collectDirtyRows full_clear={} ghostty_dirty={d} total_dirty={d}", .{
-                    self.id,
-                    full_clear,
-                    ghostty_dirty_count,
-                    self.dirty_rows.count(),
-                });
-            }
+        if (full_clear or ghostty_dirty_count > 0) {
+            delta_log.debug("Pane {d}: collectDirtyRows full_clear={} ghostty_dirty={d} total_dirty={d}", .{
+                self.id,
+                full_clear,
+                ghostty_dirty_count,
+                self.dirty_rows.count(),
+            });
         }
 
         // Clear ghostty's dirty flags
@@ -586,9 +589,7 @@ pub const Pane = struct {
         self.writeInput(response) catch |e| {
             log.warn("Failed to send DSR status response: {any}", .{e});
         };
-        if (log_config.log_dsr) {
-            dlog.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
-        }
+        dsr_log.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
     }
 
     /// Send DSR (Device Status Report) cursor position response (CSI 6 n)
@@ -609,16 +610,12 @@ pub const Pane = struct {
         self.writeInput(response) catch |e| {
             log.warn("Failed to send DSR cursor response: {any}", .{e});
         };
-        if (log_config.log_dsr) {
-            dlog.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
-        }
+        dsr_log.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
     }
 
     /// Log unimplemented DSR request
     fn logUnknownDSR(self: *Pane, param: u8) void {
-        if (log_config.log_dsr) {
-            dlog.missing("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
-        }
+        dsr_log.warn("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
     }
 
     /// Send OSC 10/11 color query response.
@@ -1220,9 +1217,7 @@ pub const Pane = struct {
             log.warn("Failed to send OSC 52 response: {any}", .{e});
         };
         log.debug("Sent OSC 52 response: kind={c}, data_len={d}", .{ kind, data.len });
-        if (log_config.log_clipboard) {
-            dlog.debug("OSC 52 response sent: pane={d} kind='{c}' data_len={d}", .{ self.id, kind, data.len });
-        }
+        clip_log.debug("OSC 52 response sent: pane={d} kind='{c}' data_len={d}", .{ self.id, kind, data.len });
     }
 
     /// Get a plain string representation of the terminal contents
@@ -1232,9 +1227,7 @@ pub const Pane = struct {
 
     /// Resize the pane
     pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
-        if (log_config.log_pane_resize) {
-            dlog.debug("Pane {d}: Resize {d}x{d} -> {d}x{d}", .{ self.id, self.cols, self.rows, cols, rows });
-        }
+        plog.debug("Pane {d}: Resize {d}x{d} -> {d}x{d}", .{ self.id, self.cols, self.rows, cols, rows });
 
         self.cols = cols;
         self.rows = rows;
@@ -1309,9 +1302,7 @@ pub const Pane = struct {
         // Now delta from_gen will be higher than client_gen, forcing snapshot
         self.last_broadcast_gen = self.generation;
 
-        if (log_config.log_delta) {
-            log.debug("Pane {d}: forceFullResync, new gen={d}", .{ self.id, self.generation });
-        }
+        delta_log.debug("Pane {d}: forceFullResync, new gen={d}", .{ self.id, self.generation });
     }
 
     /// Get the set of dirty row IDs since last clear.
@@ -1356,8 +1347,8 @@ pub const Pane = struct {
         // Generate delta
         const delta = try snapshot.generateDelta(self.allocator, self, from_gen, false);
 
-        if (log_config.log_delta and dirty_count > 0) {
-            log.debug("Pane {d}: getBroadcastDelta from_gen={d} to_gen={d} dirty_rows={d} delta_size={d}", .{
+        if (dirty_count > 0) {
+            delta_log.debug("Pane {d}: getBroadcastDelta from_gen={d} to_gen={d} dirty_rows={d} delta_size={d}", .{
                 self.id,
                 from_gen,
                 self.generation,

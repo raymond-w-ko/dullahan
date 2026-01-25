@@ -35,6 +35,9 @@ pub const signal = @import("signal.zig");
 // Unified logging (file + console + stderr)
 pub const dlog = @import("dlog.zig");
 
+// Debug configuration (Wine-style category logging)
+pub const debug_config = @import("debug_config.zig");
+
 // Path utilities (UID-specific temp directory)
 pub const paths = @import("paths.zig");
 

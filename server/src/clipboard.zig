@@ -6,9 +6,9 @@
 
 const std = @import("std");
 const dlog = @import("dlog.zig");
-const log_config = @import("log_config.zig");
 
 const log = std.log.scoped(.clipboard);
+const clog = dlog.scoped(.clipboard);
 
 /// OSC 52 clipboard operation data
 pub const ClipboardOp = struct {
@@ -176,9 +176,7 @@ pub const ClipboardHandler = struct {
         // Check for GET request
         if (data_str.len == 1 and data_str[0] == '?') {
             log.debug("OSC 52 GET request: kind={c}", .{kind});
-            if (log_config.log_clipboard) {
-                dlog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ pane_id, kind });
-            }
+            clog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ pane_id, kind });
             self.pending_get = kind;
             self.get_timestamp_ms = std.time.milliTimestamp();
             return;
@@ -208,9 +206,7 @@ pub const ClipboardHandler = struct {
         };
 
         log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ kind, data_str.len });
-        if (log_config.log_clipboard) {
-            dlog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ pane_id, kind, data_str.len });
-        }
+        clog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ pane_id, kind, data_str.len });
     }
 
     /// Handle clipboard GET timeout - returns response to send, or null if not timed out

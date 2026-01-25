@@ -30,12 +30,17 @@ const signal = @import("signal.zig");
 const mouse = @import("mouse.zig");
 const keyboard = @import("keyboard.zig");
 const messages = @import("messages.zig");
-const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
 const ipc_commands = @import("ipc_commands.zig");
 const ws_proxy = @import("ws_proxy.zig");
 
 const log = std.log.scoped(.event_loop);
+
+// Category-scoped debug loggers
+const conn_log = dlog.scoped(.connection);
+const clip_log = dlog.scoped(.clipboard);
+const window_log = dlog.scoped(.window);
+const theme_log = dlog.scoped(.theme);
 
 // ============================================================================
 // Error Handling Helpers
@@ -642,10 +647,8 @@ pub const EventLoop = struct {
         client.ws.setTimeouts(100);
 
         try self.clients.append(self.allocator, client);
-        if (log_config.log_client_join) {
-            log.info("Client connected, total clients: {d}", .{self.clients.items.len});
-            dlog.info("Client connected, total clients: {d}", .{self.clients.items.len});
-        }
+        log.info("Client connected, total clients: {d}", .{self.clients.items.len});
+        conn_log.info("Client connected, total clients: {d}", .{self.clients.items.len});
     }
 
     fn handleWsClient(self: *EventLoop, client_idx: usize) !void {
@@ -784,10 +787,8 @@ pub const EventLoop = struct {
     fn removeClient(self: *EventLoop, idx: usize) void {
         var client = self.clients.orderedRemove(idx);
         const was_master = if (client.client_id) |id| self.isMaster(id) else false;
-        if (log_config.log_client_join) {
-            log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
-            dlog.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
-        }
+        log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
+        conn_log.info("Client disconnected: {s}, total clients: {d}", .{ client.shortId(), self.clients.items.len });
         client.deinit();
 
         // If disconnecting client was master, clear master and broadcast
@@ -883,13 +884,11 @@ pub const EventLoop = struct {
         self.master_theme_bg = if (bg) |b| parseHexColor(b) else null;
 
         // Log the change to debug console
-        if (log_config.log_theme_colors) {
-            if (self.master_theme_fg) |f| {
-                dlog.info("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
-            }
-            if (self.master_theme_bg) |b| {
-                dlog.info("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
-            }
+        if (self.master_theme_fg) |f| {
+            theme_log.info("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
+        }
+        if (self.master_theme_bg) |b| {
+            theme_log.info("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
         }
 
         // Update all panes with new theme colors
@@ -1217,9 +1216,7 @@ pub const EventLoop = struct {
             defer self.allocator.free(msg);
 
             try client.ws.sendBinary(msg);
-            if (log_config.log_clipboard) {
-                dlog.info("Sent IPC clipboard 'c' to new client: {d} bytes", .{text.len});
-            }
+            clip_log.info("Sent IPC clipboard 'c' to new client: {d} bytes", .{text.len});
         }
 
         // Send clipboard 'p' if set
@@ -1239,9 +1236,7 @@ pub const EventLoop = struct {
             defer self.allocator.free(msg);
 
             try client.ws.sendBinary(msg);
-            if (log_config.log_clipboard) {
-                dlog.info("Sent IPC clipboard 'p' to new client: {d} bytes", .{text.len});
-            }
+            clip_log.info("Sent IPC clipboard 'p' to new client: {d} bytes", .{text.len});
         }
     }
 
@@ -1282,9 +1277,7 @@ pub const EventLoop = struct {
         if (selected_text) |text| {
             defer pane.allocator.free(text);
 
-            if (log_config.log_clipboard) {
-                dlog.info("Selection → primary: pane={d} text_len={d}", .{ pane.id, text.len });
-            }
+            clip_log.info("Selection → primary: pane={d} text_len={d}", .{ pane.id, text.len });
 
             // Store in ipc_clipboard_p (primary selection)
             const text_copy = self.allocator.dupe(u8, text) catch |e| {
@@ -1331,9 +1324,7 @@ pub const EventLoop = struct {
         // Handle clipboard SET operation - broadcast to ALL clients
         if (pane.hasClipboardSet()) {
             if (pane.getClipboardSet()) |op| {
-                if (log_config.log_clipboard) {
-                    dlog.info("Clipboard SET: pane={d} kind='{c}' data_len={d}", .{ pane_id, op.kind, op.data.len });
-                }
+                clip_log.info("Clipboard SET: pane={d} kind='{c}' data_len={d}", .{ pane_id, op.kind, op.data.len });
 
                 // Also update IPC clipboard storage so clipboard-get works
                 // op.data is base64-encoded, decode it for storage
@@ -1358,9 +1349,7 @@ pub const EventLoop = struct {
         // Handle clipboard GET request - send to master client only
         if (pane.needsClipboardGetSend()) {
             if (pane.getClipboardGetKind()) |kind| {
-                if (log_config.log_clipboard) {
-                    dlog.info("Clipboard GET request: pane={d} kind='{c}'", .{ pane_id, kind });
-                }
+                clip_log.info("Clipboard GET request: pane={d} kind='{c}'", .{ pane_id, kind });
 
                 const msg = snapshot.generateClipboardMessage(
                     pane.allocator,
@@ -1382,9 +1371,7 @@ pub const EventLoop = struct {
 
         // Check for clipboard GET timeout
         if (pane.hasClipboardGetTimedOut()) {
-            if (log_config.log_clipboard) {
-                dlog.warn("Clipboard GET timeout: pane={d}", .{pane_id});
-            }
+            clip_log.warn("Clipboard GET timeout: pane={d}", .{pane_id});
             pane.handleClipboardGetTimeout();
         }
     }
@@ -2026,18 +2013,14 @@ pub const EventLoop = struct {
                 // Future: validate hello_msg.token here before setting authenticated
                 client.authenticated = true;
 
-                if (log_config.log_client_join) {
-                    log.info("Client identified: {s}", .{client.shortId()});
-                    dlog.info("Client identified: {s}", .{client.shortId()});
-                }
+                log.info("Client identified: {s}", .{client.shortId()});
+                conn_log.info("Client identified: {s}", .{client.shortId()});
 
                 // Auto-assign as master if no master exists
                 if (self.master_id == null) {
                     if (client.client_id) |cid| {
-                        if (log_config.log_client_join) {
-                            log.info("No master, auto-assigning {s} as master", .{client.shortId()});
-                            dlog.info("No master, auto-assigning {s} as master", .{client.shortId()});
-                        }
+                        log.info("No master, auto-assigning {s} as master", .{client.shortId()});
+                        conn_log.info("No master, auto-assigning {s} as master", .{client.shortId()});
                         self.setMaster(cid) catch |e| {
                             logRecoverable("auto-set master", e);
                         };
@@ -2090,10 +2073,8 @@ pub const EventLoop = struct {
 
                 // Count panes needed for this template
                 const pane_count = template.countPanes();
-                if (log_config.log_window_creation) {
-                    log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
-                    dlog.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
-                }
+                log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
+                window_log.info("Creating window with template '{s}' ({d} panes)", .{ template_id, pane_count });
 
                 // Create new window with the required number of panes
                 const result = self.session.createWindowWithPaneCount(pane_count) catch |e| {
@@ -2102,10 +2083,8 @@ pub const EventLoop = struct {
                 };
                 defer self.allocator.free(result.pane_ids);
 
-                if (log_config.log_window_creation) {
-                    log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
-                    dlog.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
-                }
+                log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
+                window_log.info("Created new window {d} with {d} panes", .{ result.window_id, pane_count });
 
                 // Assign layout to the new window
                 if (self.session.getWindow(result.window_id)) |window| {
@@ -2424,12 +2403,10 @@ pub const EventLoop = struct {
                         if (is_down) {
                             // Paste from primary clipboard
                             if (self.ipc_clipboard_p) |text| {
-                                if (log_config.log_clipboard) {
-                                    dlog.info("Middle-click paste: pane={d} text_len={d}", .{
-                                        mouse_msg.paneId,
-                                        text.len,
-                                    });
-                                }
+                                clip_log.info("Middle-click paste: pane={d} text_len={d}", .{
+                                    mouse_msg.paneId,
+                                    text.len,
+                                });
 
                                 // Write to PTY with bracketed paste support
                                 if (pane.terminal.modes.get(.bracketed_paste)) {
@@ -2630,13 +2607,11 @@ pub const EventLoop = struct {
                 // Extract clipboard kind (first char of string, default 'c')
                 const kind: u8 = if (clip_msg.clipboard.len > 0) clip_msg.clipboard[0] else 'c';
 
-                if (log_config.log_clipboard) {
-                    dlog.info("Clipboard response: pane={d} kind='{c}' data_len={d}", .{
-                        clip_msg.paneId,
-                        kind,
-                        clip_msg.data.len,
-                    });
-                }
+                clip_log.info("Clipboard response: pane={d} kind='{c}' data_len={d}", .{
+                    clip_msg.paneId,
+                    kind,
+                    clip_msg.data.len,
+                });
 
                 // Send the OSC 52 response back to the terminal
                 pane.sendClipboardResponse(kind, clip_msg.data);
@@ -2654,12 +2629,10 @@ pub const EventLoop = struct {
                 // Client updating server's clipboard storage (from browser clipboard bar)
                 const kind: u8 = if (clip_msg.clipboard.len > 0) clip_msg.clipboard[0] else 'c';
 
-                if (log_config.log_clipboard) {
-                    dlog.info("Clipboard set from client: kind='{c}' data_len={d}", .{
-                        kind,
-                        clip_msg.data.len,
-                    });
-                }
+                clip_log.info("Clipboard set from client: kind='{c}' data_len={d}", .{
+                    kind,
+                    clip_msg.data.len,
+                });
 
                 // Update server's clipboard storage
                 self.updateIpcClipboardFromBase64(kind, clip_msg.data);
@@ -2685,9 +2658,7 @@ pub const EventLoop = struct {
                 if (selected_text) |text| {
                     defer pane.allocator.free(text);
 
-                    if (log_config.log_clipboard) {
-                        dlog.info("Copy: pane={d} text_len={d}", .{ copy_msg.paneId, text.len });
-                    }
+                    clip_log.info("Copy: pane={d} text_len={d}", .{ copy_msg.paneId, text.len });
 
                     // Store in ipc_clipboard_c (system clipboard)
                     const text_copy = self.allocator.dupe(u8, text) catch |e| {
@@ -2737,13 +2708,11 @@ pub const EventLoop = struct {
                 const text = if (kind == 'p') self.ipc_clipboard_p else self.ipc_clipboard_c;
 
                 if (text) |data| {
-                    if (log_config.log_clipboard) {
-                        dlog.info("Clipboard paste: pane={d} kind='{c}' text_len={d}", .{
-                            paste_msg.paneId,
-                            kind,
-                            data.len,
-                        });
-                    }
+                    clip_log.info("Clipboard paste: pane={d} kind='{c}' text_len={d}", .{
+                        paste_msg.paneId,
+                        kind,
+                        data.len,
+                    });
 
                     // Write to PTY with bracketed paste support
                     if (pane.terminal.modes.get(.bracketed_paste)) {

@@ -282,8 +282,8 @@ dullahan/
 │       ├── process.zig      # Process spawning utilities
 │       ├── shell.zig        # Shell detection and spawning
 │       ├── signal.zig       # Signal handling
-│       ├── dlog.zig         # Debug logging utilities
-│       ├── log_config.zig   # Logging configuration
+│       ├── dlog.zig         # Wine-style category debug logging
+│       ├── debug_config.zig # Debug logging configuration
 │       ├── math.zig         # Math utilities
 │       └── assets/          # Embedded static assets
 │
@@ -526,6 +526,61 @@ When creating new CSS, JS, or static files in `client/`, you must update `script
 for (const css of ["palette.css", "liquid-glass.css", "dullahan.css", "themes.css"]) {
 //                               ^^^^^^^^^^^^^^^^^ add new CSS here
 ```
+
+### Server Debug Logging
+
+Wine-style category-based logging for the server, mirroring the client's system.
+
+**Configuration:**
+- Environment variable: `DULLAHAN_DEBUG=+all,-delta`
+- IPC command: `dullahan debug-log +all,-delta`
+- Runtime: `debug_config.setConfigString("+all,-clipboard")`
+
+**Syntax:** Same as client - `+category` enables, `-category` disables, `+all/-all` wildcards, left-to-right evaluation.
+
+**Categories:**
+| Category | Description |
+|----------|-------------|
+| connection | WebSocket connect/disconnect, client join/leave |
+| keyboard | Keyboard input |
+| mouse | Mouse events |
+| clipboard | OSC 52 operations, copy/paste |
+| pane | Pane creation, resize, terminal state |
+| window | Window creation, layout changes |
+| delta | Delta sync, dirty rows, generation tracking |
+| snapshot | Terminal snapshots |
+| layout | Layout loading, template selection |
+| theme | OSC 10/11 color changes, palette sync |
+| pty | PTY I/O, shell detection |
+| dsr | Device Status Reports |
+| ipc | IPC commands, status queries |
+| http | HTTP server, WebSocket upgrade |
+| signal | Signal handling, shutdown |
+
+**IPC Commands:**
+```bash
+dullahan debug-log              # Show current config and categories
+dullahan debug-log +all         # Enable all categories
+dullahan debug-log +all,-delta  # All except delta
+dullahan debug-log off          # Disable all logging
+dullahan debug-log list         # List all categories
+```
+
+**Usage in code:**
+```zig
+const dlog = @import("dlog.zig");
+const log = dlog.scoped(.clipboard);
+
+// ✅ GOOD - uses category logger
+log.info("OSC 52 received", .{});
+log.debug("parsing data", .{});
+log.err("failed");  // Always logs regardless of category
+
+// ❌ BAD - uncategorized dlog (always logs)
+dlog.info("OSC 52 received", .{});
+```
+
+Output goes to three channels: log file, debug pane (pane 0), and stderr (for errors).
 
 ### Client Debug Logging
 

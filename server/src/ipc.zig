@@ -46,6 +46,7 @@ pub const Command = enum {
     send,
     @"clipboard-set",
     @"clipboard-get",
+    @"debug-log",
 
     pub fn fromString(s: []const u8) ?Command {
         const map = std.StaticStringMap(Command).initComptime(.{
@@ -67,6 +68,7 @@ pub const Command = enum {
             .{ "send", .send },
             .{ "clipboard-set", .@"clipboard-set" },
             .{ "clipboard-get", .@"clipboard-get" },
+            .{ "debug-log", .@"debug-log" },
         });
         return map.get(s);
     }
@@ -91,6 +93,7 @@ pub const Command = enum {
             .send => "Send text to pane: send <pane_id> [text] (reads stdin if no text)",
             .@"clipboard-set" => "Set clipboard: clipboard-set <c|p> <text>",
             .@"clipboard-get" => "Get clipboard: clipboard-get <c|p>",
+            .@"debug-log" => "Debug logging: debug-log [+all,-delta,...] or 'list' or 'off'",
         };
     }
 };

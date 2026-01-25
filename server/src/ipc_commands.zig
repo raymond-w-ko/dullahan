@@ -10,6 +10,7 @@ const paths = @import("paths.zig");
 const shell = @import("shell.zig");
 const snapshot = @import("snapshot.zig");
 const layout_db = @import("layout_db.zig");
+const debug_config = @import("debug_config.zig");
 const Session = @import("session.zig").Session;
 
 const sys = @cImport({
@@ -100,6 +101,7 @@ pub fn dispatch(ctx: Context, command: ipc.Command) !DispatchResult {
         // clipboard-set is special - returns broadcast data
         .@"clipboard-set" => return handleClipboardSet(ctx),
         .@"clipboard-get" => handleClipboardGet(ctx),
+        .@"debug-log" => try handleDebugLog(ctx),
     };
     return .{ .response = response };
 }
@@ -466,4 +468,72 @@ fn handleClipboardGet(ctx: Context) ipc.Response {
     } else {
         return ipc.Response.ok("(empty)");
     }
+}
+
+fn handleDebugLog(ctx: Context) !ipc.Response {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const writer = buf.writer(ctx.alloc);
+
+    const args = ctx.data orelse {
+        // No args - show current config
+        var config_buf: [256]u8 = undefined;
+        const current = debug_config.getConfigString(&config_buf);
+        try writer.print("Current debug config: {s}\n\n", .{current});
+        try writer.writeAll("Categories:\n");
+        for (debug_config.ALL_CATEGORIES) |cat| {
+            const enabled = debug_config.isEnabled(cat);
+            try writer.print("  {s:<12} {s}\n", .{ cat.asText(), if (enabled) "[ON]" else "[off]" });
+        }
+        try writer.writeAll("\nUsage:\n");
+        try writer.writeAll("  debug-log +all           Enable all categories\n");
+        try writer.writeAll("  debug-log +all,-delta    All except delta\n");
+        try writer.writeAll("  debug-log +clipboard     Enable only clipboard\n");
+        try writer.writeAll("  debug-log off            Disable all logging\n");
+        try writer.writeAll("  debug-log list           List all categories\n");
+        const result_data = try buf.toOwnedSlice(ctx.alloc);
+        return ipc.Response.okWithData("Debug logging status", result_data);
+    };
+
+    const trimmed = std.mem.trim(u8, args, &std.ascii.whitespace);
+
+    // Handle special commands
+    if (std.mem.eql(u8, trimmed, "off") or std.mem.eql(u8, trimmed, "false")) {
+        debug_config.setConfigString("");
+        return ipc.Response.ok("Debug logging disabled");
+    }
+
+    if (std.mem.eql(u8, trimmed, "list")) {
+        try writer.writeAll("Available debug categories:\n");
+        for (debug_config.ALL_CATEGORIES) |cat| {
+            try writer.print("  {s}\n", .{cat.asText()});
+        }
+        const result_data = try buf.toOwnedSlice(ctx.alloc);
+        return ipc.Response.okWithData("Debug categories", result_data);
+    }
+
+    if (std.mem.eql(u8, trimmed, "on") or std.mem.eql(u8, trimmed, "true")) {
+        debug_config.setConfigString("+all");
+        return ipc.Response.ok("Debug logging enabled: +all");
+    }
+
+    // Parse as config string
+    debug_config.setConfigString(trimmed);
+
+    var config_buf: [256]u8 = undefined;
+    const current = debug_config.getConfigString(&config_buf);
+    try writer.print("Debug config set: {s}\n\n", .{current});
+    try writer.writeAll("Enabled categories:\n");
+    var any_enabled = false;
+    for (debug_config.ALL_CATEGORIES) |cat| {
+        if (debug_config.isEnabled(cat)) {
+            try writer.print("  {s}\n", .{cat.asText()});
+            any_enabled = true;
+        }
+    }
+    if (!any_enabled) {
+        try writer.writeAll("  (none)\n");
+    }
+
+    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    return ipc.Response.okWithData("Debug config updated", result_data);
 }

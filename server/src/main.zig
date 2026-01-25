@@ -7,6 +7,7 @@ const server = dullahan.server;
 const ipc = dullahan.ipc;
 const paths = dullahan.paths;
 const test_runners = dullahan.test_runners;
+const dlog = dullahan.dlog;
 
 // Custom logging to file (path determined at runtime from paths module)
 var log_file: ?std.fs.File = null;
@@ -57,6 +58,9 @@ fn fileLog(
 }
 
 pub fn main() !void {
+    // Initialize debug logging (loads DULLAHAN_DEBUG env var)
+    dlog.init();
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

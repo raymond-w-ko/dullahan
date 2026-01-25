@@ -6,10 +6,10 @@
 
 const std = @import("std");
 const Pane = @import("pane.zig").Pane;
-const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
 
 const log = std.log.scoped(.pane_registry);
+const plog = dlog.scoped(.pane);
 
 /// Well-known pane ID for debug console (always pane 0 in window 0)
 pub const DEBUG_PANE_ID: u16 = 0;
@@ -83,10 +83,8 @@ pub const PaneRegistry = struct {
 
         try self.panes.put(pane_id, pane_ptr);
 
-        if (log_config.log_pane_creation) {
-            log.debug("Created pane {d} ({d}x{d})", .{ pane_id, opts.cols, opts.rows });
-            dlog.debug("Created pane {d} ({d}x{d})", .{ pane_id, opts.cols, opts.rows });
-        }
+        log.debug("Created pane {d} ({d}x{d})", .{ pane_id, opts.cols, opts.rows });
+        plog.debug("Created pane {d} ({d}x{d})", .{ pane_id, opts.cols, opts.rows });
 
         return pane_id;
     }
@@ -101,10 +99,8 @@ pub const PaneRegistry = struct {
         if (self.panes.fetchRemove(id)) |entry| {
             entry.value.deinit();
             self.allocator.destroy(entry.value);
-            if (log_config.log_pane_creation) {
-                log.debug("Destroyed pane {d}", .{id});
-                dlog.debug("Destroyed pane {d}", .{id});
-            }
+            log.debug("Destroyed pane {d}", .{id});
+            plog.debug("Destroyed pane {d}", .{id});
         }
     }
 
@@ -128,10 +124,8 @@ pub const PaneRegistry = struct {
     pub fn createDebugPane(self: *PaneRegistry) !u16 {
         const pane_id = try self.create();
         // Debug pane doesn't spawn a shell - it receives direct feed
-        if (log_config.log_pane_creation) {
-            log.info("Created debug pane {d}", .{pane_id});
-            dlog.info("Created debug pane {d}", .{pane_id});
-        }
+        log.info("Created debug pane {d}", .{pane_id});
+        plog.info("Created debug pane {d}", .{pane_id});
         return pane_id;
     }
 
@@ -146,10 +140,8 @@ pub const PaneRegistry = struct {
             return e;
         };
 
-        if (log_config.log_pane_creation) {
-            log.info("Created shell pane {d}", .{pane_id});
-            dlog.info("Created shell pane {d}", .{pane_id});
-        }
+        log.info("Created shell pane {d}", .{pane_id});
+        plog.info("Created shell pane {d}", .{pane_id});
         return pane_id;
     }
 

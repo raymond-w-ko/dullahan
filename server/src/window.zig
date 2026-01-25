@@ -6,11 +6,11 @@
 
 const std = @import("std");
 const layout_db = @import("layout_db.zig");
-const log_config = @import("log_config.zig");
 const dlog = @import("dlog.zig");
 pub const LayoutNode = layout_db.LayoutNode;
 
 const log = std.log.scoped(.window);
+const wlog = dlog.scoped(.window);
 
 pub const Window = struct {
     /// The currently active/focused pane ID
@@ -88,10 +88,8 @@ pub const Window = struct {
     /// Add a pane to this window
     pub fn addPane(self: *Window, pane_id: u16) !void {
         try self.pane_ids.append(self.allocator, pane_id);
-        if (log_config.log_pane_assignment) {
-            log.debug("Assigned pane {d} to window {d}", .{ pane_id, self.id });
-            dlog.debug("Assigned pane {d} to window {d}", .{ pane_id, self.id });
-        }
+        log.debug("Assigned pane {d} to window {d}", .{ pane_id, self.id });
+        wlog.debug("Assigned pane {d} to window {d}", .{ pane_id, self.id });
     }
 
     /// Remove a pane from this window
@@ -100,10 +98,8 @@ pub const Window = struct {
         while (i < self.pane_ids.items.len) {
             if (self.pane_ids.items[i] == pane_id) {
                 _ = self.pane_ids.orderedRemove(i);
-                if (log_config.log_pane_assignment) {
-                    log.debug("Removed pane {d} from window {d}", .{ pane_id, self.id });
-                    dlog.debug("Removed pane {d} from window {d}", .{ pane_id, self.id });
-                }
+                log.debug("Removed pane {d} from window {d}", .{ pane_id, self.id });
+                wlog.debug("Removed pane {d} from window {d}", .{ pane_id, self.id });
                 return;
             }
             i += 1;
