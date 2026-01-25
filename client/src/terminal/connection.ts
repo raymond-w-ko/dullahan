@@ -1,5 +1,13 @@
 import { debug } from "../debug";
 import { get as getConfig } from "../config";
+
+// Category-scoped loggers for different subsystems
+const connLog = debug.category('connection');
+const snapshotLog = debug.category('snapshot');
+const deltaLog = debug.category('delta');
+const syncLog = debug.category('sync');
+const resizeLog = debug.category('resize');
+const layoutLog = debug.category('layout');
 // WebSocket connection to dullahan server
 // Uses binary msgpack for efficient data transmission
 // Messages are compressed with Snappy
@@ -192,7 +200,7 @@ function getClientId(): string {
   if (!clientId) {
     clientId = uuidv4();
     sessionStorage.setItem(CLIENT_ID_KEY, clientId);
-    debug.log("Generated new client ID:", clientId);
+    connLog.log("Generated new client ID:", clientId);
   }
   return clientId;
 }
@@ -347,11 +355,11 @@ export class TerminalConnection {
       this.ws.close();
     }
 
-    debug.log(`Connecting to ${this.url}...`);
+    connLog.log(`Connecting to ${this.url}...`);
     this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
-      debug.log("WebSocket connected");
+      connLog.log("WebSocket connected");
       // Reset reconnect backoff on successful connection
       this.reconnectAttempts = 0;
       // Send hello message to identify this client with theme colors
@@ -361,20 +369,20 @@ export class TerminalConnection {
         clientId: this._clientId,
         ...themeColors,
       });
-      debug.log("Sent hello with client ID:", this._clientId, "theme:", themeColors);
+      connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeColors);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
       this.emit("connect");
     };
 
     this.ws.onclose = () => {
-      debug.log("WebSocket disconnected");
+      connLog.log("WebSocket disconnected");
       this.emit("disconnect");
       this.scheduleReconnect();
     };
 
     this.ws.onerror = (event) => {
-      debug.error("WebSocket error:", event);
+      connLog.error("WebSocket error:", event);
       this.emit("error", "Connection error");
     };
 
@@ -395,15 +403,15 @@ export class TerminalConnection {
           const msg = decode(decompressed) as ServerMessage;
           // Log raw message keys for debugging
           if (msg && typeof msg === 'object') {
-            debug.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
+            syncLog.log(`Received ${(msg as any).type} message, keys:`, Object.keys(msg));
           }
           this.handleBinaryMessage(msg);
         } else {
           // Legacy JSON message (shouldn't happen with new server)
-          debug.warn("Received text message, expected binary");
+          connLog.warn("Received text message, expected binary");
         }
       } catch (e) {
-        debug.error("Failed to parse message:", e);
+        connLog.error("Failed to parse message:", e);
       }
     };
   }
@@ -411,14 +419,14 @@ export class TerminalConnection {
   private handleBinaryMessage(msg: ServerMessage): void {
     // Log all message types for debugging
     if (msg.type !== "snapshot" && msg.type !== "delta") {
-      console.log("[dullahan] Received message type:", msg.type);
+      syncLog.log("Received message type:", msg.type);
     }
     switch (msg.type) {
       case "snapshot": {
         const paneId = msg.paneId;
         const paneState = this.getPaneState(paneId);
 
-        debug.log(`Received snapshot for pane ${paneId}:`, msg.cols, "x", msg.rows,
+        snapshotLog.log(`Pane ${paneId}:`, msg.cols, "x", msg.rows,
           "scrollback:", msg.scrollback.totalRows, "top:", msg.scrollback.viewportTop);
 
         // Decode cells, styles, row IDs, graphemes, and hyperlinks from raw bytes
@@ -507,14 +515,14 @@ export class TerminalConnection {
         paneState.lastGraphemes = graphemes;
         paneState.lastHyperlinks = hyperlinks;
 
-        debug.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows in cache, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks, rowIds:`, rowIds.map(String));
+        snapshotLog.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks`);
 
         this.emit("snapshot", snapshot);
 
         // Extract title from snapshot if present
         const snapshotTitle = (msg as any).title;
         if (snapshotTitle && typeof snapshotTitle === 'string') {
-          debug.log("Snapshot includes title for pane", paneId, ":", snapshotTitle);
+          snapshotLog.log(`Pane ${paneId} title:`, snapshotTitle);
           this.emit("title", paneId, snapshotTitle);
         }
         break;
@@ -523,14 +531,7 @@ export class TerminalConnection {
         const paneId = msg.paneId;
         const paneState = this.getPaneState(paneId);
 
-        debug.log(`Raw delta for pane ${paneId}:`, {
-          type: msg.type,
-          fromGen: msg.fromGen,
-          gen: msg.gen,
-          hasRowIds: 'rowIds' in msg,
-          rowIdsType: typeof (msg as any).rowIds,
-          rowIdsConstructor: (msg as any).rowIds?.constructor?.name,
-        });
+        deltaLog.log(`Pane ${paneId}: gen ${msg.fromGen} -> ${msg.gen}`);
 
         // Check if we can apply this delta
         // Client must be at fromGen to apply delta that brings us to gen
@@ -538,18 +539,18 @@ export class TerminalConnection {
           this.applyDelta(msg, paneState);
         } else if (paneState.generation < msg.fromGen) {
           // We're behind - request full snapshot
-          debug.log(`Pane ${paneId}: Delta fromGen ${msg.fromGen} > our gen ${paneState.generation}, requesting snapshot`);
+          syncLog.log(`Pane ${paneId}: Delta fromGen ${msg.fromGen} > our gen ${paneState.generation}, requesting snapshot`);
           paneState.resyncCount++;
           this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
         } else {
           // We're ahead of fromGen - this delta is stale, ignore it
           // But if we're behind the target gen, request sync
           if (paneState.generation < msg.gen) {
-            debug.log(`Pane ${paneId}: Stale delta (fromGen ${msg.fromGen} < our gen ${paneState.generation}), but behind target ${msg.gen}, requesting sync`);
+            syncLog.log(`Pane ${paneId}: Stale delta (fromGen ${msg.fromGen} < our gen ${paneState.generation}), but behind target ${msg.gen}, requesting sync`);
             paneState.resyncCount++;
             this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
           } else {
-            debug.log(`Pane ${paneId}: Stale delta ignored (fromGen ${msg.fromGen}, our gen ${paneState.generation})`);
+            syncLog.log(`Pane ${paneId}: Stale delta ignored (fromGen ${msg.fromGen}, our gen ${paneState.generation})`);
           }
         }
         break;
@@ -558,19 +559,19 @@ export class TerminalConnection {
         this.emit("output", msg.data);
         break;
       case "title":
-        debug.log("Received title for pane", msg.paneId, ":", msg.title);
+        syncLog.log(`Pane ${msg.paneId} title:`, msg.title);
         this.emit("title", msg.paneId, msg.title);
         break;
       case "bell":
-        debug.log("Received bell");
+        syncLog.log("Bell received");
         this.emit("bell");
         break;
       case "toast":
-        debug.log("Received toast:", msg.paneId, msg.title, msg.message);
+        syncLog.log(`Pane ${msg.paneId} toast:`, msg.title, msg.message);
         this.emit("toast", msg.paneId, msg.title, msg.message);
         break;
       case "progress":
-        debug.log("Received progress:", msg.paneId, msg.state, msg.value);
+        syncLog.log(`Pane ${msg.paneId} progress:`, msg.state, msg.value);
         this.emit("progress", msg.paneId, msg.state, msg.value);
         break;
       case "shell_integration": {
@@ -586,13 +587,13 @@ export class TerminalConnection {
         break;
       }
       case "focus":
-        debug.log("Received focus:", msg.paneId);
+        syncLog.log(`Focus pane: ${msg.paneId}`);
         this.emit("focus", msg.paneId);
         break;
       case "master_changed": {
         this._masterId = msg.masterId;
         const isMaster = this._masterId !== null && this._masterId === this._clientId;
-        debug.log("Master changed:", msg.masterId, "isMaster:", isMaster);
+        connLog.log("Master changed:", msg.masterId, "isMaster:", isMaster);
         this.emit("masterChanged", msg.masterId, isMaster);
         break;
       }
@@ -609,14 +610,13 @@ export class TerminalConnection {
           windows,
           templates: msg.templates,
         };
-        // Always log layout for debugging (TODO: remove after fixing persistence)
-        console.log("[dullahan] Layout received:", msg.windows.length, "windows, active:", msg.activeWindowId);
+        layoutLog.log(`Received: ${msg.windows.length} windows, active: ${msg.activeWindowId}`);
         for (const win of windows) {
           if (win.layout?.nodes) {
             const dims = win.layout.nodes.map((n: { width: number; height: number }) =>
               `${n.width.toFixed(1)}x${n.height.toFixed(1)}`
             ).join(", ");
-            console.log(`[dullahan]   Window ${win.id} layout: [${dims}]`);
+            layoutLog.log(`Window ${win.id}: [${dims}]`);
           }
         }
         this.emit("layout", this._layout);
@@ -646,9 +646,9 @@ export class TerminalConnection {
     const baseDelay = 250;
     const delay = Math.min(baseDelay * Math.pow(2, this.reconnectAttempts), 5000);
     this.reconnectAttempts++;
-    debug.log(`Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    connLog.log(`Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
     this.reconnectTimer = window.setTimeout(() => {
-      debug.log("Attempting to reconnect...");
+      connLog.log("Attempting to reconnect...");
       this.connect();
     }, delay);
   }
@@ -735,7 +735,7 @@ export class TerminalConnection {
     }
 
     // Queue the resize
-    debug.log(`Queued resize for pane ${paneId}: ${cols}x${rows}`);
+    resizeLog.log(`Queued pane ${paneId}: ${cols}x${rows}`);
     this._pendingResizes.set(paneId, { cols, rows });
 
     // Schedule debounced flush to avoid resize cascades in dev builds
@@ -767,7 +767,7 @@ export class TerminalConnection {
     }
 
     for (const [paneId, size] of this._pendingResizes) {
-      debug.log(`Sending resize for pane ${paneId}: ${size.cols}x${size.rows}`);
+      resizeLog.log(`Sending pane ${paneId}: ${size.cols}x${size.rows}`);
       this.send({ type: "resize", paneId, cols: size.cols, rows: size.rows });
       this._lastSentResizes.set(paneId, size);
     }
@@ -787,11 +787,11 @@ export class TerminalConnection {
         this._lastSentResizes.delete(paneId);
         this._pendingResizes.delete(paneId);
       }
-      debug.log(`Cleared resize cache for panes: ${paneIds.join(", ")}`);
+      resizeLog.log(`Cleared cache for panes: ${paneIds.join(", ")}`);
     } else {
       this._lastSentResizes.clear();
       this._pendingResizes.clear();
-      debug.log("Cleared all resize cache");
+      resizeLog.log("Cleared all resize cache");
     }
   }
 
@@ -818,7 +818,7 @@ export class TerminalConnection {
    * privileged operations like resize, create panes, move panes.
    */
   requestMaster(): void {
-    debug.log("Requesting master status");
+    connLog.log("Requesting master status");
     this.send({ type: "request_master" });
   }
 
@@ -829,7 +829,7 @@ export class TerminalConnection {
    * @param templateId Optional layout template ID (e.g., "2-col", "2x2", "single")
    */
   createWindow(templateId?: string): void {
-    debug.log("Requesting new window creation", templateId ? `with template: ${templateId}` : "");
+    layoutLog.log("Creating window", templateId ? `template: ${templateId}` : "");
     this.send({ type: "new_window", templateId });
   }
 
@@ -842,7 +842,7 @@ export class TerminalConnection {
    */
   closeWindow(windowId: number): void {
     if (!this.isMaster) return;
-    debug.log("Requesting window close:", windowId);
+    layoutLog.log("Closing window:", windowId);
     this.send({ type: "close_window", windowId });
   }
 
@@ -856,7 +856,7 @@ export class TerminalConnection {
    */
   closePane(paneId: number): void {
     if (!this.isMaster) return;
-    debug.log("Requesting pane close:", paneId);
+    layoutLog.log("Closing pane:", paneId);
     this.send({ type: "close_pane", paneId });
   }
 
@@ -869,7 +869,7 @@ export class TerminalConnection {
    */
   setWindowLayout(windowId: number, templateId: string): void {
     if (!this.isMaster) return;
-    debug.log("Requesting layout change for window", windowId, "to template:", templateId);
+    layoutLog.log(`Window ${windowId} -> template: ${templateId}`);
     this.send({ type: "set_layout", windowId, templateId });
   }
 
@@ -881,7 +881,7 @@ export class TerminalConnection {
    */
   resizeLayout(windowId: number, nodes: import("../../../protocol/schema/layout").LayoutNode[]): void {
     if (!this.isMaster) return;
-    debug.log("Resizing layout for window", windowId);
+    layoutLog.log(`Resizing window ${windowId}`);
     this.send({ type: "resize_layout", windowId, nodes });
   }
 
@@ -895,7 +895,7 @@ export class TerminalConnection {
    */
   swapPanes(windowId: number, paneId1: number, paneId2: number): void {
     if (!this.isMaster) return;
-    debug.log("Swapping panes", paneId1, "and", paneId2, "in window", windowId);
+    layoutLog.log(`Window ${windowId}: swap panes ${paneId1} <-> ${paneId2}`);
     this.send({ type: "swap_panes", windowId, paneId1, paneId2 });
   }
 
@@ -987,17 +987,7 @@ export class TerminalConnection {
    */
   private applyDelta(delta: BinaryDelta, paneState: PaneState): void {
     const paneId = delta.paneId;
-    debug.log(`Pane ${paneId}: Applying delta: gen ${delta.fromGen} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
-    debug.log(`Delta details:`, {
-      cols: delta.cols,
-      rows: delta.rows,
-      cursor: delta.cursor,
-      altScreen: delta.altScreen,
-      vp: delta.vp,
-      rowIdsLen: delta.rowIds?.length,
-      stylesLen: delta.styles?.length,
-      dirtyRowIds: delta.dirtyRows.map(r => r.id),
-    });
+    deltaLog.log(`Pane ${paneId}: Applying gen ${delta.fromGen} -> ${delta.gen}, ${delta.dirtyRows.length} dirty rows`);
 
     paneState.deltaCount++;
     paneState.cols = delta.cols;
@@ -1061,22 +1051,17 @@ export class TerminalConnection {
 
     // Decode row IDs from delta (tells us which rows are in viewport)
     if (!delta.rowIds || delta.rowIds.length === 0) {
-      debug.error("Delta missing rowIds!", delta);
+      deltaLog.error("Delta missing rowIds!", delta);
       // Fall back to last known rowIds
     }
     const rowIds = delta.rowIds ? decodeRowIds(delta.rowIds) : (paneState.lastRowIds ?? []);
     paneState.lastRowIds = rowIds;
-    debug.log(`Pane ${paneId}: Decoded ${rowIds.length} rowIds:`, rowIds.map(String));
-    debug.log(`Pane ${paneId}: Row cache size: ${paneState.rowCache.size}, keys:`, [...paneState.rowCache.keys()].map(String));
 
     // Check which rowIds are in cache
     // NOTE: rowId=0 IS valid (page serial 0, row index 0)
-    const inCache = rowIds.filter(id => paneState.rowCache.has(id));
     const notInCache = rowIds.filter(id => !paneState.rowCache.has(id));
-    debug.log(`Pane ${paneId}: RowIds in cache: ${inCache.length}, not in cache: ${notInCache.length}`);
     if (notInCache.length > 0) {
-      debug.log(`Pane ${paneId}: Missing rowIds:`, notInCache.map(String));
-      debug.log(`Pane ${paneId}: Cache has:`, [...paneState.rowCache.keys()].map(String));
+      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache`);
     }
 
     // Build cells array, grapheme table, and hyperlink table from cache for current viewport
@@ -1093,7 +1078,7 @@ export class TerminalConnection {
         const rowCells = paneState.rowCache.get(rowId);
         if (rowCells) {
           if (rowCells.length !== delta.cols) {
-            debug.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
+            deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
           }
           cells.push(...rowCells);
 
@@ -1131,7 +1116,7 @@ export class TerminalConnection {
         });
       }
     }
-    debug.log(`Pane ${paneId}: Built cells: ${fromCache} rows from cache, ${filled} rows filled empty, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks`);
+    deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${filled} empty rows, ${graphemes.size} graphemes`);
 
     // Update last graphemes and hyperlinks for future merging
     paneState.lastGraphemes = graphemes;
@@ -1182,7 +1167,7 @@ export class TerminalConnection {
     // Extract title from delta if present
     const deltaTitle = (delta as any).title;
     if (deltaTitle && typeof deltaTitle === 'string') {
-      debug.log("Delta includes title for pane", paneId, ":", deltaTitle);
+      deltaLog.log(`Pane ${paneId} title:`, deltaTitle);
       this.emit("title", paneId, deltaTitle);
     }
   }
