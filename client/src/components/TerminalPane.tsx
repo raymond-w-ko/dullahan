@@ -56,7 +56,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     let rafId: number | null = null;
     let isActive = true;
 
-    const calculate = () => {
+    const calculate = (source: string) => {
       // Skip if this effect has been cleaned up (component unmounted or deps changed)
       if (!isActive) return;
 
@@ -70,34 +70,41 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
 
         const size = connection.calculatePaneSize(container);
         // Always log dimension calculations for debugging
-        console.log(`[dim] pane ${currentPaneId}: measured ${size.cols}x${size.rows}, container: ${container.clientWidth}x${container.clientHeight}`);
+        console.log(`[dim] pane ${currentPaneId} (${source}): measured ${size.cols}x${size.rows}, container: ${container.clientWidth}x${container.clientHeight}`);
         if (size.cols > 0 && size.rows > 0) {
           // Update store and notify server with the captured paneId
           setPaneDimensions(currentPaneId, size.cols, size.rows);
           connection.setPaneSize(currentPaneId, size.cols, size.rows);
+        } else {
+          // Container not ready, schedule another attempt
+          console.log(`[dim] pane ${currentPaneId}: container not ready, will retry`);
         }
       });
     };
 
     // Initial calculation
-    calculate();
+    calculate("initial");
 
     // Delayed recalculation - handles cases where layout hasn't settled yet
     // (new windows, varying layouts, initial connection)
-    const delayedTimer = window.setTimeout(calculate, 100);
+    const delayedTimer = window.setTimeout(() => calculate("delayed-100ms"), 100);
+
+    // Additional delayed recalculation for slower layouts
+    const delayedTimer2 = window.setTimeout(() => calculate("delayed-300ms"), 300);
 
     // Observe resize
     const observer = new ResizeObserver(() => {
-      calculate();
+      calculate("resize-observer");
     });
     observer.observe(container);
 
     // Also recalculate when fonts load
-    document.fonts.ready.then(calculate);
+    document.fonts.ready.then(() => calculate("fonts-ready"));
 
     return () => {
       isActive = false;
       window.clearTimeout(delayedTimer);
+      window.clearTimeout(delayedTimer2);
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
       }
