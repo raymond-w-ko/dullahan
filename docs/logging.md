@@ -249,7 +249,8 @@ console.log(getDebugConfig());  // Current config string
 | `sync` | Delta sync, generation tracking | Sync debugging |
 | `snapshot` | Terminal state snapshots | State issues |
 | `delta` | Delta updates | Update debugging |
-| `mouse` | Mouse events | Mouse handling |
+| `mouse` | Mouse clicks, up/down, wheel | Mouse handling |
+| `mousemove` | Mouse move events (spammy) | Motion tracking |
 | `keyboard` | Keyboard input | Key handling |
 | `keybind` | Keybind parsing/matching | Shortcut issues |
 | `clipboard` | Clipboard operations | Copy/paste |

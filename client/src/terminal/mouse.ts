@@ -9,6 +9,7 @@ import { debug } from "../debug";
 import { getCellDimensions, getPadding } from "./dimensions";
 
 const mouseLog = debug.category('mouse');
+const mousemoveLog = debug.category('mousemove');
 import { get as getConfig } from "../config";
 import { isValidHyperlinkUrl } from "./hyperlink";
 import type { MouseMessage } from "../../../protocol/schema/messages";
@@ -381,7 +382,7 @@ export class MouseHandler implements InputHandler<MouseCallback> {
       timestamp: performance.now(),
     };
 
-    mouseLog.log(
+    mousemoveLog.log(
       `pane=${this._paneId} move at (${coords.x}, ${coords.y}) px=(${coords.px}, ${coords.py})` +
         (this.buttonsPressed ? ` buttons=${this.buttonsPressed}` : "") +
         (e.ctrlKey ? " +ctrl" : "") +

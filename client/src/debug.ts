@@ -10,8 +10,8 @@
  * - Evaluated left-to-right: +all,-mouse = everything except mouse
  * - Bare ?debug (no value) defaults to +all for backward compatibility
  *
- * Categories: connection, sync, snapshot, delta, mouse, keyboard, keybind,
- *             clipboard, config, ime, resize, layout, store, shell
+ * Categories: connection, sync, snapshot, delta, mouse, mousemove, keyboard,
+ *             keybind, clipboard, config, ime, resize, layout, store, shell
  */
 
 /** All known debug categories */
@@ -20,7 +20,8 @@ export const DEBUG_CATEGORIES = [
   'sync',        // Delta sync, generation tracking
   'snapshot',    // Terminal state snapshots
   'delta',       // Delta updates
-  'mouse',       // Mouse events
+  'mouse',       // Mouse clicks, up/down, wheel
+  'mousemove',   // Mouse move events (very spammy)
   'keyboard',    // Keyboard input
   'keybind',     // Keybind parsing
   'clipboard',   // Clipboard operations
