@@ -19,6 +19,7 @@ pub const TextMessage = struct {
 
 pub const ResizeMessage = struct {
     type: []const u8,
+    paneId: u16,
     cols: u16,
     rows: u16,
 };
@@ -180,6 +181,7 @@ pub const ParsedText = struct {
 };
 
 pub const ParsedResize = struct {
+    paneId: u16,
     cols: u16,
     rows: u16,
 };

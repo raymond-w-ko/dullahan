@@ -1475,7 +1475,7 @@ pub const EventLoop = struct {
             }) catch return null;
             defer parsed.deinit();
             return .{
-                .msg = .{ .resize = .{ .cols = parsed.value.cols, .rows = parsed.value.rows } },
+                .msg = .{ .resize = .{ .paneId = parsed.value.paneId, .cols = parsed.value.cols, .rows = parsed.value.rows } },
                 .cleanup = .{ .none = {} },
             };
         } else if (std.mem.eql(u8, type_str, "scroll")) {
@@ -1724,12 +1724,14 @@ pub const EventLoop = struct {
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "resize")) {
+            const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
             const cols_payload = (payload.mapGet("cols") catch return null) orelse return null;
             const rows_payload = (payload.mapGet("rows") catch return null) orelse return null;
+            const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
             const cols: u16 = @intCast(cols_payload.getUint() catch return null);
             const rows: u16 = @intCast(rows_payload.getUint() catch return null);
             return .{
-                .msg = .{ .resize = .{ .cols = cols, .rows = rows } },
+                .msg = .{ .resize = .{ .paneId = pane_id, .cols = cols, .rows = rows } },
                 .payload = payload,
             };
         } else if (std.mem.eql(u8, type_str, "scroll")) {
@@ -1960,21 +1962,26 @@ pub const EventLoop = struct {
                     return;
                 }
 
+                const pane_id = resize_msg.paneId;
                 const cols = resize_msg.cols;
                 const rows = resize_msg.rows;
 
                 if (cols < constants.limits.min_cols or cols > constants.limits.max_cols or
                     rows < constants.limits.min_rows or rows > constants.limits.max_rows) {
-                    log.warn("Rejecting invalid resize: {d}x{d} (limits: {d}-{d}x{d}-{d})", .{
-                        cols,                          rows,
-                        constants.limits.min_cols,     constants.limits.max_cols,
-                        constants.limits.min_rows,     constants.limits.max_rows,
+                    log.warn("Rejecting invalid resize for pane {d}: {d}x{d} (limits: {d}-{d}x{d}-{d})", .{
+                        pane_id, cols, rows,
+                        constants.limits.min_cols, constants.limits.max_cols,
+                        constants.limits.min_rows, constants.limits.max_rows,
                     });
                     return;
                 }
 
-                // Resize all panes via registry (debug pane needs resize too)
-                try self.session.pane_registry.resizeAll(cols, rows);
+                // Resize only the specific pane
+                const pane = self.session.pane_registry.get(pane_id) orelse {
+                    log.warn("Resize for unknown pane {d}", .{pane_id});
+                    return;
+                };
+                try pane.resize(cols, rows);
             },
             .scroll => |scroll_msg| {
                 const pane = self.session.activePane() orelse return;
