@@ -51,13 +51,30 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     const container = terminalRef.current;
     if (!container || !connection || isReadOnly) return;
 
+    // Track the current paneId to prevent stale callbacks from affecting wrong panes
+    const currentPaneId = paneId;
+    let rafId: number | null = null;
+    let isActive = true;
+
     const calculate = () => {
-      const size = connection.calculatePaneSize(container);
-      if (size.cols > 0 && size.rows > 0) {
-        // Update store and notify server
-        setPaneDimensions(paneId, size.cols, size.rows);
-        connection.setPaneSize(paneId, size.cols, size.rows);
+      // Skip if this effect has been cleaned up (component unmounted or deps changed)
+      if (!isActive) return;
+
+      // Use requestAnimationFrame to ensure layout is settled before measuring
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
       }
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (!isActive) return;
+
+        const size = connection.calculatePaneSize(container);
+        if (size.cols > 0 && size.rows > 0) {
+          // Update store and notify server with the captured paneId
+          setPaneDimensions(currentPaneId, size.cols, size.rows);
+          connection.setPaneSize(currentPaneId, size.cols, size.rows);
+        }
+      });
     };
 
     // Initial calculation
@@ -77,7 +94,11 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     document.fonts.ready.then(calculate);
 
     return () => {
+      isActive = false;
       window.clearTimeout(delayedTimer);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
       observer.disconnect();
     };
   }, [connection, paneId, isReadOnly, dimensionVersion]);

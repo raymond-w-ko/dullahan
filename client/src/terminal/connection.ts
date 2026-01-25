@@ -734,9 +734,15 @@ export class TerminalConnection {
       return;
     }
 
+    // Log dimension changes for debugging pane confusion issues
+    if (lastSent) {
+      debug.log(`Pane ${paneId} resize: ${lastSent.cols}x${lastSent.rows} -> ${cols}x${rows}`);
+    } else {
+      debug.log(`Pane ${paneId} initial resize: ${cols}x${rows}`);
+    }
+
     // Queue the resize
     this._pendingResizes.set(paneId, { cols, rows });
-    debug.log(`Queued resize for pane ${paneId}: ${cols}x${rows}`);
 
     // Schedule debounced flush to avoid resize cascades in dev builds
     this.scheduleResizeFlush();

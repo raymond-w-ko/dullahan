@@ -88,10 +88,13 @@ function NodesWithDividers({
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]!;
 
-    // Render the node
+    // Render the node - use paneId in key when available to ensure proper remounting
+    const nodeKey = isPane(node) && node.paneId !== undefined
+      ? `pane-${node.paneId}`
+      : `node-${i}`;
     elements.push(
       <NodeRenderer
-        key={`node-${i}`}
+        key={nodeKey}
         node={node}
         level={level}
         index={i}
