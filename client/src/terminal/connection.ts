@@ -605,14 +605,14 @@ export class TerminalConnection {
           windows,
           templates: msg.templates,
         };
-        debug.log("Layout received:", msg.windows.length, "windows,", msg.templates?.length ?? 0, "templates, active:", msg.activeWindowId);
-        // Log layout dimensions for debugging
+        // Always log layout for debugging (TODO: remove after fixing persistence)
+        console.log("[dullahan] Layout received:", msg.windows.length, "windows, active:", msg.activeWindowId);
         for (const win of windows) {
           if (win.layout?.nodes) {
             const dims = win.layout.nodes.map((n: { width: number; height: number }) =>
               `${n.width.toFixed(1)}x${n.height.toFixed(1)}`
             ).join(", ");
-            debug.log(`  Window ${win.id} layout dimensions: [${dims}]`);
+            console.log(`[dullahan]   Window ${win.id} layout: [${dims}]`);
           }
         }
         this.emit("layout", this._layout);
