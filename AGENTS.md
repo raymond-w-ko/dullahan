@@ -529,32 +529,62 @@ for (const css of ["palette.css", "liquid-glass.css", "dullahan.css", "themes.cs
 
 ### Client Debug Logging
 
-Use `client/src/debug.ts` for all client-side debug logging. **Never use `console.log` directly** for debug output.
+Wine-style category-based logging. **Never use `console.log` directly** for debug output.
 
-```typescript
-import { debug } from "../debug";
+**Syntax:** `?debug=+all,-mouse,+pane` or `localStorage.setItem('debug', '+all,-mouse')`
 
-// ✅ GOOD - uses debug module
-debug.log("[mouse] click at (5, 12)");
-debug.warn("Unexpected state");
+**Rules:**
+- `+category` enables a category
+- `-category` disables a category
+- `+all` / `-all` enables/disables all categories
+- Evaluated left-to-right: `+all,-mouse` = everything except mouse
+- Bare `?debug` defaults to `+all` for backward compatibility
+- Errors always log regardless of category setting
 
-// ❌ BAD - direct console.log
-console.log("click at", x, y);
+**Categories:**
+| Category | Description |
+|----------|-------------|
+| connection | WebSocket connect/disconnect |
+| sync | Delta sync, generation tracking |
+| snapshot | Terminal state snapshots |
+| delta | Delta updates |
+| mouse | Mouse events |
+| keyboard | Keyboard input |
+| keybind | Keybind parsing |
+| clipboard | Clipboard operations |
+| config | Configuration |
+| ime | IME composition |
+| resize | Terminal resizing |
+| layout | Layout messages |
+| store | State store operations |
+
+**Examples:**
+```bash
+# Enable all logging
+http://localhost:7681/?debug
+
+# Only mouse and keyboard
+http://localhost:7681/?debug=+mouse,+keyboard
+
+# Everything except verbose sync/delta
+http://localhost:7681/?debug=+all,-sync,-delta
 ```
 
-**Enable debug logging:**
-- URL param: `?debug` (e.g., `http://localhost:7681/?debug`)
-- localStorage: `localStorage.setItem('debug', 'true')`
+**Usage in code:**
+```typescript
+import { debug } from '../debug';
+const mouseLog = debug.category('mouse');
 
-**Available methods:**
-- `debug.log()` — general debug info (disabled by default)
-- `debug.warn()` — warnings (disabled by default)
-- `debug.error()` — errors (always enabled)
-- `debug.group()` / `debug.groupEnd()` — grouped output
-- `debug.table()` — tabular data
-- `debug.time()` / `debug.timeEnd()` — timing
+// ✅ GOOD - uses category logger
+mouseLog.log('click at', x, y);
+mouseLog.warn('unexpected state');
+mouseLog.error('failed');  // Always logs regardless of category
 
-All output is prefixed with `[dullahan]` for easy filtering in DevTools.
+// ❌ BAD - direct console.log
+console.log('click at', x, y);
+```
+
+All output is prefixed with `[dullahan:category]` for easy filtering in DevTools.
 
 ---
 
