@@ -35,6 +35,12 @@ pub const SyncMessage = struct {
     minRowId: u64,
 };
 
+pub const ResyncMessage = struct {
+    type: []const u8,
+    paneId: u16,
+    reason: []const u8,
+};
+
 pub const FocusMessage = struct {
     type: []const u8,
     paneId: u16,
@@ -144,6 +150,7 @@ pub const ParsedMessage = union(enum) {
     scroll: ParsedScroll,
     ping: void,
     sync: ParsedSync,
+    resync: ParsedResync,
     focus: ParsedFocus,
     hello: ParsedHello,
     request_master: void,
@@ -193,6 +200,11 @@ pub const ParsedScroll = struct {
 pub const ParsedSync = struct {
     gen: u64,
     minRowId: u64 = 0,
+};
+
+pub const ParsedResync = struct {
+    paneId: u16,
+    reason: []const u8,
 };
 
 pub const ParsedFocus = struct {

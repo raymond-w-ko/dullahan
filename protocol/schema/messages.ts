@@ -90,6 +90,16 @@ export interface SyncMessage {
   minRowId: number; // Oldest cached row ID
 }
 
+/**
+ * Request full resync when client detects cache miss or corruption.
+ * Sent when delta references data that has been pruned from client cache.
+ */
+export interface ResyncMessage {
+  type: "resync";
+  paneId: number;
+  reason: "cache_miss" | "style_miss" | "corruption" | "manual";
+}
+
 /** Request focus on a pane */
 export interface FocusMessage {
   type: "focus";
@@ -220,6 +230,7 @@ export type ClientMessage =
   | ResizeMessage
   | ScrollMessage
   | SyncMessage
+  | ResyncMessage
   | FocusMessage
   | HelloMessage
   | RequestMasterMessage

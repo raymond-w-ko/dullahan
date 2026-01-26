@@ -230,6 +230,10 @@ export class TerminalConnection {
   private _resizeDebounceTimer: number | null = null;
   private static readonly RESIZE_DEBOUNCE_MS = 333;
 
+  // Resync debouncing - prevent resync storms
+  private _lastResyncTime: Map<number, number> = new Map();
+  private static readonly RESYNC_COOLDOWN_MS = 1000;
+
   // Event emitter for connection events
   private _emitter = new TypedEventEmitter<ConnectionEvents>();
 
@@ -953,6 +957,32 @@ export class TerminalConnection {
   }
 
   /**
+   * Request full resync from server when cache miss or corruption detected.
+   * Debounced to prevent resync storms.
+   * @param paneId Target pane ID
+   * @param reason Why resync is needed (for logging/metrics)
+   */
+  requestResync(paneId: number, reason: "cache_miss" | "style_miss" | "corruption" | "manual"): void {
+    const now = Date.now();
+    const lastResync = this._lastResyncTime.get(paneId) ?? 0;
+
+    if (now - lastResync < TerminalConnection.RESYNC_COOLDOWN_MS) {
+      deltaLog.log(`Pane ${paneId}: resync throttled (${reason})`);
+      return;
+    }
+
+    this._lastResyncTime.set(paneId, now);
+    deltaLog.warn(`Pane ${paneId}: requesting resync (${reason})`);
+    this.send({ type: "resync", paneId, reason });
+
+    // Track for debug UI
+    const paneState = this._panes.get(paneId);
+    if (paneState) {
+      paneState.resyncCount++;
+    }
+  }
+
+  /**
    * Request sync for all panes
    */
   requestSyncAll(): void {
@@ -1057,8 +1087,15 @@ export class TerminalConnection {
     // Check which rowIds are in cache
     // NOTE: rowId=0 IS valid (page serial 0, row index 0)
     const notInCache = rowIds.filter(id => !paneState.rowCache.has(id));
-    if (notInCache.length > 0) {
-      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache`);
+
+    // Threshold: if more than 10% of rows are missing (min 3), request resync
+    const missingRowThreshold = Math.max(3, Math.floor(delta.rows * 0.1));
+    if (notInCache.length > missingRowThreshold) {
+      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing (threshold ${missingRowThreshold}), requesting resync`);
+      this.requestResync(paneId, "cache_miss");
+      return; // Don't emit corrupted snapshot
+    } else if (notInCache.length > 0) {
+      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache (below threshold)`);
     }
 
     // Build cells array, grapheme table, and hyperlink table from cache for current viewport
@@ -1114,6 +1151,19 @@ export class TerminalConnection {
       }
     }
     deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${filled} empty rows, ${graphemes.size} graphemes`);
+
+    // Check if any cells reference styles we don't have
+    const missingStyles = new Set<number>();
+    for (const cell of cells) {
+      if (cell.styleId !== 0 && !styles.has(cell.styleId)) {
+        missingStyles.add(cell.styleId);
+      }
+    }
+    if (missingStyles.size > 0) {
+      deltaLog.warn(`Pane ${paneId}: ${missingStyles.size} styles missing, requesting resync`);
+      this.requestResync(paneId, "style_miss");
+      return; // Don't emit corrupted snapshot
+    }
 
     // Update last graphemes and hyperlinks for future merging
     paneState.lastGraphemes = graphemes;

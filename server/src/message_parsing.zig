@@ -111,6 +111,15 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
             .msg = .{ .sync = .{ .gen = parsed.value.gen, .minRowId = parsed.value.minRowId } },
             .cleanup = .{ .none = {} },
         };
+    } else if (std.mem.eql(u8, type_str, "resync")) {
+        const parsed = std.json.parseFromSlice(messages.ResyncMessage, allocator, data, .{
+            .ignore_unknown_fields = true,
+        }) catch return null;
+        defer parsed.deinit();
+        return .{
+            .msg = .{ .resync = .{ .paneId = parsed.value.paneId, .reason = parsed.value.reason } },
+            .cleanup = .{ .none = {} },
+        };
     } else if (std.mem.eql(u8, type_str, "focus")) {
         const parsed = std.json.parseFromSlice(FocusMessage, allocator, data, .{
             .ignore_unknown_fields = true,
@@ -364,6 +373,15 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
             .msg = .{ .sync = .{ .gen = gen, .minRowId = minRowId } },
             .payload = payload,
         };
+    } else if (std.mem.eql(u8, type_str, "resync")) {
+        const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
+        const reason_payload = (payload.mapGet("reason") catch return null) orelse return null;
+        const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
+        const reason = reason_payload.asStr() catch return null;
+        return .{
+            .msg = .{ .resync = .{ .paneId = pane_id, .reason = reason } },
+            .payload = payload,
+        };
     } else if (std.mem.eql(u8, type_str, "focus")) {
         const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
         const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
@@ -519,4 +537,13 @@ test "parseJsonMessage text with cleanup" {
     try std.testing.expectEqualStrings(result.?.msg.text.data, "hello");
     // Clean up
     result.?.cleanup.deinit();
+}
+
+test "parseJsonMessage resync" {
+    const allocator = std.testing.allocator;
+    const result = parseJsonMessage(allocator, "{\"type\":\"resync\",\"paneId\":1,\"reason\":\"cache_miss\"}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.?.msg == .resync);
+    try std.testing.expectEqual(result.?.msg.resync.paneId, 1);
+    try std.testing.expectEqualStrings(result.?.msg.resync.reason, "cache_miss");
 }

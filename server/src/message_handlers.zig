@@ -38,6 +38,7 @@ const ParsedText = messages.ParsedText;
 const ParsedResize = messages.ParsedResize;
 const ParsedScroll = messages.ParsedScroll;
 const ParsedSync = messages.ParsedSync;
+const ParsedResync = messages.ParsedResync;
 const ParsedFocus = messages.ParsedFocus;
 const ParsedHello = messages.ParsedHello;
 const ParsedNewWindow = messages.ParsedNewWindow;
@@ -83,6 +84,7 @@ pub fn handleParsedMessage(el: *EventLoop, msg: ParsedMessage, client: *ClientSt
         .scroll => |scroll_msg| handleScroll(el, scroll_msg),
         .ping => try handlePing(el, client),
         .sync => |sync_msg| try handleSync(el, client, sync_msg),
+        .resync => |resync_msg| try handleResync(el, client, resync_msg),
         .focus => |focus_msg| handleFocus(el, focus_msg),
         .hello => |hello_msg| handleHello(el, client, hello_msg),
         .request_master => handleRequestMaster(el, client),
@@ -246,6 +248,24 @@ fn handlePing(el: *EventLoop, client: *ClientState) !void {
 fn handleSync(el: *EventLoop, client: *ClientState, sync_msg: ParsedSync) !void {
     const pane = el.session.activePane() orelse return;
     try el.handleSyncRequest(client, pane, sync_msg.gen);
+}
+
+fn handleResync(el: *EventLoop, client: *ClientState, resync_msg: ParsedResync) !void {
+    const pane = el.session.getPaneById(resync_msg.paneId) orelse {
+        log.warn("Resync request for unknown pane {d}", .{resync_msg.paneId});
+        return;
+    };
+
+    log.info("Client requested resync for pane {d}: {s}", .{
+        resync_msg.paneId,
+        resync_msg.reason,
+    });
+
+    // Always send full snapshot, bypassing delta logic
+    try el.sendSnapshot(&client.ws, pane);
+
+    // Update client's tracked generation
+    client.setGeneration(pane.id, pane.generation);
 }
 
 fn handleFocus(el: *EventLoop, focus_msg: ParsedFocus) void {
