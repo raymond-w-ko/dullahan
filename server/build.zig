@@ -8,6 +8,7 @@ pub fn build(b: *std.Build) void {
     const dullahan_mod = b.addModule("dullahan", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .optimize = optimize,
     });
 
     // Add ghostty-vt dependency (lazy so it's only fetched when needed)
