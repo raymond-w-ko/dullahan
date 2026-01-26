@@ -7,8 +7,12 @@ const std = @import("std");
 const posix = std.posix;
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
+const osc = ghostty.osc;
+const osc_color = osc.color;
+const device_status = ghostty.device_status;
 const Pty = @import("pty.zig").Pty;
 const constants = @import("constants.zig");
+const stream_handler = @import("stream_handler.zig");
 
 /// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
 /// Re-exported from ghostty for use by event_loop.zig
@@ -99,9 +103,11 @@ pub const Pane = struct {
     capture_file: ?std.fs.File = null,
     
     /// VT stream parser - persists between feed() calls to handle split escape sequences
-    /// Lazily initialized on first feed() because vtStream() captures a Terminal pointer
-    /// that would be invalid if captured during init() (before Pane is at final location)
-    vt_stream: ?@TypeOf(Terminal.vtStream(undefined)) = null,
+    /// Uses our custom stream handler that routes query events (DA1, DSR, OSC 10/11)
+    /// and notification events (bell, title, clipboard) to the pane while delegating
+    /// terminal-modifying events to the Terminal (like readonly does).
+    /// Lazily initialized on first feed() because we need a stable pointer to the Pane.
+    vt_stream: ?stream_handler.Stream = null,
 
     /// Terminal title set by OSC 0/2 escape sequences
     /// Shells use this to show working directory, command, etc.
@@ -137,10 +143,6 @@ pub const Pane = struct {
 
     /// Clipboard handler (OSC 52 operations)
     clipboard: ClipboardHandler,
-
-    /// Buffer for incomplete OSC sequences that span multiple feed() calls
-    /// Large OSC 52 clipboard data (up to 64KB base64) can be split across chunks
-    osc_buffer: ?[]u8 = null,
 
     /// Generation of the last broadcast delta
     last_broadcast_gen: u64 = 0,
@@ -186,9 +188,6 @@ pub const Pane = struct {
         rows: u16 = 24,
         id: u16 = 0,
     };
-
-    /// Maximum size for OSC buffer (100KB) to prevent unbounded memory growth
-    const max_osc_buffer_size: usize = 100_000;
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
         var terminal = try Terminal.init(allocator, .{
@@ -257,11 +256,6 @@ pub const Pane = struct {
         // Cleanup clipboard handler
         self.clipboard.deinit();
 
-        // Free OSC buffer if allocated
-        if (self.osc_buffer) |buf| {
-            self.allocator.free(buf);
-        }
-
         self.dirty_rows.deinit();
         self.terminal.deinit(self.allocator);
     }
@@ -325,9 +319,10 @@ pub const Pane = struct {
     /// Write directly to terminal buffer (no PTY required).
     /// Used for virtual panes like debug output that have no shell.
     pub fn feedDirect(self: *Pane, data: []const u8) !void {
-        // Lazily initialize VT stream
+        // Lazily initialize VT stream with our custom handler
         if (self.vt_stream == null) {
-            self.vt_stream = self.terminal.vtStream();
+            const handler = stream_handler.Handler.init(&self.terminal, self);
+            self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
         }
         try self.vt_stream.?.nextSlice(data);
 
@@ -361,28 +356,23 @@ pub const Pane = struct {
 
     /// Feed raw bytes into the terminal (e.g., from process stdout)
     /// This processes VT escape sequences including colors, cursor movement, etc.
+    /// The custom stream handler receives parsed events from ghostty-vt and:
+    /// - Delegates terminal-modifying events to the Terminal
+    /// - Routes query events (DA1, DSR, OSC 10/11) to this pane for response
+    /// - Routes notification events (bell, title, clipboard) to this pane
     pub fn feed(self: *Pane, data: []const u8) !void {
         // Write to capture file if enabled
         if (self.capture_file) |file| {
             self.writeCaptureHex(file, data);
         }
 
-        // Check for DA1 request (CSI c or CSI 0 c) and respond
-        // ghostty-vt's readonly handler ignores device_attributes, so we handle it here
-        self.handleTerminalQueries(data);
-
-        // Parse OSC sequences for title changes (OSC 0/2)
-        // ghostty-vt parses these but we handle them ourselves for simplicity
-        self.handleOscSequences(data);
-
-        // Check for bell character (BEL 0x07)
-        self.handleBell(data);
-
-        // Use persistent VT stream to handle escape sequences split across reads
-        // The stream maintains parser state between calls
+        // Use persistent VT stream with our custom handler to process escape sequences.
+        // The handler receives fully-parsed events from ghostty-vt, eliminating the
+        // dual-parser architecture that caused state desync issues.
         // Lazily initialize on first use (see comment on vt_stream field)
         if (self.vt_stream == null) {
-            self.vt_stream = self.terminal.vtStream();
+            const handler = stream_handler.Handler.init(&self.terminal, self);
+            self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
         }
         try self.vt_stream.?.nextSlice(data);
 
@@ -513,51 +503,10 @@ pub const Pane = struct {
         return self.sync_output_enabled;
     }
 
-    /// Handle terminal queries that require responses (DA1, DSR, etc.)
-    /// These are sent by shells/apps to detect terminal capabilities
-    fn handleTerminalQueries(self: *Pane, data: []const u8) void {
-        // Look for DA1: ESC [ c or ESC [ 0 c
-        // DA1 = Primary Device Attributes
-        // DSR: ESC [ 5 n (status) or ESC [ 6 n (cursor position)
-        var i: usize = 0;
-        while (i < data.len) : (i += 1) {
-            if (data[i] == 0x1b and i + 2 < data.len) {
-                if (data[i + 1] == '[') {
-                    // CSI sequence
-                    if (data[i + 2] == 'c') {
-                        // ESC [ c - DA1 request
-                        self.sendDA1Response();
-                        i += 2;
-                    } else if (i + 3 < data.len and data[i + 2] == '0' and data[i + 3] == 'c') {
-                        // ESC [ 0 c - DA1 request (explicit)
-                        self.sendDA1Response();
-                        i += 3;
-                    } else if (data[i + 2] == '>' and i + 3 < data.len and data[i + 3] == 'c') {
-                        // ESC [ > c - DA2 (Secondary Device Attributes)
-                        self.sendDA2Response();
-                        i += 3;
-                    } else if (i + 3 < data.len and data[i + 2] == '5' and data[i + 3] == 'n') {
-                        // ESC [ 5 n - DSR (Device Status Report)
-                        self.sendDSRStatusResponse();
-                        i += 3;
-                    } else if (i + 3 < data.len and data[i + 2] == '6' and data[i + 3] == 'n') {
-                        // ESC [ 6 n - DSR (Cursor Position Report)
-                        self.sendDSRCursorResponse();
-                        i += 3;
-                    } else if (i + 3 < data.len and data[i + 2] >= '0' and data[i + 2] <= '9' and data[i + 3] == 'n') {
-                        // ESC [ X n - Unknown DSR request
-                        self.logUnknownDSR(data[i + 2]);
-                        i += 3;
-                    }
-                }
-            }
-        }
-    }
-    
     /// Send Primary Device Attributes response
     /// Response format: CSI ? <params> c
     /// We claim VT220 with color support (like Ghostty)
-    fn sendDA1Response(self: *Pane) void {
+    pub fn sendDA1Response(self: *Pane) void {
         // Response: ESC [ ? 62 ; 22 c
         // 62 = VT220 (Level 2)
         // 22 = ANSI color
@@ -570,7 +519,7 @@ pub const Pane = struct {
     
     /// Send Secondary Device Attributes response
     /// Response format: CSI > <params> c
-    fn sendDA2Response(self: *Pane) void {
+    pub fn sendDA2Response(self: *Pane) void {
         // Response: ESC [ > 1 ; 10 ; 0 c
         // 1 = VT220
         // 10 = firmware version (arbitrary)
@@ -611,11 +560,6 @@ pub const Pane = struct {
             log.warn("Failed to send DSR cursor response: {any}", .{e});
         };
         dsr_log.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
-    }
-
-    /// Log unimplemented DSR request
-    fn logUnknownDSR(self: *Pane, param: u8) void {
-        dsr_log.warn("Pane {d}: Unhandled DSR request CSI {d} n", .{ self.id, param });
     }
 
     /// Send OSC 10/11 color query response.
@@ -664,215 +608,157 @@ pub const Pane = struct {
         log.debug("Pane {d}: Sent focus-out event", .{self.id});
     }
 
-    /// Parse OSC (Operating System Command) sequences.
-    /// OSC 0 = set icon name and window title
-    /// OSC 2 = set window title only
-    /// OSC 52 = clipboard operations
-    /// Format: ESC ] <cmd> ; <text> (BEL | ST)
-    /// BEL = 0x07, ST = ESC \ (0x1b 0x5c)
-    ///
-    /// Handles split sequences: large OSC 52 data can span multiple feed() calls.
-    /// Incomplete sequences are buffered and processed when the terminator arrives.
-    fn handleOscSequences(self: *Pane, data: []const u8) void {
-        // Combine buffered data with new data if we have a partial sequence
-        var combined: ?[]u8 = null;
-        defer if (combined) |c| self.allocator.free(c);
+    // ========================================================================
+    // Stream Handler Event Callbacks
+    // These methods are called by stream_handler.zig when ghostty-vt parses
+    // events that need pane-level handling (queries, notifications, etc.)
+    // ========================================================================
 
-        const work_data: []const u8 = if (self.osc_buffer) |buf| blk: {
-            // Combine buffered data with new input
-            combined = self.allocator.alloc(u8, buf.len + data.len) catch {
-                log.warn("Failed to allocate combined OSC buffer", .{});
-                // Discard buffer and process new data alone
-                self.allocator.free(buf);
-                self.osc_buffer = null;
-                break :blk data;
-            };
-            @memcpy(combined.?[0..buf.len], buf);
-            @memcpy(combined.?[buf.len..], data);
-            // Free old buffer
-            self.allocator.free(buf);
-            self.osc_buffer = null;
-            break :blk combined.?;
-        } else data;
+    /// Handle bell event from stream handler
+    pub fn onBell(self: *Pane) void {
+        self.bell_pending = true;
+        log.debug("Bell triggered", .{});
+    }
 
-        var i: usize = 0;
-        var last_osc_start: ?usize = null; // Track incomplete OSC for buffering
-
-        while (i < work_data.len) : (i += 1) {
-            // Look for ESC ]
-            if (work_data[i] == 0x1b and i + 1 < work_data.len and work_data[i + 1] == ']') {
-                const osc_start = i;
-                const param_start = i + 2;
-                if (param_start >= work_data.len) {
-                    // Incomplete: buffer from ESC to end
-                    last_osc_start = osc_start;
-                    break;
-                }
-
-                // Parse OSC number (u16 to support OSC 52+)
-                var cmd: u16 = 0;
-                var param_end = param_start;
-                while (param_end < work_data.len and work_data[param_end] >= '0' and work_data[param_end] <= '9') {
-                    cmd = cmd *| 10 +| (work_data[param_end] - '0');
-                    param_end += 1;
-                }
-
-                // Expect semicolon after command number
-                if (param_end >= work_data.len) {
-                    // Incomplete: need more data for semicolon
-                    last_osc_start = osc_start;
-                    break;
-                }
-                if (work_data[param_end] != ';') {
-                    // Not a valid OSC, skip this ESC ]
-                    continue;
-                }
-                const text_start = param_end + 1;
-
-                // Find terminator: BEL (0x07) or ST (ESC \)
-                var text_end = text_start;
-                var found_term = false;
-                var use_st = false; // Track terminator type for OSC 10/11 response
-                while (text_end < work_data.len) : (text_end += 1) {
-                    if (work_data[text_end] == 0x07) {
-                        // BEL terminator
-                        found_term = true;
-                        break;
-                    }
-                    if (work_data[text_end] == 0x1b and text_end + 1 < work_data.len and work_data[text_end + 1] == '\\') {
-                        // ST terminator (ESC \)
-                        found_term = true;
-                        use_st = true;
-                        break;
-                    }
-                }
-
-                if (!found_term) {
-                    // Incomplete: buffer from OSC start to end
-                    last_osc_start = osc_start;
-                    break;
-                }
-
-                // Complete sequence found - process it
-                const payload = work_data[text_start..text_end];
-
-                // Handle based on OSC number
-                switch (cmd) {
-                    0, 2 => {
-                        // Title: OSC 0/2 ; <title> ST
-                        if (payload.len > 0) {
-                            self.setTitle(payload);
-                        }
-                    },
-                    10 => {
-                        // Foreground color query: OSC 10 ; ? ST
-                        // Response: OSC 10 ; rgb:RRRR/GGGG/BBBB ST
-                        if (payload.len == 1 and payload[0] == '?') {
-                            // Use master's theme colors if available, else defaults
-                            const fg = self.theme_fg orelse .{
-                                constants.colors.fg_r,
-                                constants.colors.fg_g,
-                                constants.colors.fg_b,
-                            };
-                            self.sendOscColorResponse(10, fg[0], fg[1], fg[2], use_st);
-                        }
-                        // Ignore SET operations (programs trying to change colors)
-                    },
-                    11 => {
-                        // Background color query: OSC 11 ; ? ST
-                        // Response: OSC 11 ; rgb:RRRR/GGGG/BBBB ST
-                        if (payload.len == 1 and payload[0] == '?') {
-                            // Use master's theme colors if available, else defaults
-                            const bg = self.theme_bg orelse .{
-                                constants.colors.bg_r,
-                                constants.colors.bg_g,
-                                constants.colors.bg_b,
-                            };
-                            self.sendOscColorResponse(11, bg[0], bg[1], bg[2], use_st);
-                        }
-                        // Ignore SET operations (programs trying to change colors)
-                    },
-                    9 => {
-                        // OSC 9 - ConEmu/iTerm2 style commands
-                        // ConEmu format: OSC 9 ; <cmd> ; <args> ST
-                        //   4;<state>;<progress> = taskbar progress
-                        //   1;<msg> = notification (same as iTerm2)
-                        // iTerm2 format: OSC 9 ; <message> ST (plain text)
-                        if (payload.len > 0) {
-                            if (payload.len >= 2 and payload[0] >= '0' and payload[0] <= '9' and payload[1] == ';') {
-                                // ConEmu-style command
-                                const subcmd = payload[0];
-                                const args = payload[2..];
-                                switch (subcmd) {
-                                    '4' => {
-                                        // Progress: 4;<state>;<progress>
-                                        // state: 0=hide, 1=normal, 2=error, 3=indeterminate, 4=warning
-                                        self.handleProgressCommand(args);
-                                    },
-                                    '1' => {
-                                        // Notification with ConEmu format
-                                        if (args.len > 0) {
-                                            self.setNotification(null, args);
-                                        }
-                                    },
-                                    else => {},
-                                }
-                            } else {
-                                // Plain iTerm2-style notification
-                                self.setNotification(null, payload);
-                            }
-                        }
-                    },
-                    52 => {
-                        // Clipboard: OSC 52 ; <kind> ; <data> ST
-                        self.clipboard.handleOsc52(payload, self.id);
-                    },
-                    133 => {
-                        // Shell integration: OSC 133 ; <letter> [; <params>] ST
-                        self.handleShellIntegration(payload);
-                    },
-                    777 => {
-                        // Notification: OSC 777 ; notify ; <title> ; <body> ST (rxvt-unicode style)
-                        // Parse: notify;<title>;<body>
-                        if (std.mem.startsWith(u8, payload, "notify;")) {
-                            const rest = payload["notify;".len..];
-                            // Find the separator between title and body
-                            if (std.mem.indexOf(u8, rest, ";")) |sep_idx| {
-                                const title = rest[0..sep_idx];
-                                const body = rest[sep_idx + 1 ..];
-                                if (body.len > 0) {
-                                    self.setNotification(if (title.len > 0) title else null, body);
-                                }
-                            } else {
-                                // No separator, treat rest as body
-                                if (rest.len > 0) {
-                                    self.setNotification(null, rest);
-                                }
-                            }
-                        }
-                    },
-                    else => {},
-                }
-
-                // Skip past this OSC sequence
-                i = text_end;
-                last_osc_start = null; // Successfully processed, no need to buffer
-            }
+    /// Handle window title change from stream handler (OSC 0/2)
+    pub fn onWindowTitle(self: *Pane, title: []const u8) void {
+        if (title.len > 0) {
+            self.setTitle(title);
         }
+    }
 
-        // Buffer incomplete OSC sequence for next call
-        if (last_osc_start) |start| {
-            const remaining = work_data[start..];
-            if (remaining.len > max_osc_buffer_size) {
-                log.warn("OSC sequence too large ({d} bytes), discarding", .{remaining.len});
-                return;
-            }
-            self.osc_buffer = self.allocator.dupe(u8, remaining) catch {
-                log.warn("Failed to buffer incomplete OSC sequence", .{});
-                return;
-            };
-            log.debug("Buffered incomplete OSC sequence: {d} bytes", .{remaining.len});
+    /// Handle clipboard contents event from stream handler (OSC 52)
+    pub fn onClipboardContents(self: *Pane, kind: u8, data: []const u8) void {
+        self.clipboard.handleOsc52Parsed(kind, data, self.id);
+    }
+
+    /// Handle color query response from stream handler (OSC 10/11/12)
+    /// Sends the appropriate color response back to the terminal
+    pub fn sendColorQueryResponse(
+        self: *Pane,
+        op: osc_color.Operation,
+        target: osc_color.Target,
+        terminator: osc.Terminator,
+    ) void {
+        const use_st = terminator == .st;
+
+        switch (target) {
+            .dynamic => |d| switch (d) {
+                .foreground => {
+                    // Use master's theme colors if available, else defaults
+                    const fg = self.theme_fg orelse .{
+                        constants.colors.fg_r,
+                        constants.colors.fg_g,
+                        constants.colors.fg_b,
+                    };
+                    self.sendOscColorResponse(10, fg[0], fg[1], fg[2], use_st);
+                },
+                .background => {
+                    const bg = self.theme_bg orelse .{
+                        constants.colors.bg_r,
+                        constants.colors.bg_g,
+                        constants.colors.bg_b,
+                    };
+                    self.sendOscColorResponse(11, bg[0], bg[1], bg[2], use_st);
+                },
+                .cursor => {
+                    // Cursor color - use foreground as default
+                    const fg = self.theme_fg orelse .{
+                        constants.colors.fg_r,
+                        constants.colors.fg_g,
+                        constants.colors.fg_b,
+                    };
+                    self.sendOscColorResponse(12, fg[0], fg[1], fg[2], use_st);
+                },
+                else => {
+                    // Other dynamic colors (pointer, tektronix, etc.) - ignore
+                },
+            },
+            .palette => |idx| {
+                // Palette color query - respond with palette value
+                const color = self.terminal.colors.palette.current[idx];
+                // OSC 4 response format: OSC 4 ; idx ; rgb:RRRR/GGGG/BBBB ST
+                self.sendOsc4ColorResponse(idx, color.r, color.g, color.b, use_st);
+            },
+            .special => {
+                // Special colors - ignore for now
+            },
         }
+        _ = op; // op tells us which OSC triggered this (4, 10, 11, etc.)
+    }
+
+    /// Send OSC 4 palette color response
+    fn sendOsc4ColorResponse(self: *Pane, idx: u8, r: u8, g: u8, b: u8, use_st: bool) void {
+        // Convert 8-bit to 16-bit by duplicating
+        const r16: u16 = @as(u16, r) << 8 | r;
+        const g16: u16 = @as(u16, g) << 8 | g;
+        const b16: u16 = @as(u16, b) << 8 | b;
+
+        var buf: [40]u8 = undefined;
+        const response = if (use_st)
+            std.fmt.bufPrint(&buf, "\x1b]4;{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x1b\\", .{ idx, r16, g16, b16 }) catch return
+        else
+            std.fmt.bufPrint(&buf, "\x1b]4;{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x07", .{ idx, r16, g16, b16 }) catch return;
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send OSC 4 response: {any}", .{e});
+        };
+        log.debug("Sent OSC 4 response: idx={d} rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ idx, r16, g16, b16 });
+    }
+
+    /// Handle Device Status Report request from stream handler
+    pub fn handleDSR(self: *Pane, request: device_status.Request) void {
+        switch (request) {
+            .operating_status => self.sendDSRStatusResponse(),
+            .cursor_position => self.sendDSRCursorResponse(),
+            .color_scheme => {
+                // Color scheme query (CSI ? 996 n) - report light/dark mode
+                // For now, assume dark mode
+                self.sendColorSchemeResponse(false);
+            },
+        }
+    }
+
+    /// Send color scheme response (CSI ? 997 ; 1/2 n)
+    /// is_light: true for light mode (1), false for dark mode (2)
+    fn sendColorSchemeResponse(self: *Pane, is_light: bool) void {
+        const response = if (is_light) "\x1b[?997;1n" else "\x1b[?997;2n";
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send color scheme response: {any}", .{e});
+        };
+        dsr_log.debug("Pane {d}: Sent color scheme response ({s})", .{ self.id, if (is_light) "light" else "dark" });
+    }
+
+    /// Handle desktop notification from stream handler (OSC 9/777)
+    pub fn onDesktopNotification(self: *Pane, title: []const u8, body: []const u8) void {
+        self.setNotification(
+            if (title.len > 0) title else null,
+            body,
+        );
+    }
+
+    /// Handle progress report from stream handler (OSC 9;4)
+    pub fn onProgressReport(self: *Pane, report: osc.Command.ProgressReport) void {
+        const state: u8 = switch (report.state) {
+            .remove => 0,
+            .set => 1,
+            .@"error" => 2,
+            .indeterminate => 3,
+            .pause => 4,
+        };
+        const value: u8 = report.progress orelse 0;
+        self.setProgress(state, value);
+    }
+
+    /// Handle shell integration event from stream handler (OSC 133)
+    pub fn onShellIntegration(self: *Pane, kind: ShellIntegrationEvent.Kind, exit_code: ?i32) void {
+        self.shell_event = .{ .kind = kind, .exit_code = exit_code };
+        self.shell_event_pending = true;
+
+        log.info("Shell integration event: {s} exit_code={?d}", .{
+            @tagName(kind),
+            exit_code,
+        });
     }
 
     /// Set the terminal title, allocating a copy of the string
@@ -907,37 +793,6 @@ pub const Pane = struct {
     /// Clear the title changed flag
     pub fn clearTitleChanged(self: *Pane) void {
         self.title_changed = false;
-    }
-
-    /// Check for bell character (BEL = 0x07) in input data
-    /// Skips BEL characters that are OSC sequence terminators (ESC ] ... BEL)
-    fn handleBell(self: *Pane, data: []const u8) void {
-        var i: usize = 0;
-        while (i < data.len) : (i += 1) {
-            // Check for OSC sequence start (ESC ])
-            if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == ']') {
-                // Skip to end of OSC sequence (BEL or ST terminator)
-                i += 2;
-                while (i < data.len) : (i += 1) {
-                    if (data[i] == 0x07) {
-                        // BEL terminator - this is NOT a bell, skip it
-                        break;
-                    }
-                    if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == '\\') {
-                        // ST terminator (ESC \)
-                        i += 1;
-                        break;
-                    }
-                }
-                continue;
-            }
-            // Standalone BEL - this is a real bell
-            if (data[i] == 0x07) {
-                self.bell_pending = true;
-                log.debug("Bell triggered", .{});
-                return; // One bell per feed is enough
-            }
-        }
     }
 
     /// Check if bell was triggered since last cleared
@@ -1003,31 +858,6 @@ pub const Pane = struct {
     // Progress API (OSC 9;4) - taskbar progress
     // ========================================================================
 
-    /// Handle progress command from OSC 9;4;<state>;<progress>
-    fn handleProgressCommand(self: *Pane, args: []const u8) void {
-        // Parse state (first char before semicolon)
-        if (args.len == 0) {
-            self.setProgress(0, 0); // Hide on empty args
-            return;
-        }
-
-        const state = args[0] -| '0';
-        if (state > 4) return; // Invalid state
-
-        // Parse progress value if present
-        var progress: u8 = 0;
-        if (args.len >= 2 and args[1] == ';') {
-            // Parse number after semicolon
-            var i: usize = 2;
-            while (i < args.len and args[i] >= '0' and args[i] <= '9') : (i += 1) {
-                progress = progress *| 10 +| (args[i] - '0');
-            }
-            if (progress > 100) progress = 100;
-        }
-
-        self.setProgress(state, progress);
-    }
-
     /// Set progress state and value
     pub fn setProgress(self: *Pane, state: u8, value: u8) void {
         if (self.progress_state != state or self.progress_value != value) {
@@ -1056,58 +886,6 @@ pub const Pane = struct {
     // ========================================================================
     // Shell Integration API (OSC 133) - semantic prompts
     // ========================================================================
-
-    /// Handle OSC 133 shell integration sequence.
-    /// Format: ESC ] 133 ; <letter> [; <params>] ST
-    /// Letters: A=prompt_start, B=prompt_end, C=output_start, D=command_end
-    fn handleShellIntegration(self: *Pane, payload: []const u8) void {
-        if (payload.len == 0) return;
-
-        const letter = payload[0];
-        var exit_code: ?i32 = null;
-
-        const kind: ShellIntegrationEvent.Kind = switch (letter) {
-            'A' => .prompt_start,
-            'B' => .prompt_end,
-            'C' => .output_start,
-            'D' => blk: {
-                // Parse exit code if present: "D;0" or "D;1" etc.
-                if (payload.len > 2 and payload[1] == ';') {
-                    // Parse the integer after "D;"
-                    const code_str = payload[2..];
-                    var code: i32 = 0;
-                    var negative = false;
-                    var i: usize = 0;
-
-                    // Handle negative numbers
-                    if (i < code_str.len and code_str[i] == '-') {
-                        negative = true;
-                        i += 1;
-                    }
-
-                    // Parse digits
-                    while (i < code_str.len and code_str[i] >= '0' and code_str[i] <= '9') : (i += 1) {
-                        code = code *| 10 +| @as(i32, @intCast(code_str[i] - '0'));
-                    }
-
-                    if (i > @intFromBool(negative)) {
-                        // Only set exit_code if we parsed at least one digit
-                        exit_code = if (negative) -code else code;
-                    }
-                }
-                break :blk .command_end;
-            },
-            else => return, // Unknown letter, ignore
-        };
-
-        self.shell_event = .{ .kind = kind, .exit_code = exit_code };
-        self.shell_event_pending = true;
-
-        log.info("OSC 133 parsed: {s} exit_code={?d}", .{
-            @tagName(kind),
-            exit_code,
-        });
-    }
 
     /// Check if there's a pending shell integration event
     pub fn hasShellEvent(self: *const Pane) bool {
@@ -1901,24 +1679,31 @@ test "OSC 52 clipboard with default kind" {
     pane.clearClipboardSet();
 }
 
-test "OSC 52 clipboard with multiple kinds" {
+test "OSC 52 clipboard single character kinds" {
+    // Note: ghostty-vt only supports single-character clipboard kinds.
+    // Multi-character kinds like "pc" are not supported by the standard parser.
     var pane = try Pane.init(std.testing.allocator, .{});
     defer pane.deinit();
 
-    // Feed OSC 52 with "pc" (primary + clipboard), should prefer 'c'
-    try pane.feed("\x1b]52;pc;SGVsbG8=\x07");
-
+    // Test 'c' (clipboard)
+    try pane.feed("\x1b]52;c;SGVsbG8=\x07");
     try std.testing.expect(pane.hasClipboardSet());
-    const op = pane.getClipboardSet().?;
-    try std.testing.expectEqual(@as(u8, 'c'), op.kind);
+    const op_c = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'c'), op_c.kind);
     pane.clearClipboardSet();
 
-    // Feed OSC 52 with "sp" (selection + primary), should prefer 'p'
-    try pane.feed("\x1b]52;sp;SGVsbG8=\x07");
-
+    // Test 'p' (primary selection)
+    try pane.feed("\x1b]52;p;SGVsbG8=\x07");
     try std.testing.expect(pane.hasClipboardSet());
-    const op2 = pane.getClipboardSet().?;
-    try std.testing.expectEqual(@as(u8, 'p'), op2.kind);
+    const op_p = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 'p'), op_p.kind);
+    pane.clearClipboardSet();
+
+    // Test 's' (selection)
+    try pane.feed("\x1b]52;s;SGVsbG8=\x07");
+    try std.testing.expect(pane.hasClipboardSet());
+    const op_s = pane.getClipboardSet().?;
+    try std.testing.expectEqual(@as(u8, 's'), op_s.kind);
     pane.clearClipboardSet();
 }
 

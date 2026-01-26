@@ -209,6 +209,53 @@ pub const ClipboardHandler = struct {
         clog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ pane_id, kind, data_str.len });
     }
 
+    /// Handle OSC 52 with pre-parsed kind and data from stream handler.
+    /// This is called when ghostty-vt has already parsed the OSC 52 sequence.
+    /// kind: clipboard kind byte ('c', 's', 'p')
+    /// data: clipboard data (either "?" for query or base64-encoded content)
+    pub fn handleOsc52Parsed(self: *ClipboardHandler, kind: u8, data: []const u8, pane_id: u16) void {
+        // Normalize kind to one we support ('c', 's', or 'p')
+        const normalized_kind: u8 = switch (kind) {
+            'c', 's', 'p' => kind,
+            else => 'c', // Default to system clipboard
+        };
+
+        // Check for GET request (single '?' character)
+        if (data.len == 1 and data[0] == '?') {
+            log.debug("OSC 52 GET request: kind={c}", .{normalized_kind});
+            clog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ pane_id, normalized_kind });
+            self.pending_get = normalized_kind;
+            self.get_timestamp_ms = std.time.milliTimestamp();
+            return;
+        }
+
+        // SET request - data contains base64-encoded content
+        if (data.len == 0) {
+            log.debug("OSC 52 SET: empty data (clear clipboard)", .{});
+            // Empty data means clear clipboard - still send to client
+        }
+
+        // Free any existing pending set operation
+        if (self.pending_set) |old| {
+            old.deinit(self.allocator);
+        }
+
+        // Copy the base64 data (we own it)
+        const data_copy = self.allocator.dupe(u8, data) catch |e| {
+            log.warn("OSC 52: failed to allocate clipboard data: {any}", .{e});
+            self.pending_set = null;
+            return;
+        };
+
+        self.pending_set = .{
+            .kind = normalized_kind,
+            .data = data_copy,
+        };
+
+        log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ normalized_kind, data.len });
+        clog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ pane_id, normalized_kind, data.len });
+    }
+
     /// Handle clipboard GET timeout - returns response to send, or null if not timed out
     /// Caller is responsible for writing the response and clearing the get state
     pub fn checkGetTimeout(self: *ClipboardHandler) ?struct { kind: u8, should_timeout: bool } {
