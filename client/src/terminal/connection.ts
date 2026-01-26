@@ -1167,6 +1167,40 @@ export class TerminalConnection {
       deltaLog.log(`Pane ${paneId} title:`, deltaTitle);
       this.emit("title", paneId, deltaTitle);
     }
+
+    // Prune old cached rows to prevent unbounded growth
+    // Keep rows in current viewport plus a buffer for scrollback
+    const MAX_CACHED_ROWS = 500;
+    if (paneState.rowCache.size > MAX_CACHED_ROWS) {
+      const viewportRowIdSet = new Set(rowIds);
+      for (const cachedId of paneState.rowCache.keys()) {
+        if (!viewportRowIdSet.has(cachedId) && paneState.rowCache.size > MAX_CACHED_ROWS) {
+          paneState.rowCache.delete(cachedId);
+          paneState.rowGraphemes.delete(cachedId);
+          paneState.rowHyperlinks.delete(cachedId);
+        }
+      }
+      deltaLog.log(`Pane ${paneId}: Pruned cache to ${paneState.rowCache.size} rows`);
+    }
+
+    // Prune unused styles to prevent unbounded growth
+    // Collect style IDs actually used by current cells
+    const MAX_CACHED_STYLES = 256;
+    if (paneState.lastStyles && paneState.lastStyles.size > MAX_CACHED_STYLES) {
+      const usedStyleIds = new Set<number>();
+      for (const cell of cells) {
+        if (cell.styleId !== 0) {
+          usedStyleIds.add(cell.styleId);
+        }
+      }
+      // Remove styles not used by current viewport
+      for (const styleId of paneState.lastStyles.keys()) {
+        if (!usedStyleIds.has(styleId)) {
+          paneState.lastStyles.delete(styleId);
+        }
+      }
+      deltaLog.log(`Pane ${paneId}: Pruned styles to ${paneState.lastStyles.size}`);
+    }
   }
 
   /**
