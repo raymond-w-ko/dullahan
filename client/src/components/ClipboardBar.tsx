@@ -54,6 +54,7 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
         <button
           class="clipboard-btn"
           onClick={handleCopyToSystem}
+          onMouseDown={(e) => e.preventDefault()}
           disabled={!entry}
           title={`Copy '${kind}' to system clipboard`}
         >
@@ -62,6 +63,7 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
         <button
           class="clipboard-btn"
           onClick={handlePasteToTerminal}
+          onMouseDown={(e) => e.preventDefault()}
           disabled={!entry}
           title={`Paste '${kind}' to terminal`}
         >
