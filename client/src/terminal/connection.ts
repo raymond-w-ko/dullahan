@@ -175,11 +175,17 @@ export interface TerminalSnapshot {
   selection?: SelectionBounds; // Current selection (if any)
 }
 
+/** A cached row with LRU tracking */
+interface CachedRow {
+  cells: Cell[];
+  lastAccess: number;  // Timestamp of last access
+}
+
 /** Per-pane state for delta sync tracking */
 interface PaneState {
   generation: number;
   minRowId: bigint;
-  rowCache: Map<bigint, Cell[]>;
+  rowCache: Map<bigint, CachedRow>;  // LRU-tracked row cache
   rowGraphemes: Map<bigint, GraphemeTable>; // Graphemes per row (row-relative indices)
   rowHyperlinks: Map<bigint, HyperlinkTable>; // Hyperlinks per row (row-relative indices)
   cols: number;
@@ -353,7 +359,8 @@ export class TerminalConnection {
 
   /** Get cached row by ID for a pane, or undefined if not cached */
   getCachedRow(paneId: number, rowId: bigint): Cell[] | undefined {
-    return this._panes.get(paneId)?.rowCache.get(rowId);
+    const cached = this._panes.get(paneId)?.rowCache.get(rowId);
+    return cached?.cells;
   }
 
   connect(): void {
@@ -475,12 +482,13 @@ export class TerminalConnection {
         paneState.rowCache.clear();
         paneState.rowGraphemes.clear();
         paneState.rowHyperlinks.clear();
+        const now = Date.now();
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
           if (rowId !== undefined) {
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
-            paneState.rowCache.set(rowId, rowCells);
+            paneState.rowCache.set(rowId, { cells: rowCells, lastAccess: now });
             // Track minimum row ID
             if (minSeen < 0n || rowId < minSeen) {
               minSeen = rowId;
@@ -1021,11 +1029,12 @@ export class TerminalConnection {
     paneState.rows = delta.rows;
 
     // Apply each dirty row to cache (including graphemes)
+    const now = Date.now();
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
       const cells = decodeCellsFromBytes(row.cells);
 
-      paneState.rowCache.set(rowId, cells);
+      paneState.rowCache.set(rowId, { cells, lastAccess: now });
 
       // Decode and cache graphemes for this row (row-relative indices)
       if (row.graphemes) {
@@ -1086,7 +1095,14 @@ export class TerminalConnection {
 
     // Check which rowIds are in cache
     // NOTE: rowId=0 IS valid (page serial 0, row index 0)
-    const notInCache = rowIds.filter(id => !paneState.rowCache.has(id));
+    const notInCache = rowIds.filter(id => {
+      const cached = paneState.rowCache.get(id);
+      if (cached) {
+        // Update access time for rows we're checking in the viewport
+        cached.lastAccess = accessTime;
+      }
+      return !cached;
+    });
 
     // Threshold: if more than 10% of rows are missing (min 3), request resync
     const missingRowThreshold = Math.max(3, Math.floor(delta.rows * 0.1));
@@ -1106,11 +1122,15 @@ export class TerminalConnection {
     const hyperlinks: HyperlinkTable = new Map();
     let fromCache = 0;
     let filled = 0;
+    const accessTime = Date.now();
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
       if (rowId !== undefined) {
-        const rowCells = paneState.rowCache.get(rowId);
-        if (rowCells) {
+        const cached = paneState.rowCache.get(rowId);
+        if (cached) {
+          // Update LRU access time when row is used in viewport
+          cached.lastAccess = accessTime;
+          const rowCells = cached.cells;
           if (rowCells.length !== delta.cols) {
             deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
           }
@@ -1218,19 +1238,31 @@ export class TerminalConnection {
       this.emit("title", paneId, deltaTitle);
     }
 
-    // Prune old cached rows to prevent unbounded growth
-    // Keep rows in current viewport plus a buffer for scrollback
+    // LRU-style cache pruning to prevent unbounded growth
+    // Evict oldest accessed rows first, but never evict current viewport rows
     const MAX_CACHED_ROWS = 500;
     if (paneState.rowCache.size > MAX_CACHED_ROWS) {
       const viewportRowIdSet = new Set(rowIds);
-      for (const cachedId of paneState.rowCache.keys()) {
-        if (!viewportRowIdSet.has(cachedId) && paneState.rowCache.size > MAX_CACHED_ROWS) {
-          paneState.rowCache.delete(cachedId);
-          paneState.rowGraphemes.delete(cachedId);
-          paneState.rowHyperlinks.delete(cachedId);
-        }
+
+      // Score each cached row by age (older = higher score = evict first)
+      const scored: Array<[bigint, number]> = [];
+      for (const [rowId, cached] of paneState.rowCache) {
+        if (viewportRowIdSet.has(rowId)) continue; // Never evict viewport rows
+        scored.push([rowId, accessTime - cached.lastAccess]);
       }
-      deltaLog.log(`Pane ${paneId}: Pruned cache to ${paneState.rowCache.size} rows`);
+
+      // Sort by score descending (oldest access first)
+      scored.sort((a, b) => b[1] - a[1]);
+
+      // Evict oldest until under limit
+      const toEvict = paneState.rowCache.size - MAX_CACHED_ROWS;
+      for (let i = 0; i < toEvict && i < scored.length; i++) {
+        const [rowId] = scored[i]!;
+        paneState.rowCache.delete(rowId);
+        paneState.rowGraphemes.delete(rowId);
+        paneState.rowHyperlinks.delete(rowId);
+      }
+      deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${Math.min(toEvict, scored.length)} oldest)`);
     }
 
     // Prune unused styles to prevent unbounded growth
