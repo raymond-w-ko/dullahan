@@ -1099,7 +1099,7 @@ export class TerminalConnection {
       const cached = paneState.rowCache.get(id);
       if (cached) {
         // Update access time for rows we're checking in the viewport
-        cached.lastAccess = accessTime;
+        cached.lastAccess = now;
       }
       return !cached;
     });
@@ -1122,14 +1122,13 @@ export class TerminalConnection {
     const hyperlinks: HyperlinkTable = new Map();
     let fromCache = 0;
     let filled = 0;
-    const accessTime = Date.now();
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
       if (rowId !== undefined) {
         const cached = paneState.rowCache.get(rowId);
         if (cached) {
           // Update LRU access time when row is used in viewport
-          cached.lastAccess = accessTime;
+          cached.lastAccess = now;
           const rowCells = cached.cells;
           if (rowCells.length !== delta.cols) {
             deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
@@ -1248,7 +1247,7 @@ export class TerminalConnection {
       const scored: Array<[bigint, number]> = [];
       for (const [rowId, cached] of paneState.rowCache) {
         if (viewportRowIdSet.has(rowId)) continue; // Never evict viewport rows
-        scored.push([rowId, accessTime - cached.lastAccess]);
+        scored.push([rowId, now - cached.lastAccess]);
       }
 
       // Sort by score descending (oldest access first)
