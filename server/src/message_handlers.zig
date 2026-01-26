@@ -247,7 +247,7 @@ fn handlePing(el: *EventLoop, client: *ClientState) !void {
 
 fn handleSync(el: *EventLoop, client: *ClientState, sync_msg: ParsedSync) !void {
     const pane = el.session.activePane() orelse return;
-    try el.handleSyncRequest(client, pane, sync_msg.gen);
+    try el.handleSyncRequest(client, pane, sync_msg.gen, sync_msg.minRowId);
 }
 
 fn handleResync(el: *EventLoop, client: *ClientState, resync_msg: ParsedResync) !void {

@@ -959,7 +959,7 @@ pub const EventLoop = struct {
         try message_handlers.handleParsedMessage(self, msg, client);
     }
 
-    pub fn handleSyncRequest(self: *EventLoop, client: *ClientState, pane: *Pane, client_gen: u64) !void {
+    pub fn handleSyncRequest(self: *EventLoop, client: *ClientState, pane: *Pane, client_gen: u64, client_min_row_id: u64) !void {
         // If no_delta is set, always send full snapshots for debugging
         if (self.no_delta) {
             const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
@@ -967,6 +967,24 @@ pub const EventLoop = struct {
             try client.ws.sendBinary(snap);
             client.setGeneration(pane.id, pane.generation);
             return;
+        }
+
+        // Check if client's cache is too stale for the current viewport.
+        // If client's minimum cached row ID is higher than the viewport's minimum,
+        // the client has evicted rows we need to reference - send full snapshot.
+        if (client_min_row_id > 0) {
+            const viewport_min_row_id = pane.getMinVisibleRowId();
+            if (client_min_row_id > viewport_min_row_id) {
+                log.debug("Client cache stale: client_min={d} > viewport_min={d}, sending snapshot", .{
+                    client_min_row_id,
+                    viewport_min_row_id,
+                });
+                const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+                defer pane.allocator.free(snap);
+                try client.ws.sendBinary(snap);
+                client.setGeneration(pane.id, pane.generation);
+                return;
+            }
         }
 
         if (client_gen == pane.generation) {

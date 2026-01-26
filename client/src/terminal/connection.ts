@@ -1262,7 +1262,17 @@ export class TerminalConnection {
         paneState.rowGraphemes.delete(rowId);
         paneState.rowHyperlinks.delete(rowId);
       }
-      deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${Math.min(toEvict, scored.length)} oldest)`);
+
+      // Recalculate minRowId after pruning (we may have evicted the minimum)
+      let newMinRowId = 0n;
+      for (const rowId of paneState.rowCache.keys()) {
+        if (newMinRowId === 0n || rowId < newMinRowId) {
+          newMinRowId = rowId;
+        }
+      }
+      paneState.minRowId = newMinRowId;
+
+      deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${Math.min(toEvict, scored.length)} oldest, minRowId=${newMinRowId})`);
     }
 
     // Prune unused styles to prevent unbounded growth

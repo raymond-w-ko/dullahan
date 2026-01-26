@@ -1043,6 +1043,18 @@ pub const Pane = struct {
         log.debug("Scrolled by {d} rows", .{delta});
     }
 
+    /// Get the minimum row ID visible in the current viewport.
+    /// Used for server-side cache staleness detection.
+    pub fn getMinVisibleRowId(self: *Pane) u64 {
+        const pages = &self.terminal.screens.active.pages;
+        // Get the top-left pin of the viewport (row 0)
+        if (pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } })) |top_pin| {
+            return snapshot.computeRowId(top_pin);
+        }
+        // Fallback: return 0 if no pin (shouldn't happen)
+        return 0;
+    }
+
     /// Mark all visible rows as dirty (used for scroll).
     /// For resize, use forceFullResync() instead.
     fn markAllRowsDirty(self: *Pane) void {
