@@ -46,6 +46,16 @@ pub fn install() void {
     // Install handler for SIGTERM (kill command)
     posix.sigaction(posix.SIG.TERM, &sa, null);
     log.info("Installed SIGTERM handler", .{});
+
+    // Set SIGCHLD to SIG_IGN with SA_NOCLDWAIT to auto-reap child processes
+    // This prevents zombie processes when shell children exit
+    const sa_chld = posix.Sigaction{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.NOCLDWAIT,
+    };
+    posix.sigaction(posix.SIG.CHLD, &sa_chld, null);
+    log.info("Installed SIGCHLD handler (auto-reap)", .{});
 }
 
 /// Reset signal handlers to default
@@ -58,6 +68,7 @@ pub fn reset() void {
 
     posix.sigaction(posix.SIG.INT, &sa, null);
     posix.sigaction(posix.SIG.TERM, &sa, null);
+    posix.sigaction(posix.SIG.CHLD, &sa, null);
 }
 
 test "shutdown flag starts false" {
