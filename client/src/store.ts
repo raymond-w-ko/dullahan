@@ -419,11 +419,6 @@ export function isFullscreen(): boolean {
 
 export function setFocusedPane(paneId: number) {
   store.focusedPaneId = paneId;
-  // Also update the window's focusedPaneId so it's restored when switching back
-  const activeWindow = store.windows.get(store.activeWindowId);
-  if (activeWindow) {
-    activeWindow.focusedPaneId = paneId;
-  }
   notify();
 }
 
@@ -460,32 +455,20 @@ export function closeWindow(windowId: number) {
 }
 
 export function setLayout(layout: LayoutUpdate) {
-  // Preserve client's active window if already set and still exists in new layout
-  const windowIds = new Set(layout.windows.map(w => w.id));
-  if (!windowIds.has(store.activeWindowId)) {
-    // Current window no longer exists, use server's suggestion
-    store.activeWindowId = layout.activeWindowId;
-  }
+  store.activeWindowId = layout.activeWindowId;
 
   // Update templates if provided
   if (layout.templates) {
     store.layoutTemplates = layout.templates;
   }
 
-  // Preserve existing per-window focus state
-  const oldWindows = new Map(store.windows);
-
   // Update windows map from layout
   store.windows.clear();
   for (const win of layout.windows) {
-    const oldWindow = oldWindows.get(win.id);
     store.windows.set(win.id, {
       id: win.id,
       paneIds: win.panes,
-      // Preserve client's focused pane if it still exists, else use server's
-      focusedPaneId: oldWindow && win.panes.includes(oldWindow.focusedPaneId)
-        ? oldWindow.focusedPaneId
-        : win.activePaneId,
+      focusedPaneId: win.activePaneId,
       layout: win.layout,
     });
   }
@@ -519,10 +502,6 @@ export function switchWindow(windowId: number) {
   const window = store.windows.get(windowId);
   if (window) {
     store.activeWindowId = windowId;
-    // Focus the last focused pane in this window (if it exists)
-    if (window.focusedPaneId !== undefined && store.panes.has(window.focusedPaneId)) {
-      store.focusedPaneId = window.focusedPaneId;
-    }
     // Increment dimensionVersion to force pane dimension recalculation
     // This ensures panes recalculate their sizes when becoming visible
     store.dimensionVersion++;

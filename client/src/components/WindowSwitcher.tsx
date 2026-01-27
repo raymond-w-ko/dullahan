@@ -14,24 +14,22 @@ function getHiddenPaneCount(win: WindowState): number {
   return Math.max(0, totalPanes - visiblePanes);
 }
 
-/** Format window tab label (display id + 1 to match Alt+N keybinds) */
+/** Format window tab label */
 function getWindowLabel(win: WindowState): string {
-  const displayId = win.id + 1;
   const hidden = getHiddenPaneCount(win);
   if (hidden > 0) {
-    return `${displayId} (+${hidden})`;
+    return `${win.id} (+${hidden})`;
   }
-  return String(displayId);
+  return String(win.id);
 }
 
-/** Format window tab tooltip (display id + 1 to match Alt+N keybinds) */
+/** Format window tab tooltip */
 function getWindowTooltip(win: WindowState): string {
-  const displayId = win.id + 1;
   const hidden = getHiddenPaneCount(win);
   if (hidden > 0) {
-    return `Window ${displayId} (${hidden} pane${hidden > 1 ? "s" : ""} hidden) - right-click for options`;
+    return `Window ${win.id} (${hidden} pane${hidden > 1 ? "s" : ""} hidden) - right-click for options`;
   }
-  return `Window ${displayId} - right-click for options`;
+  return `Window ${win.id} - right-click for options`;
 }
 
 export function WindowSwitcher() {
@@ -76,7 +74,7 @@ export function WindowSwitcher() {
             onContextMenu={(e) => handleContextMenu(e, win.id)}
             title={getWindowTooltip(win)}
           >
-            {win.id + 1}
+            {win.id}
             {hidden > 0 && (
               <span
                 class={`window-tab-hidden${isMaster ? " window-tab-hidden--clickable" : ""}`}
