@@ -147,6 +147,7 @@ export type ConnectionEvents = {
   layout: (layout: LayoutUpdate) => void;
   clipboardSet: (paneId: number, clipboard: string, data: string) => void;
   clipboardGet: (paneId: number, clipboard: string) => void;
+  latency: (latencyMs: number) => void;
 };
 
 // ============================================================================
@@ -240,6 +241,13 @@ export class TerminalConnection {
   private _lastResyncTime: Map<number, number> = new Map();
   private static readonly RESYNC_COOLDOWN_MS = 1000;
 
+  // Latency tracking
+  private _pingTimer: number | null = null;
+  private _latencySamples: number[] = [];
+  private _latency: number = 0;
+  private static readonly PING_INTERVAL_MS = 250;
+  private static readonly LATENCY_SAMPLE_COUNT = 8;
+
   // Event emitter for connection events
   private _emitter = new TypedEventEmitter<ConnectionEvents>();
 
@@ -292,6 +300,11 @@ export class TerminalConnection {
   /** Get the current layout (or null if not received yet) */
   get layout(): LayoutUpdate | null {
     return this._layout;
+  }
+
+  /** Get the current average latency in ms (0 if not yet measured) */
+  get latency(): number {
+    return this._latency;
   }
 
   /** Get or create pane state */
@@ -385,11 +398,15 @@ export class TerminalConnection {
       connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeInfo);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
+      // Start latency pings
+      this.startPingTimer();
       this.emit("connect");
     };
 
     this.ws.onclose = () => {
       connLog.log("WebSocket disconnected");
+      // Stop latency pings
+      this.stopPingTimer();
       this.emit("disconnect");
       this.scheduleReconnect();
     };
@@ -632,7 +649,10 @@ export class TerminalConnection {
         break;
       }
       case "pong":
-        // Ignore pong
+        // Handle latency measurement
+        if (typeof msg.ts === "number") {
+          this.handlePong(msg.ts);
+        }
         break;
       case "clipboard":
         // OSC 52 clipboard operation from terminal
@@ -663,6 +683,7 @@ export class TerminalConnection {
   }
 
   disconnect(): void {
+    this.stopPingTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -909,7 +930,45 @@ export class TerminalConnection {
   }
 
   sendPing(): void {
-    this.send({ type: "ping" });
+    this.send({ type: "ping", ts: performance.now() });
+  }
+
+  /** Start periodic ping timer for latency measurement */
+  private startPingTimer(): void {
+    this.stopPingTimer();
+    this._latencySamples = [];
+    this._latency = 0;
+    this._pingTimer = window.setInterval(() => {
+      this.sendPing();
+    }, TerminalConnection.PING_INTERVAL_MS);
+    // Send first ping immediately
+    this.sendPing();
+  }
+
+  /** Stop periodic ping timer */
+  private stopPingTimer(): void {
+    if (this._pingTimer !== null) {
+      window.clearInterval(this._pingTimer);
+      this._pingTimer = null;
+    }
+  }
+
+  /** Handle pong response and update latency */
+  private handlePong(ts: number): void {
+    const now = performance.now();
+    const latency = now - ts;
+
+    // Add sample to circular buffer
+    this._latencySamples.push(latency);
+    if (this._latencySamples.length > TerminalConnection.LATENCY_SAMPLE_COUNT) {
+      this._latencySamples.shift();
+    }
+
+    // Calculate average
+    const sum = this._latencySamples.reduce((a, b) => a + b, 0);
+    this._latency = Math.round(sum / this._latencySamples.length);
+
+    this.emit("latency", this._latency);
   }
 
   /**

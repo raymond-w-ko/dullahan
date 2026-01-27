@@ -165,9 +165,10 @@ export interface SwapPanesMessage {
   paneId2: number;
 }
 
-/** Ping for keepalive */
+/** Ping for keepalive and latency measurement */
 export interface PingMessage {
   type: "ping";
+  ts: number; // Client timestamp (performance.now())
 }
 
 /** Select all content in a pane */
@@ -444,6 +445,7 @@ export interface MasterChangedMessage {
 /** Pong response to ping */
 export interface PongMessage {
   type: "pong";
+  ts: number; // Echoed client timestamp
 }
 
 /** Debug output from server */

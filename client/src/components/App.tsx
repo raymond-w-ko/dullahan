@@ -45,7 +45,7 @@ export function App() {
   }, []);
 
   const store = getStore();
-  const { connected, error, theme, settingsOpen, isMaster, masterId, activeWindowId } = store;
+  const { connected, error, theme, settingsOpen, isMaster, masterId, activeWindowId, latency } = store;
 
   return (
     <div class="app" data-theme={theme}>
@@ -76,12 +76,13 @@ export function App() {
         >
           {isMaster ? "\u2605" : "\u2606"}
         </button>
-        <button
+        <span
           class={`bottombar-btn ${connected ? "bottombar-btn--connected" : "bottombar-btn--disconnected"}`}
-          title={connected ? "Connected" : "Disconnected"}
+          title={connected ? `Connected (${latency}ms latency)` : "Disconnected"}
         >
           {connected ? "\u25CF" : "\u25CB"}
-        </button>
+          {connected && latency > 0 && <span class="bottombar-latency">{latency}ms</span>}
+        </span>
         <button
           class="bottombar-btn"
           onClick={() => setSettingsOpen(true)}

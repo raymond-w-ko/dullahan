@@ -93,6 +93,7 @@ export interface Store {
   connection: TerminalConnection | null;
   connected: boolean;
   error: string | null;
+  latency: number; // Server latency in ms (averaged over last 8 samples)
 
   // Master/slave state
   isMaster: boolean;
@@ -148,6 +149,7 @@ const store: Store = {
   connection: null,
   connected: false,
   error: null,
+  latency: 0,
 
   isMaster: false,
   masterId: null,
@@ -217,6 +219,11 @@ export function setConnected(connected: boolean) {
 
 export function setError(error: string | null) {
   store.error = error;
+  notify();
+}
+
+export function setLatency(latency: number) {
+  store.latency = latency;
   notify();
 }
 
@@ -649,8 +656,12 @@ export function initConnection() {
     // This ensures panes resize after layout settles
     setTimeout(() => triggerDimensionRecalc(), 100);
   });
-  conn.on("disconnect", () => setConnected(false));
+  conn.on("disconnect", () => {
+    setConnected(false);
+    setLatency(0); // Reset latency on disconnect
+  });
   conn.on("error", (err) => setError(err));
+  conn.on("latency", (latency) => setLatency(latency));
 
   conn.on("snapshot", (snap) => {
     setPaneSnapshot(snap.paneId, snap);

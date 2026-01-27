@@ -29,6 +29,11 @@ pub const ScrollMessage = struct {
     delta: i32,
 };
 
+pub const PingMessage = struct {
+    type: []const u8,
+    ts: f64,
+};
+
 pub const SyncMessage = struct {
     type: []const u8,
     gen: u64,
@@ -152,7 +157,7 @@ pub const ParsedMessage = union(enum) {
     text: ParsedText,
     resize: ParsedResize,
     scroll: ParsedScroll,
-    ping: void,
+    ping: ParsedPing,
     sync: ParsedSync,
     resync: ParsedResync,
     focus: ParsedFocus,
@@ -199,6 +204,10 @@ pub const ParsedResize = struct {
 
 pub const ParsedScroll = struct {
     delta: i32,
+};
+
+pub const ParsedPing = struct {
+    ts: f64, // Client timestamp to echo back
 };
 
 pub const ParsedSync = struct {

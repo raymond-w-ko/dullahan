@@ -101,7 +101,14 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
             .cleanup = .{ .none = {} },
         };
     } else if (std.mem.eql(u8, type_str, "ping")) {
-        return .{ .msg = .{ .ping = {} }, .cleanup = .{ .none = {} } };
+        const parsed = std.json.parseFromSlice(messages.PingMessage, allocator, data, .{
+            .ignore_unknown_fields = true,
+        }) catch return null;
+        defer parsed.deinit();
+        return .{
+            .msg = .{ .ping = .{ .ts = parsed.value.ts } },
+            .cleanup = .{ .none = {} },
+        };
     } else if (std.mem.eql(u8, type_str, "sync")) {
         const parsed = std.json.parseFromSlice(SyncMessage, allocator, data, .{
             .ignore_unknown_fields = true,
@@ -365,7 +372,12 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
             .payload = payload,
         };
     } else if (std.mem.eql(u8, type_str, "ping")) {
-        return .{ .msg = .{ .ping = {} }, .payload = payload };
+        const ts_payload = (payload.mapGet("ts") catch return null) orelse return null;
+        const ts: f64 = ts_payload.asFloat() catch return null;
+        return .{
+            .msg = .{ .ping = .{ .ts = ts } },
+            .payload = payload,
+        };
     } else if (std.mem.eql(u8, type_str, "sync")) {
         const gen_payload = (payload.mapGet("gen") catch return null) orelse return null;
         const gen: u64 = gen_payload.getUint() catch return null;
@@ -503,9 +515,10 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
 // Tests
 test "parseJsonMessage ping" {
     const allocator = std.testing.allocator;
-    const result = parseJsonMessage(allocator, "{\"type\":\"ping\"}");
+    const result = parseJsonMessage(allocator, "{\"type\":\"ping\",\"ts\":12345.678}");
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.msg == .ping);
+    try std.testing.expectApproxEqAbs(result.?.msg.ping.ts, 12345.678, 0.001);
 }
 
 test "parseJsonMessage resize" {

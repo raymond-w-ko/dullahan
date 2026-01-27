@@ -82,7 +82,7 @@ pub fn handleParsedMessage(el: *EventLoop, msg: ParsedMessage, client: *ClientSt
         .text => |text_msg| try handleText(el, text_msg),
         .resize => |resize_msg| try handleResize(el, client, resize_msg),
         .scroll => |scroll_msg| handleScroll(el, scroll_msg),
-        .ping => try handlePing(el, client),
+        .ping => |ping_msg| try handlePing(el, client, ping_msg),
         .sync => |sync_msg| try handleSync(el, client, sync_msg),
         .resync => |resync_msg| try handleResync(el, client, resync_msg),
         .focus => |focus_msg| handleFocus(el, focus_msg),
@@ -239,8 +239,8 @@ fn handleScroll(el: *EventLoop, scroll_msg: ParsedScroll) void {
     pane.scroll(scroll_msg.delta);
 }
 
-fn handlePing(el: *EventLoop, client: *ClientState) !void {
-    const pong = try snapshot.generateBinaryPong(el.allocator);
+fn handlePing(el: *EventLoop, client: *ClientState, ping_msg: messages.ParsedPing) !void {
+    const pong = try snapshot.generateBinaryPong(el.allocator, ping_msg.ts);
     defer el.allocator.free(pong);
     try client.ws.sendBinary(pong);
 }

@@ -756,12 +756,13 @@ pub fn generateFocusMessage(allocator: std.mem.Allocator, pane_id: u16) ![]u8 {
     return packAndCompress(allocator, &payload, 64);
 }
 
-/// Generate a binary msgpack pong message
-pub fn generateBinaryPong(allocator: std.mem.Allocator) ![]u8 {
+/// Generate a binary msgpack pong message with echoed timestamp
+pub fn generateBinaryPong(allocator: std.mem.Allocator, ts: f64) ![]u8 {
     var payload = msgpack.Payload.mapPayload(allocator);
     errdefer payload.free(allocator);
 
     try payload.mapPut("type", try msgpack.Payload.strToPayload("pong", allocator));
+    try payload.mapPut("ts", .{ .float = ts });
 
     return packAndCompress(allocator, &payload, 64);
 }
