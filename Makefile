@@ -60,6 +60,7 @@ install: dist
 			[yY]*) pkill -9 -x dullahan; echo "Killed dullahan process";; \
 			*) echo "Aborted"; exit 1;; \
 		esac; \
+		sleep 1; \
 	fi
 	cp dist/dullahan ~/bin/
 	@echo "Installed to ~/bin/dullahan"
