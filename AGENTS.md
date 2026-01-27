@@ -34,11 +34,12 @@ If I tell you to do something, even if it goes against what follows below, YOU M
 - Written in Zig using `libghostty-vt` for terminal emulation
 - Source of truth for all terminal state
 - Sends full snapshots and delta updates to connected clients
-- Runs as a daemon on Linux/macOS (Windows support planned)
+- Runs as a daemon on Linux/macOS (Windows support planned — see `docs/windows-support-feasibility.md`)
 - **Single binary**: `zig-out/bin/dullahan` — all functionality in one executable
 - **Two communication channels:**
   - **IPC socket** (`/tmp/dullahan-<uid>/dullahan.sock`) — CLI control (ping, status, quit)
   - **WebSocket** (port `7681`) — Client connections for terminal data
+- **Single-parser architecture**: Uses a custom `StreamHandler` that receives parsed VT events from ghostty-vt and routes them appropriately (terminal-modifying events to Terminal, query/notification events to Pane)
 
 ### Client (Web)
 - Browser-based UI supporting multiple simultaneous connections
@@ -123,6 +124,7 @@ panes: new Map(),    // Created on-demand when snapshots arrive
 
 **Important ordering caveat**: Snapshots may arrive before layout messages. The client creates pane state on-demand in `setPaneSnapshot()` to handle this.
 
+**Client commands:**
 ```bash
 cd client
 bun install          # Install dependencies
@@ -130,6 +132,22 @@ bun run build        # Build for production
 bun run dev          # Watch mode for development
 bun run serve        # Dev server at http://localhost:3000
 bun run typecheck    # Type check without emitting
+```
+
+**Makefile targets:**
+```bash
+make build           # Build both server and client (debug)
+make server          # Build server only (includes theme-db)
+make client          # Build client only (includes themes)
+make dist            # Production build (single binary with embedded client)
+make install         # Build dist and install to ~/bin
+make themes          # Download Ghostty themes + generate CSS
+make theme-db        # Generate server-side Zig theme database
+make coverage        # Run all tests with coverage
+make fmt             # Format server code with zig fmt
+make dev             # Build and run with debug logging (port 7682)
+make prod            # Build dist and run production (port 7681)
+make clean           # Remove build artifacts
 ```
 
 ### Development REPL
@@ -231,6 +249,7 @@ This provides isolation between users on shared systems.
 | PID File | `/tmp/dullahan-<uid>/dullahan.pid` | Server process tracking |
 | WebSocket | `ws://localhost:7681` | Client ↔ Server terminal data |
 | Log File | `/tmp/dullahan-<uid>/dullahan.log` | Server debug logging |
+| Category Log | `/tmp/dullahan-<uid>/dullahan-dlog.log` | Wine-style category debug logging |
 | PTY Traffic | `/tmp/dullahan-<uid>/pty-traffic.log` | PTY I/O hex dump (when enabled) |
 
 **PTY traffic logging** is disabled by default. Enable with `dullahan pty-log-on`.
@@ -262,6 +281,12 @@ dullahan/
 │       ├── http.zig         # HTTP server with WebSocket upgrade
 │       ├── websocket.zig    # WebSocket frame encoding/decoding
 │       ├── event_loop.zig   # Central event loop (master/slave, message routing)
+│       ├── message_handlers.zig # Extracted message handlers (keyboard, mouse, clipboard, etc.)
+│       ├── message_parsing.zig  # JSON message parsing from WebSocket clients
+│       ├── client_state.zig # Client connection state (generations, auth)
+│       ├── layout_helpers.zig # Layout utility functions
+│       ├── stream_handler.zig # Single-parser VT stream handler
+│       ├── theme_db.zig     # Server-side theme database (OSC 10/11 color queries)
 │       ├── snapshot.zig     # Terminal state → msgpack + delta generation
 │       ├── embedded_assets.zig # Embedded client for single-binary dist
 │       ├── session.zig      # Session (creates windows, initial layout)
@@ -284,6 +309,8 @@ dullahan/
 │       ├── signal.zig       # Signal handling
 │       ├── dlog.zig         # Wine-style category debug logging
 │       ├── debug_config.zig # Debug logging configuration
+│       ├── tailscale.zig    # Tailscale detection for remote access
+│       ├── ws_proxy.zig     # WebSocket proxy (auth, permissions)
 │       ├── math.zig         # Math utilities
 │       └── assets/          # Embedded static assets
 │
@@ -311,10 +338,14 @@ dullahan/
 │   │   │   ├── TerminalPane.tsx     # individual terminal pane
 │   │   │   ├── TerminalView.tsx     # terminal rendering (cells, cursor, selection)
 │   │   │   ├── LayoutRenderer.tsx   # recursive layout tree renderer
+│   │   │   ├── LayoutDivider.tsx    # draggable pane dividers
 │   │   │   ├── LayoutPickerModal.tsx # template selection modal
 │   │   │   ├── WindowSwitcher.tsx   # tab bar for window switching
 │   │   │   ├── SettingsModal.tsx    # settings panel
 │   │   │   ├── ClipboardBar.tsx     # clipboard paste confirmation bar
+│   │   │   ├── ContextMenu.tsx      # right-click context menu
+│   │   │   ├── ProgressBar.tsx      # OSC 9;4 progress bar
+│   │   │   ├── ToastContainer.tsx   # toast notification display
 │   │   │   └── ErrorBoundary.tsx    # React error boundary
 │   │   ├── hooks/
 │   │   │   ├── useScrollback.ts     # Scrollback buffer management
@@ -323,7 +354,7 @@ dullahan/
 │   │   │   ├── useStoreSubscription.ts # Store subscription hook
 │   │   │   └── useTerminalDimensions.ts # Terminal size calculation
 │   │   └── terminal/
-│   │       ├── connection.ts    # WebSocket client + master checks
+│   │       ├── connection.ts    # WebSocket client + LRU cache management
 │   │       ├── keyboard.ts      # Keyboard event handling + keybind interception
 │   │       ├── keybinds.ts      # Keybind string parser (Ghostty-style)
 │   │       ├── keybindConfig.ts # Keybind configuration loading
@@ -355,14 +386,20 @@ dullahan/
 │
 ├── docs/                    # documentation
 │   ├── delta-sync-design.md # Delta sync protocol design (row IDs, generations)
+│   ├── cache-miss-resync-design.md # Cache miss recovery via resync message
 │   ├── keybindings.md       # Keybinding system design and API
+│   ├── clipboard-spec.md    # Clipboard (OSC 52) specification
 │   ├── ime-support.md       # IME (Input Method Editor) support design
+│   ├── logging.md           # Comprehensive logging system documentation
+│   ├── profiling-server.md  # Server profiling guide (perf, heaptrack, strace)
+│   ├── windows-support-feasibility.md # Windows support analysis
 │   └── zig-0.15-notes.md    # Zig 0.15 migration notes
 │
 ├── scripts/
 │   ├── update-ghostty.sh    # updates dependency + source checkout
 │   ├── setup-beads.sh       # initialize beads issue tracking
 │   ├── generate-themes.ts   # convert Ghostty themes to CSS
+│   ├── generate-theme-db.ts # generate server-side Zig theme database
 │   └── generate-embedded-assets.ts # embed client in server binary
 │
 ├── test_fixtures/           # test data files
@@ -401,7 +438,9 @@ Client→Server uses JSON:
 - **key/text**: Keyboard and IME input
 - **resize**: Terminal dimension changes
 - **scroll**: Viewport scrolling
-- **sync**: Request delta update with client's generation
+- **sync**: Request delta update with client's generation and `minRowId`
+- **resync**: Request full snapshot when cache miss is detected
+- **hello**: Client identification with optional theme info (`themeName`, `themeFg`, `themeBg`)
 
 See `protocol/messages.md` for full specification.
 
@@ -426,7 +465,23 @@ dirty_base_gen: u64,                // Generation when tracking started
 ```typescript
 _generation: number;                // Last sync'd generation
 _minRowId: bigint;                  // Oldest cached row
-_rowCache: Map<bigint, Cell[]>;     // Cached row data
+_rowCache: Map<bigint, CachedRow>;  // LRU-style row cache with access tracking
+_styleTable: Map<number, Style>;    // Style table (pruned to 256 entries)
+```
+
+**Cache management:**
+- Row cache is pruned to 500 rows max using LRU eviction
+- Style table is pruned to 256 entries max
+- When delta references evicted data, client requests a `resync`
+- Server can also detect staleness via `minRowId` in sync messages
+
+**Resync message:**
+```typescript
+interface ResyncMessage {
+  type: "resync";
+  paneId: number;
+  reason: "cache_miss" | "style_miss" | "corruption" | "manual";
+}
 ```
 
 **Debug UI:** Titlebar shows `Δ{deltas} ⟳{resyncs}` for sync statistics.
@@ -580,7 +635,12 @@ log.err("failed");  // Always logs regardless of category
 dlog.info("OSC 52 received", .{});
 ```
 
-Output goes to three channels: log file, debug pane (pane 0), and stderr (for errors).
+**Output channels:**
+- **Log file**: `/tmp/dullahan-<uid>/dullahan-dlog.log` (always written when category enabled)
+- **Debug pane**: Pane 0, color-coded by level
+- **Stderr**: In **release builds**, only errors. In **debug builds** (`zig build` without `-Doptimize`), ALL logs go to stderr for easier development.
+
+See `docs/logging.md` for comprehensive documentation.
 
 ### Client Debug Logging
 
@@ -603,7 +663,8 @@ Wine-style category-based logging. **Never use `console.log` directly** for debu
 | sync | Delta sync, generation tracking |
 | snapshot | Terminal state snapshots |
 | delta | Delta updates |
-| mouse | Mouse events |
+| mouse | Mouse click, up/down, wheel events |
+| mousemove | Mouse move events (spammy, separate from mouse) |
 | keyboard | Keyboard input |
 | keybind | Keybind parsing |
 | clipboard | Clipboard operations |
@@ -612,6 +673,7 @@ Wine-style category-based logging. **Never use `console.log` directly** for debu
 | resize | Terminal resizing |
 | layout | Layout messages |
 | store | State store operations |
+| shell | Shell integration (OSC 133) events |
 
 **Examples:**
 ```bash
@@ -641,6 +703,32 @@ console.log('click at', x, y);
 
 All output is prefixed with `[dullahan:category]` for easy filtering in DevTools.
 
+### Server Profiling
+
+For performance analysis, see `docs/profiling-server.md` for detailed guidance.
+
+**Quick memory check:**
+```bash
+PID=$(cat /tmp/dullahan-$(id -u)/dullahan.pid)
+ps -o pid,rss,vsz,comm -p $PID     # One-shot check
+watch -n 2 "ps -o pid,rss,vsz,comm -p $PID"  # Continuous monitoring
+```
+
+**CPU profiling with perf:**
+```bash
+sudo perf record -F 99 -p $PID -g -- sleep 30
+sudo perf report
+# Or generate flame graph:
+sudo perf script | stackcollapse-perf.pl | flamegraph.pl > flamegraph.svg
+```
+
+**Memory profiling with heaptrack:**
+```bash
+./dullahan quit                     # Stop existing server
+heaptrack ./dullahan serve          # Start under heaptrack
+heaptrack_gui heaptrack.dullahan.*.zst  # View results
+```
+
 ---
 
 ## Theming & CSS Guidelines
@@ -650,7 +738,21 @@ All output is prefixed with `[dullahan:category]` for easy filtering in DevTools
 Dullahan uses 453 Ghostty-compatible themes, auto-generated from upstream.
 
 ```bash
-make themes          # Download themes + generate CSS
+make themes          # Download themes + generate client CSS
+make theme-db        # Generate server-side Zig theme database
+```
+
+**Theme database:** The server embeds all 453 Ghostty theme colors in a compile-time hash map (`server/src/theme_db.zig`). This enables O(1) lookups for OSC 10/11 color queries (terminal applications asking "what is the foreground/background color?").
+
+**Client theme communication:** On connect, clients send their theme name in the `hello` message:
+```typescript
+{
+  type: "hello",
+  clientId: "...",
+  themeName: "dracula",     // For server-side lookup
+  themeFg: "#f8f8f2",       // Fallback for custom themes
+  themeBg: "#282a36"        // Fallback for custom themes
+}
 ```
 
 Apply themes via `data-theme` attribute:
