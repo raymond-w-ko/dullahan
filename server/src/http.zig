@@ -9,6 +9,7 @@ const posix = std.posix;
 const constants = @import("constants.zig");
 const websocket = @import("websocket.zig");
 const embedded_assets = @import("embedded_assets.zig");
+const tls_wrapper = @import("tls_wrapper.zig");
 
 const log = std.log.scoped(.http);
 
@@ -115,7 +116,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
 }
 
 /// Send HTTP response with body
-pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const [2][]const u8, body: []const u8) !void {
+pub fn sendResponse(stream: *tls_wrapper.Stream, status: []const u8, headers: []const [2][]const u8, body: []const u8) !void {
     var buf: [constants.buffer.general]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -128,11 +129,11 @@ pub fn sendResponse(stream: std.net.Stream, status: []const u8, headers: []const
     try writer.writeAll("\r\n");
     try writer.writeAll(body);
 
-    try websocket.streamWriteAll(stream, fbs.getWritten());
+    try stream.writeAll(fbs.getWritten());
 }
 
 /// Send HTTP response headers only (for streaming body)
-pub fn sendResponseHeaders(stream: std.net.Stream, status: []const u8, headers: []const [2][]const u8, content_length: usize) !void {
+pub fn sendResponseHeaders(stream: *tls_wrapper.Stream, status: []const u8, headers: []const [2][]const u8, content_length: usize) !void {
     var buf: [1024]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -144,11 +145,11 @@ pub fn sendResponseHeaders(stream: std.net.Stream, status: []const u8, headers: 
     try writer.print("Content-Length: {d}\r\n", .{content_length});
     try writer.writeAll("\r\n");
 
-    try websocket.streamWriteAll(stream, fbs.getWritten());
+    try stream.writeAll(fbs.getWritten());
 }
 
 /// Send WebSocket upgrade response
-pub fn sendWebSocketUpgrade(stream: std.net.Stream, client_key: []const u8) !void {
+pub fn sendWebSocketUpgrade(stream: *tls_wrapper.Stream, client_key: []const u8) !void {
     const accept_key = websocket.computeAcceptKey(client_key);
 
     var buf: [512]u8 = undefined;
@@ -161,7 +162,7 @@ pub fn sendWebSocketUpgrade(stream: std.net.Stream, client_key: []const u8) !voi
     try writer.print("Sec-WebSocket-Accept: {s}\r\n", .{accept_key});
     try writer.writeAll("\r\n");
 
-    try websocket.streamWriteAll(stream, fbs.getWritten());
+    try stream.writeAll(fbs.getWritten());
 }
 
 /// Get MIME type for file extension
@@ -189,8 +190,15 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     port: u16,
     static_dir: ?[]const u8,
+    tls_context: ?*tls_wrapper.TlsContext,
 
-    pub fn init(allocator: std.mem.Allocator, port: u16, static_dir: ?[]const u8, bind_all: bool) !Server {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        port: u16,
+        static_dir: ?[]const u8,
+        bind_all: bool,
+        tls_context: ?*tls_wrapper.TlsContext,
+    ) !Server {
         // Bind to all interfaces if requested (e.g., for Tailscale), otherwise localhost only
         const address = if (bind_all)
             std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port)
@@ -203,10 +211,11 @@ pub const Server = struct {
         });
 
         const bind_addr = if (bind_all) "0.0.0.0" else "127.0.0.1";
+        const protocol = if (tls_context != null) "HTTPS" else "HTTP";
         if (static_dir) |dir| {
-            log.info("HTTP server listening on {s}:{d}, serving static files from {s}", .{ bind_addr, port, dir });
+            log.info("{s} server listening on {s}:{d}, serving static files from {s}", .{ protocol, bind_addr, port, dir });
         } else {
-            log.info("HTTP server listening on {s}:{d}", .{ bind_addr, port });
+            log.info("{s} server listening on {s}:{d}", .{ protocol, bind_addr, port });
         }
 
         return .{
@@ -214,6 +223,7 @@ pub const Server = struct {
             .allocator = allocator,
             .port = port,
             .static_dir = static_dir,
+            .tls_context = tls_context,
         };
     }
 
@@ -221,8 +231,13 @@ pub const Server = struct {
         self.listener.deinit();
     }
 
+    /// Check if TLS is enabled
+    pub fn isTlsEnabled(self: *const Server) bool {
+        return self.tls_context != null;
+    }
+
     /// Serve a static file (from embedded assets or filesystem)
-    fn serveFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) void {
+    fn serveFile(self: *Server, stream: *tls_wrapper.Stream, url_path: []const u8, request: *const Request) void {
         // Strip query string if present (e.g., "/?debug" -> "/")
         const query_idx = std.mem.indexOf(u8, url_path, "?");
         const path_only = if (query_idx) |idx| url_path[0..idx] else url_path;
@@ -311,12 +326,12 @@ pub const Server = struct {
         while (true) {
             const n = file.read(&buf) catch return;
             if (n == 0) break;
-            websocket.streamWriteAll(stream, buf[0..n]) catch return;
+            stream.writeAll(buf[0..n]) catch return;
         }
     }
 
     /// Serve a file from embedded assets, returns true if served
-    fn serveEmbeddedFile(self: *Server, stream: std.net.Stream, url_path: []const u8, request: *const Request) bool {
+    fn serveEmbeddedFile(self: *Server, stream: *tls_wrapper.Stream, url_path: []const u8, request: *const Request) bool {
         _ = self;
 
         // Normalize path for lookup
@@ -353,12 +368,12 @@ pub const Server = struct {
         }, asset.content.len) catch return true;
 
         // Stream body
-        websocket.streamWriteAll(stream, asset.content) catch {};
+        stream.writeAll(asset.content) catch {};
 
         return true;
     }
 
-    fn serveNotFound(self: *Server, stream: std.net.Stream) void {
+    fn serveNotFound(self: *Server, stream: *tls_wrapper.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
         sendResponse(stream, "404 Not Found", &.{
@@ -366,7 +381,7 @@ pub const Server = struct {
         }, body) catch {};
     }
 
-    fn serveForbidden(self: *Server, stream: std.net.Stream) void {
+    fn serveForbidden(self: *Server, stream: *tls_wrapper.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
         sendResponse(stream, "403 Forbidden", &.{
@@ -374,7 +389,7 @@ pub const Server = struct {
         }, body) catch {};
     }
 
-    fn serveError(self: *Server, stream: std.net.Stream) void {
+    fn serveError(self: *Server, stream: *tls_wrapper.Stream) void {
         _ = self;
         const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
         sendResponse(stream, "500 Internal Server Error", &.{
@@ -424,48 +439,66 @@ pub const Server = struct {
         log.debug("Waiting for connection...", .{});
         const conn = try self.listener.accept();
         log.debug("Accepted connection, reading request...", .{});
-        errdefer conn.stream.close();
 
-        // Set read/write timeouts so we don't block forever
-        const timeout = std.posix.timeval{
-            .sec = 0,
-            .usec = constants.timeout.http_read_ms * 1000,
-        };
-        std.posix.setsockopt(
-            conn.stream.handle,
-            std.posix.SOL.SOCKET,
-            std.posix.SO.RCVTIMEO,
-            std.mem.asBytes(&timeout),
-        ) catch {};
-        std.posix.setsockopt(
-            conn.stream.handle,
-            std.posix.SOL.SOCKET,
-            std.posix.SO.SNDTIMEO,
-            std.mem.asBytes(&timeout),
-        ) catch {};
+        // Create stream - either wrap with TLS or use plain TCP
+        var stream: tls_wrapper.Stream = if (self.tls_context) |tls_ctx| blk: {
+            log.debug("Performing TLS handshake...", .{});
+            const tls_conn = tls_ctx.upgrade(conn.stream) catch |e| {
+                log.err("TLS handshake failed: {}", .{e});
+                conn.stream.close();
+                return null;
+            };
+            log.debug("TLS handshake completed", .{});
+            break :blk .{ .tls = tls_conn };
+        } else .{ .plain = conn.stream };
+
+        errdefer stream.close();
+
+        // Set read/write timeouts so we don't block forever (for plain TCP only)
+        // TLS connections have their own timeout handling
+        if (stream == .plain) {
+            const timeout = std.posix.timeval{
+                .sec = 0,
+                .usec = constants.timeout.http_read_ms * 1000,
+            };
+            std.posix.setsockopt(
+                conn.stream.handle,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.RCVTIMEO,
+                std.mem.asBytes(&timeout),
+            ) catch {};
+            std.posix.setsockopt(
+                conn.stream.handle,
+                std.posix.SOL.SOCKET,
+                std.posix.SO.SNDTIMEO,
+                std.mem.asBytes(&timeout),
+            ) catch {};
+        }
 
         // Read HTTP request
         var buf: [constants.buffer.general]u8 = undefined;
-        const n = conn.stream.read(&buf) catch |e| {
+        const n = stream.read(&buf) catch |e| {
             if (e == error.WouldBlock) {
                 log.debug("Read timeout waiting for HTTP request", .{});
-                conn.stream.close();
+                stream.close();
                 return null;
             }
-            return e;
+            log.debug("Read error: {}", .{e});
+            stream.close();
+            return null;
         };
         log.debug("Read {d} bytes", .{n});
         if (n == 0) {
             log.debug("Empty request, closing", .{});
-            conn.stream.close();
+            stream.close();
             return null;
         }
 
         // Parse request
         var request = parseRequest(self.allocator, buf[0..n]) catch |e| {
             log.err("Failed to parse HTTP request: {any}", .{e});
-            sendResponse(conn.stream, "400 Bad Request", &.{}, "Bad Request") catch {};
-            conn.stream.close();
+            sendResponse(&stream, "400 Bad Request", &.{}, "Bad Request") catch {};
+            stream.close();
             return null;
         };
         defer request.deinit();
@@ -475,27 +508,27 @@ pub const Server = struct {
         // Check for WebSocket upgrade
         if (!request.isWebSocketUpgrade()) {
             // Serve static file
-            self.serveFile(conn.stream, request.path, &request);
-            conn.stream.close();
+            self.serveFile(&stream, request.path, &request);
+            stream.close();
             return null;
         }
 
         // WebSocket upgrade
         const client_key = request.getWebSocketKey() orelse {
-            sendResponse(conn.stream, "400 Bad Request", &.{}, "Missing Sec-WebSocket-Key") catch {};
-            conn.stream.close();
+            sendResponse(&stream, "400 Bad Request", &.{}, "Missing Sec-WebSocket-Key") catch {};
+            stream.close();
             return null;
         };
 
-        sendWebSocketUpgrade(conn.stream, client_key) catch |e| {
+        sendWebSocketUpgrade(&stream, client_key) catch |e| {
             log.err("Failed to send WebSocket upgrade: {any}", .{e});
-            conn.stream.close();
+            stream.close();
             return null;
         };
 
         log.info("WebSocket connection established from {any}", .{conn.address});
 
-        return websocket.Connection.init(conn.stream, self.allocator);
+        return websocket.Connection.init(stream, self.allocator);
     }
 };
 

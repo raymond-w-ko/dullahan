@@ -36,6 +36,12 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.linkLibrary(snappy_dep.artifact("snappy"));
     }
 
+    // Add tls.zig dependency for HTTPS/WSS support
+    if (b.lazyDependency("tls", .{})) |tls_dep| {
+        const tls = tls_dep.module("tls");
+        dullahan_mod.addImport("tls", tls);
+    }
+
     // Executable
     const exe = b.addExecutable(.{
         .name = "dullahan",

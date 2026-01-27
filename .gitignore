@@ -37,6 +37,9 @@ opencode.json
 .env
 .env.local
 
+# HTTPS certificates
+cert/
+
 # bv (beads viewer) local config and caches
 .bv/
 

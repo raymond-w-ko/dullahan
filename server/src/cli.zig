@@ -22,6 +22,8 @@ pub const CliArgs = struct {
     serve: bool = false,
     no_spawn: bool = false,
     test_command: ?test_runners.TestCommand = null,
+    tls_cert: ?[]const u8 = null, // TLS certificate path (enables HTTPS/WSS)
+    tls_key: ?[]const u8 = null, // TLS private key path
 
     pub fn parse(allocator: std.mem.Allocator) !CliArgs {
         var args = CliArgs{};
@@ -77,6 +79,10 @@ pub const CliArgs = struct {
                 args.pty_log = true;
             } else if (std.mem.eql(u8, arg, "--no-delta")) {
                 args.no_delta = true;
+            } else if (std.mem.startsWith(u8, arg, "--tls-cert=")) {
+                args.tls_cert = arg["--tls-cert=".len..];
+            } else if (std.mem.startsWith(u8, arg, "--tls-key=")) {
+                args.tls_key = arg["--tls-key=".len..];
             } else if (ipc.Command.fromString(arg)) |cmd| {
                 args.command = cmd;
             }
@@ -113,9 +119,12 @@ pub fn printUsage() void {
         \\  --pty-log            Enable PTY traffic logging (truncates existing log)
         \\  --no-delta           Disable delta updates (always send full snapshots)
         \\  --no-spawn           Don't auto-spawn server if not running
+        \\  --tls-cert=PATH      TLS certificate file (enables HTTPS/WSS)
+        \\  --tls-key=PATH       TLS private key file (required with --tls-cert)
         \\
         \\Examples:
-        \\  dullahan serve                          # Start server
+        \\  dullahan serve                          # Start HTTP server
+        \\  dullahan serve --tls-cert=cert.pem --tls-key=key.pem  # Start HTTPS server
         \\  dullahan panes                          # List pane IDs: "0 1 2"
         \\  dullahan windows                        # List windows with panes (JSON)
         \\  dullahan send 1 "echo hello"            # Send to pane 1

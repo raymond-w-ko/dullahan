@@ -89,6 +89,8 @@ pub fn main() !void {
             .ws_port = args.ws_port,
             .pty_log = args.pty_log,
             .no_delta = args.no_delta,
+            .tls_cert = args.tls_cert,
+            .tls_key = args.tls_key,
         };
         try server.run(allocator, config);
     } else if (args.command != null) {

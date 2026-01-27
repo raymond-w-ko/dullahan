@@ -58,9 +58,6 @@ install: dist
 	cp dist/dullahan ~/bin/
 	@echo "Installed to ~/bin/dullahan"
 
-daemon: install
-	~/bin/dullahan status
-
 # =============================================================================
 # Utilities
 # =============================================================================

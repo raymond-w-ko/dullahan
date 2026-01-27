@@ -5,19 +5,9 @@
 const std = @import("std");
 const Sha1 = std.crypto.hash.Sha1;
 const base64 = std.base64;
+const tls_wrapper = @import("tls_wrapper.zig");
 
 const log = std.log.scoped(.websocket);
-
-/// Write all bytes to a stream, handling partial writes.
-/// Loops until all bytes are written or an error occurs.
-pub fn streamWriteAll(stream: std.net.Stream, bytes: []const u8) !void {
-    var written: usize = 0;
-    while (written < bytes.len) {
-        const n = try stream.write(bytes[written..]);
-        if (n == 0) return error.ConnectionClosed;
-        written += n;
-    }
-}
 
 /// WebSocket frame opcodes
 pub const Opcode = enum(u4) {
@@ -131,15 +121,16 @@ pub fn computeAcceptKey(client_key: []const u8) [28]u8 {
 
 /// WebSocket connection state
 pub const Connection = struct {
-    stream: std.net.Stream,
+    stream: tls_wrapper.Stream,
     allocator: std.mem.Allocator,
 
-    pub fn init(stream: std.net.Stream, allocator: std.mem.Allocator) Connection {
+    pub fn init(stream: tls_wrapper.Stream, allocator: std.mem.Allocator) Connection {
         // Set socket options for robustness after suspend/resume
         // TCP keepalive: detect dead connections after machine sleep
+        const fd = stream.handle();
         const keepalive_enable: c_int = 1;
         std.posix.setsockopt(
-            stream.handle,
+            fd,
             std.posix.SOL.SOCKET,
             std.posix.SO.KEEPALIVE,
             std.mem.asBytes(&keepalive_enable),
@@ -152,7 +143,7 @@ pub const Connection = struct {
             .usec = 0,
         };
         std.posix.setsockopt(
-            stream.handle,
+            fd,
             std.posix.SOL.SOCKET,
             std.posix.SO.SNDTIMEO,
             std.mem.asBytes(&write_timeout),
@@ -166,7 +157,7 @@ pub const Connection = struct {
 
     /// Get underlying file descriptor for polling
     pub fn getFd(self: *const Connection) std.posix.fd_t {
-        return self.stream.handle;
+        return self.stream.handle();
     }
 
     /// Set read timeout for polling (0 = no timeout)
@@ -176,7 +167,7 @@ pub const Connection = struct {
             .usec = @intCast((timeout_ms % 1000) * 1000),
         };
         std.posix.setsockopt(
-            self.stream.handle,
+            self.stream.handle(),
             std.posix.SOL.SOCKET,
             std.posix.SO.RCVTIMEO,
             std.mem.asBytes(&timeout),
@@ -190,7 +181,7 @@ pub const Connection = struct {
             .usec = @intCast((timeout_ms % 1000) * 1000),
         };
         std.posix.setsockopt(
-            self.stream.handle,
+            self.stream.handle(),
             std.posix.SOL.SOCKET,
             std.posix.SO.SNDTIMEO,
             std.mem.asBytes(&timeout),
@@ -207,28 +198,28 @@ pub const Connection = struct {
     pub fn sendText(self: *Connection, message: []const u8) !void {
         const frame = try createFrame(self.allocator, .text, message);
         defer self.allocator.free(frame);
-        try streamWriteAll(self.stream, frame);
+        try self.stream.writeAll(frame);
     }
 
     /// Send a binary message
     pub fn sendBinary(self: *Connection, data: []const u8) !void {
         const frame = try createFrame(self.allocator, .binary, data);
         defer self.allocator.free(frame);
-        try streamWriteAll(self.stream, frame);
+        try self.stream.writeAll(frame);
     }
 
     /// Send a close frame
     pub fn sendClose(self: *Connection) !void {
         const frame = try createFrame(self.allocator, .close, &.{});
         defer self.allocator.free(frame);
-        try streamWriteAll(self.stream, frame);
+        try self.stream.writeAll(frame);
     }
 
     /// Send a pong frame (response to ping)
     pub fn sendPong(self: *Connection, payload: []const u8) !void {
         const frame = try createFrame(self.allocator, .pong, payload);
         defer self.allocator.free(frame);
-        try streamWriteAll(self.stream, frame);
+        try self.stream.writeAll(frame);
     }
 
     /// Read and parse one WebSocket frame

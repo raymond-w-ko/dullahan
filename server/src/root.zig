@@ -47,6 +47,9 @@ pub const pty_log = @import("pty_log.zig");
 // Tailscale detection
 pub const tailscale = @import("tailscale.zig");
 
+// TLS wrapper for HTTPS/WSS support
+pub const tls_wrapper = @import("tls_wrapper.zig");
+
 // Layout database (config file)
 pub const layout_db = @import("layout_db.zig");
 
