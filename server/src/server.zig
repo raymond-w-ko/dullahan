@@ -42,7 +42,15 @@ pub const RunConfig = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
-    // Install signal handlers first
+    // Detect Tailscale for remote access BEFORE signal handlers are installed.
+    // This is important because the SIGCHLD handler auto-reaps children, which
+    // conflicts with Child.wait() used in tailscale detection.
+    var tailscale_info = tailscale.detect(allocator);
+    defer if (tailscale_info) |*info| info.deinit();
+
+    const bind_all = tailscale_info != null;
+
+    // Install signal handlers (including SIGCHLD auto-reap for shell processes)
     signal.install();
     defer signal.reset();
 
@@ -96,12 +104,6 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     // Write PID file
     try ipc_server.writePidFile();
-
-    // Detect Tailscale for remote access
-    var tailscale_info = tailscale.detect(allocator);
-    defer if (tailscale_info) |*info| info.deinit();
-
-    const bind_all = tailscale_info != null;
 
     // Initialize TLS context if certificates provided
     var tls_context: ?tls_wrapper.TlsContext = null;

@@ -35,30 +35,69 @@ pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
     return null;
 }
 
+/// Timeout for tailscale detection (ms)
+const TIMEOUT_MS = 500;
+
 /// Try to get Tailscale IP using a specific executable path
 /// Times out after 500ms to avoid blocking server startup
 fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?TailscaleInfo {
-    // Note: No timeout support in std.process.Child.run
-    // If tailscale hangs, server startup will be delayed
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &.{ tailscale_path, "ip", "-4" },
-        .max_output_bytes = 256,
-    }) catch |e| {
-        log.debug("Failed to run {s}: {}", .{ tailscale_path, e });
+    // Use spawn + poll to implement timeout (Child.run has no timeout support)
+    var child = std.process.Child.init(
+        &.{ tailscale_path, "ip", "-4" },
+        allocator,
+    );
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    child.spawn() catch |e| {
+        log.debug("Failed to spawn {s}: {}", .{ tailscale_path, e });
         return null;
     };
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+
+    // Poll stdout with timeout
+    const stdout_fd = child.stdout.?.handle;
+    var poll_fds = [_]std.posix.pollfd{
+        .{ .fd = stdout_fd, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+
+    const ready = std.posix.poll(&poll_fds, TIMEOUT_MS) catch |e| {
+        log.debug("Poll failed for {s}: {}", .{ tailscale_path, e });
+        _ = child.kill() catch {};
+        _ = child.wait() catch {};
+        return null;
+    };
+
+    if (ready == 0) {
+        // Timeout - tailscale is hanging
+        log.debug("{s} timed out after {}ms", .{ tailscale_path, TIMEOUT_MS });
+        _ = child.kill() catch {};
+        _ = child.wait() catch {};
+        return null;
+    }
+
+    // Read stdout (process should have output ready)
+    var buf: [256]u8 = undefined;
+    const n = child.stdout.?.read(&buf) catch |e| {
+        log.debug("Failed to read stdout from {s}: {}", .{ tailscale_path, e });
+        _ = child.kill() catch {};
+        _ = child.wait() catch {};
+        return null;
+    };
+
+    // Wait for process to complete
+    const term = child.wait() catch |e| {
+        log.debug("Failed to wait for {s}: {}", .{ tailscale_path, e });
+        return null;
+    };
 
     // Check if command succeeded
-    if (result.term.Exited != 0) {
-        log.debug("{s} exited with code {}", .{ tailscale_path, result.term.Exited });
+    if (term.Exited != 0) {
+        log.debug("{s} exited with code {}", .{ tailscale_path, term.Exited });
         return null;
     }
 
     // Parse the IP from stdout (trim whitespace)
-    const ip_raw = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
+    const ip_raw = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
     if (ip_raw.len == 0) {
         log.debug("{s} returned empty IP", .{tailscale_path});
         return null;

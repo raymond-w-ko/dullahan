@@ -440,6 +440,16 @@ pub const Server = struct {
         const conn = try self.listener.accept();
         log.debug("Accepted connection, reading request...", .{});
 
+        // Disable Nagle's algorithm for real-time terminal updates
+        // This ensures small writes (like delta updates) are sent immediately
+        const nodelay: c_int = 1;
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.IPPROTO.TCP,
+            std.posix.TCP.NODELAY,
+            std.mem.asBytes(&nodelay),
+        ) catch {};
+
         // Set read/write timeouts on the TCP socket BEFORE TLS handshake
         // This ensures TLS handshake won't block forever if client is slow/malicious
         // tls.zig uses the underlying socket for I/O, so these timeouts apply to TLS too
