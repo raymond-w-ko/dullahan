@@ -460,20 +460,32 @@ export function closeWindow(windowId: number) {
 }
 
 export function setLayout(layout: LayoutUpdate) {
-  store.activeWindowId = layout.activeWindowId;
+  // Preserve client's active window if already set and still exists in new layout
+  const windowIds = new Set(layout.windows.map(w => w.id));
+  if (!windowIds.has(store.activeWindowId)) {
+    // Current window no longer exists, use server's suggestion
+    store.activeWindowId = layout.activeWindowId;
+  }
 
   // Update templates if provided
   if (layout.templates) {
     store.layoutTemplates = layout.templates;
   }
 
+  // Preserve existing per-window focus state
+  const oldWindows = new Map(store.windows);
+
   // Update windows map from layout
   store.windows.clear();
   for (const win of layout.windows) {
+    const oldWindow = oldWindows.get(win.id);
     store.windows.set(win.id, {
       id: win.id,
       paneIds: win.panes,
-      focusedPaneId: win.activePaneId,
+      // Preserve client's focused pane if it still exists, else use server's
+      focusedPaneId: oldWindow && win.panes.includes(oldWindow.focusedPaneId)
+        ? oldWindow.focusedPaneId
+        : win.activePaneId,
       layout: win.layout,
     });
   }
