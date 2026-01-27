@@ -235,6 +235,18 @@ export function TerminalView({
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
+  // When this pane becomes active (e.g., from window switch), focus IME and notify server
+  useEffect(() => {
+    if (isActive && !isReadOnly) {
+      // Focus the IME for keyboard input
+      imeRef.current?.focus();
+      // Notify server of focus change
+      if (connection?.isConnected) {
+        connection.sendFocus(paneId);
+      }
+    }
+  }, [isActive, isReadOnly, connection, paneId]);
+
   // Setup mouse handler
   useEffect(() => {
     const el = terminalRef.current;

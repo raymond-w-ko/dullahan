@@ -419,6 +419,11 @@ export function isFullscreen(): boolean {
 
 export function setFocusedPane(paneId: number) {
   store.focusedPaneId = paneId;
+  // Also update the window's focusedPaneId so it persists across window switches
+  const activeWindow = store.windows.get(store.activeWindowId);
+  if (activeWindow) {
+    activeWindow.focusedPaneId = paneId;
+  }
   notify();
 }
 
@@ -502,6 +507,10 @@ export function switchWindow(windowId: number) {
   const window = store.windows.get(windowId);
   if (window) {
     store.activeWindowId = windowId;
+    // Set the focused pane to the window's last focused pane
+    if (window.focusedPaneId !== undefined && store.panes.has(window.focusedPaneId)) {
+      store.focusedPaneId = window.focusedPaneId;
+    }
     // Increment dimensionVersion to force pane dimension recalculation
     // This ensures panes recalculate their sizes when becoming visible
     store.dimensionVersion++;
