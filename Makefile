@@ -52,9 +52,14 @@ dist-client: themes
 
 # Install to ~/bin
 install: dist
+	~/bin/dullahan quit 2>/dev/null || true
 	@mkdir -p ~/bin
+	sleep 1
 	cp dist/dullahan ~/bin/
 	@echo "Installed to ~/bin/dullahan"
+
+daemon: install
+	~/bin/dullahan status
 
 # =============================================================================
 # Utilities
