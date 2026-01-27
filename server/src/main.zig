@@ -79,6 +79,12 @@ pub fn main() !void {
             std.process.exit(1);
         };
     } else if (args.serve) {
+        // If --background/-d flag, spawn ourselves without the flag and exit
+        if (args.background) {
+            try spawnBackground(allocator, args);
+            return;
+        }
+
         // Run as server - ipc.Config handles path defaults and temp dir creation
         const config = server.RunConfig{
             .ipc = .{
@@ -102,6 +108,63 @@ pub fn main() !void {
     } else {
         cli.printUsage();
     }
+}
+
+/// Spawn server in background (for --background/-d flag)
+fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
+    // Get path to self
+    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path = try std.fs.selfExePath(&self_path_buf);
+
+    // Build argv without --background/-d flag
+    var argv: std.ArrayListUnmanaged([]const u8) = .{};
+    defer argv.deinit(allocator);
+
+    try argv.append(allocator, self_path);
+    try argv.append(allocator, "serve");
+
+    if (args.socket_path) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--socket={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.static_dir) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--static-dir={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.ws_port != 7681) {
+        var buf: [64]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--port={d}", .{args.ws_port}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.pty_log) {
+        try argv.append(allocator, "--pty-log");
+    }
+    if (args.no_delta) {
+        try argv.append(allocator, "--no-delta");
+    }
+    if (args.tls_cert) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--tls-cert={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.tls_key) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--tls-key={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+
+    var child = std.process.Child.init(argv.items, allocator);
+
+    // Detach from parent
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+
+    try child.spawn();
+
+    std.debug.print("Server started in background\n", .{});
 }
 
 // Tests specific to main (CLI, arg parsing, etc.)

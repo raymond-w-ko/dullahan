@@ -24,6 +24,7 @@ pub const CliArgs = struct {
     test_command: ?test_runners.TestCommand = null,
     tls_cert: ?[]const u8 = null, // TLS certificate path (enables HTTPS/WSS)
     tls_key: ?[]const u8 = null, // TLS private key path
+    background: bool = false, // Run server in background (daemonize)
 
     pub fn parse(allocator: std.mem.Allocator) !CliArgs {
         var args = CliArgs{};
@@ -83,6 +84,8 @@ pub const CliArgs = struct {
                 args.tls_cert = arg["--tls-cert=".len..];
             } else if (std.mem.startsWith(u8, arg, "--tls-key=")) {
                 args.tls_key = arg["--tls-key=".len..];
+            } else if (std.mem.eql(u8, arg, "--background") or std.mem.eql(u8, arg, "-d")) {
+                args.background = true;
             } else if (ipc.Command.fromString(arg)) |cmd| {
                 args.command = cmd;
             }
@@ -121,9 +124,11 @@ pub fn printUsage() void {
         \\  --no-spawn           Don't auto-spawn server if not running
         \\  --tls-cert=PATH      TLS certificate file (enables HTTPS/WSS)
         \\  --tls-key=PATH       TLS private key file (required with --tls-cert)
+        \\  -d, --background     Run server in background (daemonize)
         \\
         \\Examples:
-        \\  dullahan serve                          # Start HTTP server
+        \\  dullahan serve                          # Start HTTP server (foreground)
+        \\  dullahan serve -d                       # Start HTTP server (background)
         \\  dullahan serve --tls-cert=cert.pem --tls-key=key.pem  # Start HTTPS server
         \\  dullahan panes                          # List pane IDs: "0 1 2"
         \\  dullahan windows                        # List windows with panes (JSON)
