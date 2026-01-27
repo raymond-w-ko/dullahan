@@ -285,6 +285,13 @@ export function TerminalView({
     };
   }, [snapshot.hyperlinks]);
 
+  // Focus IME when this pane becomes active (e.g., from window switch)
+  useEffect(() => {
+    if (isActive && imeRef.current) {
+      imeRef.current.focus();
+    }
+  }, [isActive]);
+
   // Measure cell width and set CSS variable for wide character alignment
   useEffect(() => {
     const el = terminalRef.current;
