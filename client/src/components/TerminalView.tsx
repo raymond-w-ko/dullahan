@@ -205,11 +205,16 @@ export function TerminalView({
 
     // Auto-focus terminal on mount (only if this pane is active)
     // When switching windows, multiple panes mount - only focus the active one
+    // Use setTimeout to ensure DOM is fully ready
+    let focusTimer: ReturnType<typeof setTimeout> | null = null;
     if (isActive) {
-      ime.focus();
+      focusTimer = setTimeout(() => {
+        ime.focus();
+      }, 50);
     }
 
     return () => {
+      if (focusTimer) clearTimeout(focusTimer);
       keyboard.detach();
       ime.detach();
       unsubscribeKeybinds();
@@ -291,7 +296,11 @@ export function TerminalView({
   // Focus IME when this pane becomes active (e.g., from window switch)
   useEffect(() => {
     if (isActive && imeRef.current) {
-      imeRef.current.focus();
+      // Use setTimeout to ensure DOM is ready after window switch
+      const timer = setTimeout(() => {
+        imeRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isActive]);
 
