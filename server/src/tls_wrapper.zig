@@ -62,6 +62,19 @@ pub const TlsContext = struct {
     pub fn upgrade(self: *TlsContext, tcp_stream: std.net.Stream) !TlsConnection {
         log.debug("Starting TLS handshake", .{});
 
+        // Disable Nagle's algorithm for TLS connections
+        // This ensures small writes (like delta updates) are sent immediately
+        // rather than being buffered, which is critical for real-time terminal updates
+        const nodelay: c_int = 1;
+        posix.setsockopt(
+            tcp_stream.handle,
+            posix.IPPROTO.TCP,
+            std.posix.TCP.NODELAY,
+            std.mem.asBytes(&nodelay),
+        ) catch |e| {
+            log.warn("Failed to set TCP_NODELAY: {}", .{e});
+        };
+
         const tls_conn = tls_lib.server(tcp_stream, .{
             .auth = &self.cert_key_pair,
         }) catch |e| {
@@ -91,7 +104,10 @@ pub const TlsConnection = struct {
     }
 
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
-        return self.conn.write(data);
+        return self.conn.write(data) catch |e| {
+            log.err("TLS write failed: {} (data_len={})", .{ e, data.len });
+            return e;
+        };
     }
 
     pub fn close(self: *TlsConnection) void {
