@@ -203,8 +203,11 @@ export function TerminalView({
       keyboard.attachGlobalCopyHandler(terminalRef.current);
     }
 
-    // Auto-focus terminal on mount (focus IME's textarea)
-    ime.focus();
+    // Auto-focus terminal on mount (only if this pane is active)
+    // When switching windows, multiple panes mount - only focus the active one
+    if (isActive) {
+      ime.focus();
+    }
 
     return () => {
       keyboard.detach();
