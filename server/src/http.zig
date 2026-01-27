@@ -440,6 +440,26 @@ pub const Server = struct {
         const conn = try self.listener.accept();
         log.debug("Accepted connection, reading request...", .{});
 
+        // Set read/write timeouts on the TCP socket BEFORE TLS handshake
+        // This ensures TLS handshake won't block forever if client is slow/malicious
+        // tls.zig uses the underlying socket for I/O, so these timeouts apply to TLS too
+        const timeout = std.posix.timeval{
+            .sec = 5, // 5 second timeout for initial connection/handshake
+            .usec = 0,
+        };
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.SNDTIMEO,
+            std.mem.asBytes(&timeout),
+        ) catch {};
+
         // Create stream - either wrap with TLS or use plain TCP
         var stream: tls_wrapper.Stream = if (self.tls_context) |tls_ctx| blk: {
             log.debug("Performing TLS handshake...", .{});
@@ -451,29 +471,6 @@ pub const Server = struct {
             log.debug("TLS handshake completed", .{});
             break :blk .{ .tls = tls_conn };
         } else .{ .plain = conn.stream };
-
-        errdefer stream.close();
-
-        // Set read/write timeouts so we don't block forever (for plain TCP only)
-        // TLS connections have their own timeout handling
-        if (stream == .plain) {
-            const timeout = std.posix.timeval{
-                .sec = 0,
-                .usec = constants.timeout.http_read_ms * 1000,
-            };
-            std.posix.setsockopt(
-                conn.stream.handle,
-                std.posix.SOL.SOCKET,
-                std.posix.SO.RCVTIMEO,
-                std.mem.asBytes(&timeout),
-            ) catch {};
-            std.posix.setsockopt(
-                conn.stream.handle,
-                std.posix.SOL.SOCKET,
-                std.posix.SO.SNDTIMEO,
-                std.mem.asBytes(&timeout),
-            ) catch {};
-        }
 
         // Read HTTP request
         var buf: [constants.buffer.general]u8 = undefined;
