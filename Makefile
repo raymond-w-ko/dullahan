@@ -52,9 +52,15 @@ dist-client: themes
 
 # Install to ~/bin
 install: dist
-	~/bin/dullahan quit 2>/dev/null || true
 	@mkdir -p ~/bin
-	sleep 1
+	@if pgrep -x dullahan > /dev/null; then \
+		printf "dullahan is running. Kill it? [y/N] "; \
+		read ans; \
+		case "$$ans" in \
+			[yY]*) pkill -9 -x dullahan; echo "Killed dullahan process";; \
+			*) echo "Aborted"; exit 1;; \
+		esac; \
+	fi
 	cp dist/dullahan ~/bin/
 	@echo "Installed to ~/bin/dullahan"
 
