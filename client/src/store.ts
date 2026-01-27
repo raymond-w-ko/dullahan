@@ -502,6 +502,10 @@ export function switchWindow(windowId: number) {
   const window = store.windows.get(windowId);
   if (window) {
     store.activeWindowId = windowId;
+    // Focus the last focused pane in this window (if it exists)
+    if (window.focusedPaneId !== undefined && store.panes.has(window.focusedPaneId)) {
+      store.focusedPaneId = window.focusedPaneId;
+    }
     // Increment dimensionVersion to force pane dimension recalculation
     // This ensures panes recalculate their sizes when becoming visible
     store.dimensionVersion++;
