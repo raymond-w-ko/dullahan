@@ -120,6 +120,15 @@ pub const TlsConnection = struct {
     pub fn handle(self: *const TlsConnection) posix.fd_t {
         return self.tcp_stream.handle;
     }
+
+    /// Check if the TLS layer has buffered data waiting to be read.
+    /// This is important for event loops: poll() checks the TCP socket,
+    /// but the TLS library may have already read and decrypted more data
+    /// than we consumed. We need to check this before going back to poll().
+    pub fn hasPendingData(self: *TlsConnection) bool {
+        // Check both: decrypted data in read_buf and encrypted data in record reader
+        return self.conn.read_buf.len > 0 or self.conn.rec_rdr.hasMore();
+    }
 };
 
 /// Unified stream type that handles both plain TCP and TLS connections
@@ -158,6 +167,16 @@ pub const Stream = union(enum) {
         return switch (self.*) {
             .plain => |s| s.handle,
             .tls => |*t| t.handle(),
+        };
+    }
+
+    /// Check if there's buffered data waiting to be read.
+    /// For TLS connections, this checks the TLS layer's internal buffers.
+    /// For plain TCP, this always returns false (poll() is accurate).
+    pub fn hasPendingData(self: *Stream) bool {
+        return switch (self.*) {
+            .plain => false,
+            .tls => |*t| t.hasPendingData(),
         };
     }
 

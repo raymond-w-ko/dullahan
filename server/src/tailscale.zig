@@ -36,7 +36,10 @@ pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
 }
 
 /// Try to get Tailscale IP using a specific executable path
+/// Times out after 500ms to avoid blocking server startup
 fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?TailscaleInfo {
+    // Note: No timeout support in std.process.Child.run
+    // If tailscale hangs, server startup will be delayed
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{ tailscale_path, "ip", "-4" },

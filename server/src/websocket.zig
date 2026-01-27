@@ -282,6 +282,14 @@ pub const Connection = struct {
     pub fn close(self: *Connection) void {
         self.stream.close();
     }
+
+    /// Check if the underlying stream has buffered data waiting to be read.
+    /// For TLS connections, this checks if the TLS layer has decrypted data
+    /// that wasn't consumed yet. Essential for event loops where poll()
+    /// might not wake up for data already buffered in userspace.
+    pub fn hasPendingData(self: *Connection) bool {
+        return self.stream.hasPendingData();
+    }
 };
 
 test "compute accept key" {

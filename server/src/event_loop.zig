@@ -272,18 +272,36 @@ pub const EventLoop = struct {
                 log.info("Client {d} disconnected (poll error/hangup)", .{client_idx});
                 self.removeClient(client_idx);
             } else if (revents & posix.POLL.IN != 0) {
-                self.handleWsClient(client_idx) catch |e| {
-                    if (e == error.ConnectionClosed) {
-                        log.info("Client {d} disconnected", .{client_idx});
-                        self.removeClient(client_idx);
-                    } else if (e == error.WouldBlock) {
-                        // Timeout on partial frame - just continue, don't remove client
-                        log.debug("Client {d} read timeout (partial frame?)", .{client_idx});
-                    } else {
-                        log.err("Client {d} error: {any}", .{ client_idx, e });
-                        self.removeClient(client_idx);
+                // Process this client. Keep processing as long as TLS has buffered data.
+                // This is critical for TLS: poll() checks the TCP socket, but the TLS
+                // library may have already read and decrypted more data than we consumed.
+                // Without this loop, buffered data would wait until the next TCP packet.
+                var continue_processing = true;
+                while (continue_processing) {
+                    continue_processing = false;
+                    self.handleWsClient(client_idx) catch |e| {
+                        if (e == error.ConnectionClosed) {
+                            log.info("Client {d} disconnected", .{client_idx});
+                            self.removeClient(client_idx);
+                            break;
+                        } else if (e == error.WouldBlock) {
+                            // Timeout on partial frame - just continue, don't remove client
+                            log.debug("Client {d} read timeout (partial frame?)", .{client_idx});
+                            break;
+                        } else {
+                            log.err("Client {d} error: {any}", .{ client_idx, e });
+                            self.removeClient(client_idx);
+                            break;
+                        }
+                    };
+                    // Check if TLS has more data buffered that poll() wouldn't see
+                    if (client_idx < self.clients.items.len) {
+                        const client = &self.clients.items[client_idx];
+                        if (client.ws.hasPendingData()) {
+                            continue_processing = true;
+                        }
                     }
-                };
+                }
             }
         }
 
