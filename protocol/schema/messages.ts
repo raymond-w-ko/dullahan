@@ -110,9 +110,11 @@ export interface FocusMessage {
 export interface HelloMessage {
   type: "hello";
   clientId: string;
-  /** Theme foreground color (e.g., "#abb2bf") */
+  /** Theme name for server-side color lookup (e.g., "dracula", "one-dark") */
+  themeName?: string;
+  /** Theme foreground color (e.g., "#abb2bf") - fallback for custom themes */
   themeFg?: string;
-  /** Theme background color (e.g., "#282c34") */
+  /** Theme background color (e.g., "#282c34") - fallback for custom themes */
   themeBg?: string;
   /** Optional auth token for future authentication support */
   token?: string;

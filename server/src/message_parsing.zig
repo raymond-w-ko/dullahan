@@ -136,6 +136,7 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
         return .{
             .msg = .{ .hello = .{
                 .clientId = parsed.value.clientId,
+                .themeName = parsed.value.themeName,
                 .themeFg = parsed.value.themeFg,
                 .themeBg = parsed.value.themeBg,
                 .token = parsed.value.token,
@@ -392,9 +393,18 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
     } else if (std.mem.eql(u8, type_str, "hello")) {
         const client_id_payload = (payload.mapGet("clientId") catch return null) orelse return null;
         const client_id_str = client_id_payload.asStr() catch return null;
+        const theme_name: ?[]const u8 = if (payload.mapGet("themeName") catch null) |p| (p.asStr() catch null) else null;
+        const theme_fg: ?[]const u8 = if (payload.mapGet("themeFg") catch null) |p| (p.asStr() catch null) else null;
+        const theme_bg: ?[]const u8 = if (payload.mapGet("themeBg") catch null) |p| (p.asStr() catch null) else null;
         const token: ?[]const u8 = if (payload.mapGet("token") catch null) |p| (p.asStr() catch null) else null;
         return .{
-            .msg = .{ .hello = .{ .clientId = client_id_str, .token = token } },
+            .msg = .{ .hello = .{
+                .clientId = client_id_str,
+                .themeName = theme_name,
+                .themeFg = theme_fg,
+                .themeBg = theme_bg,
+                .token = token,
+            } },
             .payload = payload,
         };
     } else if (std.mem.eql(u8, type_str, "request_master")) {

@@ -317,10 +317,11 @@ fn handleHello(el: *EventLoop, client: *ClientState, hello_msg: ParsedHello) voi
         }
     }
 
-    // If this client is master, store their theme colors for OSC 10/11
+    // If this client is master, store their theme colors for OSC 10/11/4
+    // Priority: theme name lookup (server-side), then hex color fallback
     if (client.client_id) |cid| {
         if (el.isMaster(cid)) {
-            el.setMasterTheme(hello_msg.themeFg, hello_msg.themeBg);
+            el.setMasterTheme(hello_msg.themeName, hello_msg.themeFg, hello_msg.themeBg);
         }
     }
 

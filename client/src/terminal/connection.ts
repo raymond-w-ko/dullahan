@@ -375,14 +375,14 @@ export class TerminalConnection {
       connLog.log("WebSocket connected");
       // Reset reconnect backoff on successful connection
       this.reconnectAttempts = 0;
-      // Send hello message to identify this client with theme colors
-      const themeColors = this.getThemeColors();
+      // Send hello message to identify this client with theme info
+      const themeInfo = this.getThemeInfo();
       this.send({
         type: "hello",
         clientId: this._clientId,
-        ...themeColors,
+        ...themeInfo,
       });
-      connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeColors);
+      connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeInfo);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
       this.emit("connect");
@@ -1295,27 +1295,34 @@ export class TerminalConnection {
   }
 
   /**
-   * Extract current theme colors from CSS variables.
-   * Returns fg/bg colors that can be sent to the server for OSC 10/11 queries.
-   * Queries .app element since that's where data-theme sets the CSS variables.
+   * Extract current theme info for the server.
+   * Returns theme name (for server-side lookup) plus fallback colors (for custom themes).
+   *
+   * The server uses themeName to look up full theme colors from its embedded database.
+   * If the theme isn't found, it falls back to themeFg/themeBg CSS values.
+   * This eliminates the race condition where CSS wasn't loaded when colors were queried.
    */
-  private getThemeColors(): { themeFg?: string; themeBg?: string } {
+  private getThemeInfo(): { themeName?: string; themeFg?: string; themeBg?: string } {
+    // Get theme name from config (primary source for server lookup)
+    const themeName = getConfig("theme");
+
+    // Also send CSS colors as fallback (for custom themes or if name lookup fails)
     try {
-      // Get computed style from .app element which has data-theme attribute
       const appElement = document.querySelector(".app");
       if (!appElement) {
-        return {};
+        return { themeName };
       }
       const style = getComputedStyle(appElement);
       const fg = style.getPropertyValue("--term-fg").trim();
       const bg = style.getPropertyValue("--term-bg").trim();
       return {
+        themeName,
         themeFg: fg || undefined,
         themeBg: bg || undefined,
       };
     } catch {
       // Fallback if CSS variables not available
-      return {};
+      return { themeName };
     }
   }
 

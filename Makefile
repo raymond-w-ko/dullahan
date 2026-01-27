@@ -1,4 +1,4 @@
-.PHONY: all build clean dev prod server client fmt themes dist install coverage coverage-server coverage-client
+.PHONY: all build clean dev prod server client fmt themes theme-db dist install coverage coverage-server coverage-client
 
 all: build
 
@@ -8,7 +8,7 @@ all: build
 
 build: server client
 
-server:
+server: theme-db
 	cd server && zig build
 
 client: themes
@@ -31,8 +31,8 @@ dist-client-assets: themes
 	bun scripts/generate-embedded-assets.ts
 	@echo "Client assets prepared for embedding"
 
-# Build server with embedded client assets
-dist-server-embedded:
+# Build server with embedded client assets (includes theme-db for OSC color queries)
+dist-server-embedded: theme-db
 	cd server && zig build -Doptimize=ReleaseFast
 	@mkdir -p dist
 	cp server/zig-out/bin/dullahan dist/
@@ -67,6 +67,11 @@ themes:
 		curl -sL "https://deps.files.ghostty.org/ghostty-themes-release-20251222-150520-0add1e1.tgz" | tar xz -C deps/themes; \
 	fi
 	bun scripts/generate-themes.ts
+
+# Generate server-side theme database (Zig source file)
+# This embeds all Ghostty theme colors into the server binary for O(1) lookups
+theme-db: themes
+	bun scripts/generate-theme-db.ts
 
 clean:
 	cd server && rm -rf zig-out .zig-cache

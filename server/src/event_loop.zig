@@ -23,6 +23,7 @@ const ipc_commands = @import("ipc_commands.zig");
 const ws_proxy = @import("ws_proxy.zig");
 const client_state = @import("client_state.zig");
 const ClientState = client_state.ClientState;
+const theme_db = @import("theme_db.zig");
 
 const log = std.log.scoped(.event_loop);
 
@@ -58,10 +59,10 @@ pub const EventLoop = struct {
     // Master client can perform privileged operations (resize, create panes, etc.)
     master_id: ?[]const u8 = null,
 
-    // Master's theme colors for OSC 10/11 queries (parsed from "#rrggbb" format)
-    // These are updated when master sends hello with theme colors
-    master_theme_fg: ?[3]u8 = null, // [r, g, b]
-    master_theme_bg: ?[3]u8 = null, // [r, g, b]
+    // Master's theme colors for OSC 10/11/4 queries
+    // Set from theme name lookup (primary) or parsed hex colors (fallback)
+    // Contains full theme data: fg, bg, cursor colors, selection colors, and 16-color palette
+    master_theme: ?theme_db.ThemeColors = null,
 
     // Layout database (templates for window creation)
     layouts: layout_db.LayoutDb,
@@ -614,29 +615,64 @@ pub const EventLoop = struct {
     }
 
     /// Set master's theme colors and update all panes.
-    /// Called when master client sends hello with theme colors.
-    pub fn setMasterTheme(self: *EventLoop, fg: ?[]const u8, bg: ?[]const u8) void {
-        // Parse colors
-        self.master_theme_fg = if (fg) |f| parseHexColor(f) else null;
-        self.master_theme_bg = if (bg) |b| parseHexColor(b) else null;
-
-        // Log the change to debug console
-        if (self.master_theme_fg) |f| {
-            theme_log.info("Master theme fg: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
+    /// Called when master client sends hello with theme info.
+    ///
+    /// Priority order:
+    /// 1. Theme name lookup (server-side database) - eliminates race conditions
+    /// 2. Hex color fallback (for custom themes not in database)
+    /// 3. Default colors (if all else fails)
+    pub fn setMasterTheme(
+        self: *EventLoop,
+        theme_name: ?[]const u8,
+        fallback_fg: ?[]const u8,
+        fallback_bg: ?[]const u8,
+    ) void {
+        // Try theme name lookup first (primary method)
+        if (theme_name) |name| {
+            if (theme_db.get(name)) |theme| {
+                self.master_theme = theme;
+                theme_log.info("Theme from name lookup: '{s}' fg=#{x:0>2}{x:0>2}{x:0>2} bg=#{x:0>2}{x:0>2}{x:0>2}", .{
+                    name,
+                    theme.fg[0], theme.fg[1], theme.fg[2],
+                    theme.bg[0], theme.bg[1], theme.bg[2],
+                });
+                self.updatePaneThemeColors();
+                return;
+            }
+            theme_log.info("Theme '{s}' not found in database, using fallback colors", .{name});
         }
-        if (self.master_theme_bg) |b| {
-            theme_log.info("Master theme bg: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
+
+        // Fall back to parsed hex colors (custom themes)
+        if (fallback_fg != null or fallback_bg != null) {
+            const fg = if (fallback_fg) |f| parseHexColor(f) else null;
+            const bg = if (fallback_bg) |b| parseHexColor(b) else null;
+            self.master_theme = theme_db.ThemeColors.fromFallback(fg, bg);
+
+            if (fg) |f| {
+                theme_log.info("Theme fg from CSS fallback: #{x:0>2}{x:0>2}{x:0>2}", .{ f[0], f[1], f[2] });
+            }
+            if (bg) |b| {
+                theme_log.info("Theme bg from CSS fallback: #{x:0>2}{x:0>2}{x:0>2}", .{ b[0], b[1], b[2] });
+            }
+        } else {
+            // No theme info at all - clear the theme
+            self.master_theme = null;
+            theme_log.info("No theme info provided, using terminal defaults", .{});
         }
 
-        // Update all panes with new theme colors
         self.updatePaneThemeColors();
     }
 
     /// Update all panes with current master theme colors.
+    /// Update all panes with current master theme colors.
     fn updatePaneThemeColors(self: *EventLoop) void {
+        // Extract fg/bg from master_theme (full palette support can be added later)
+        const fg: ?[3]u8 = if (self.master_theme) |t| t.fg else null;
+        const bg: ?[3]u8 = if (self.master_theme) |t| t.bg else null;
+
         var pane_iter = self.session.pane_registry.panes.valueIterator();
         while (pane_iter.next()) |pane_ptr| {
-            pane_ptr.*.setThemeColors(self.master_theme_fg, self.master_theme_bg);
+            pane_ptr.*.setThemeColors(fg, bg);
         }
     }
 
