@@ -419,6 +419,11 @@ export function isFullscreen(): boolean {
 
 export function setFocusedPane(paneId: number) {
   store.focusedPaneId = paneId;
+  // Also update the window's focusedPaneId so it's restored when switching back
+  const activeWindow = store.windows.get(store.activeWindowId);
+  if (activeWindow) {
+    activeWindow.focusedPaneId = paneId;
+  }
   notify();
 }
 
