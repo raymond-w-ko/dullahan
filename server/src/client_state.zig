@@ -28,6 +28,10 @@ pub const ClientState = struct {
     /// Auth token from hello message (for future token validation)
     auth_token: ?[]const u8 = null,
 
+    /// Whether the client's socket is congested (WouldBlock occurred).
+    /// When true, skip sending to this client until socket becomes writable.
+    write_congested: bool = false,
+
     pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
         return .{
             .ws = ws,

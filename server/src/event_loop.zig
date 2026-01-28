@@ -41,6 +41,20 @@ fn logClientError(comptime context: []const u8, err: anyerror) void {
     log.warn("[client] {s}: {any}", .{ context, err });
 }
 
+/// Handle write error, setting congestion flag if WouldBlock.
+/// Returns true if the error was WouldBlock (client is now congested).
+fn handleWriteError(client: *ClientState, comptime context: []const u8, err: anyerror) bool {
+    if (err == error.WouldBlock) {
+        if (!client.write_congested) {
+            log.debug("Client {s} write congested, pausing updates", .{client.shortId()});
+            client.write_congested = true;
+        }
+        return true;
+    }
+    logClientError(context, err);
+    return false;
+}
+
 const ParsedMessage = messages.ParsedMessage;
 
 pub const EventLoop = struct {
@@ -225,7 +239,12 @@ pub const EventLoop = struct {
 
         var idx: usize = FIXED_FD_COUNT;
         for (self.clients.items) |client| {
-            fds[idx] = .{ .fd = client.ws.getFd(), .events = posix.POLL.IN, .revents = 0 };
+            // Add POLLOUT for congested clients so we know when socket is writable
+            const events: i16 = if (client.write_congested)
+                posix.POLL.IN | posix.POLL.OUT
+            else
+                posix.POLL.IN;
+            fds[idx] = .{ .fd = client.ws.getFd(), .events = events, .revents = 0 };
             idx += 1;
         }
 
@@ -271,7 +290,21 @@ pub const EventLoop = struct {
             if (revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
                 log.info("Client {d} disconnected (poll error/hangup)", .{client_idx});
                 self.removeClient(client_idx);
-            } else if (revents & posix.POLL.IN != 0) {
+            } else if (revents & posix.POLL.OUT != 0) {
+                // Socket is writable - clear congestion and send pending updates
+                if (client_idx < self.clients.items.len) {
+                    const client = &self.clients.items[client_idx];
+                    if (client.write_congested) {
+                        log.debug("Client {s} write cleared, resuming updates", .{client.shortId()});
+                        client.write_congested = false;
+                        // Send updates for all panes to catch up
+                        self.sendClientUpdates(client) catch |e| {
+                            _ = handleWriteError(client, "resume updates", e);
+                        };
+                    }
+                }
+            }
+            if (revents & posix.POLL.IN != 0) {
                 // Process this client. Keep processing as long as TLS has buffered data.
                 // This is critical for TLS: poll() checks the TCP socket, but the TLS
                 // library may have already read and decrypted more data than we consumed.
@@ -506,10 +539,14 @@ pub const EventLoop = struct {
         if (!pane.sync_output_enabled or sync_just_ended) {
             const debug_pane = self.session.getDebugPane();
             for (self.clients.items) |*client| {
-                self.sendPaneUpdate(client, pane) catch |e| logClientError("send pane update", e);
+                self.sendPaneUpdate(client, pane) catch |e| {
+                    _ = handleWriteError(client, "send pane update", e);
+                };
                 if (debug_pane) |dp| {
                     if (dp.id != pane.id) {
-                        self.sendPaneUpdate(client, dp) catch |e| logClientError("send debug update", e);
+                        self.sendPaneUpdate(client, dp) catch |e| {
+                            _ = handleWriteError(client, "send debug update", e);
+                        };
                     }
                 }
             }
@@ -726,6 +763,9 @@ pub const EventLoop = struct {
     }
 
     fn sendPaneUpdate(self: *EventLoop, client: *ClientState, pane: *Pane) !void {
+        // Skip congested clients - they'll get updates when socket becomes writable
+        if (client.write_congested) return;
+
         const pane_id = pane.id;
         const last_gen = client.getGeneration(pane_id);
         if (pane.generation == last_gen) return;
@@ -790,13 +830,13 @@ pub const EventLoop = struct {
             // Client can apply this delta
             try client.ws.sendBinary(result.delta);
         } else {
-            // Client can't apply delta (generation mismatch), send full snapshot
-            log.debug("Pane {d}: client gen {d} != delta from_gen {d}, sending snapshot", .{
+            // Client can't apply delta (generation mismatch)
+            // Send delta anyway - it's smaller than snapshot, reducing congestion risk.
+            // Client will detect mismatch and request a sync.
+            log.debug("Pane {d}: client gen {d} != delta from_gen {d}, sending delta anyway (client will resync)", .{
                 pane_id, last_gen, result.from_gen,
             });
-            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
-            defer pane.allocator.free(snap);
-            try client.ws.sendBinary(snap);
+            try client.ws.sendBinary(result.delta);
         }
 
         client.setGeneration(pane_id, pane.generation);

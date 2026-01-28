@@ -500,6 +500,16 @@ export function setLayout(layout: LayoutUpdate) {
     }
   }
 
+  // Increment dimensionVersion to force pane dimension recalculation
+  // This ensures panes get proper sizes when layout changes
+  store.dimensionVersion++;
+
+  // Clear resize cache for active window's panes to ensure fresh calculations
+  const activeWindow = store.windows.get(layout.activeWindowId);
+  if (activeWindow && store.connection) {
+    store.connection.clearResizeCache(activeWindow.paneIds);
+  }
+
   notify();
 }
 
