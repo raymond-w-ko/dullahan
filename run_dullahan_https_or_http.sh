@@ -12,6 +12,8 @@ CERT_DIR="$SCRIPT_DIR/cert"
 CERT_FILE=("$CERT_DIR"/*.crt)
 KEY_FILE=("$CERT_DIR"/*.key)
 
+cd $HOME
+
 if [[ -f "${CERT_FILE[0]}" && -f "${KEY_FILE[0]}" ]]; then
     exec "$EXE" serve --background --tls-cert="${CERT_FILE[0]}" --tls-key="${KEY_FILE[0]}"
 else
