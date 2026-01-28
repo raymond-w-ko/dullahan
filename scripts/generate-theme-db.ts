@@ -153,7 +153,6 @@ function generateZigSource(themes: ThemeColors[]): string {
   lines.push("//! Auto-generated theme database from Ghostty themes");
   lines.push("//! Do not edit manually. Run: bun scripts/generate-theme-db.ts");
   lines.push("//!");
-  lines.push(`//! Generated: ${new Date().toISOString()}`);
   lines.push(`//! Theme count: ${themes.length}`);
   lines.push("");
   lines.push("const std = @import(\"std\");");
