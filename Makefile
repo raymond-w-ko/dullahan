@@ -146,7 +146,7 @@ coverage-client:
 dev: client server
 	rm -rf /tmp/dullahan-$(shell id -u)/*.log
 	pkill -9 -x dullahan || true
-	DULLAHAN_DEBUG=-all,+http,+tls,+connection ./dullahan serve --tls-cert=cert/syandus-vm.tail2c131b.ts.net.crt --tls-key=cert/syandus-vm.tail2c131b.ts.net.key --port=7682
+	DULLAHAN_DEBUG=-all,+http,+tls,+connection ./dullahan serve --tls-cert=$(firstword $(wildcard cert/*.crt)) --tls-key=$(firstword $(wildcard cert/*.key)) --port=7682
 
 prod: dist
 	rm -rf /tmp/dullahan-$(shell id -u)/*.log
