@@ -437,7 +437,10 @@ pub const Server = struct {
     /// Returns a WebSocket connection if upgrade succeeded, null otherwise
     pub fn acceptWebSocket(self: *Server) !?websocket.Connection {
         log.debug("Waiting for connection...", .{});
+        const accept_start_ms = std.time.milliTimestamp();
         const conn = try self.listener.accept();
+        const accepted_ms = std.time.milliTimestamp();
+        const peer_addr = conn.address;
         log.debug("Accepted connection, reading request...", .{});
 
         // Disable Nagle's algorithm for real-time terminal updates
@@ -471,6 +474,7 @@ pub const Server = struct {
         ) catch {};
 
         // Create stream - either wrap with TLS or use plain TCP
+        var handshake_done_ms: ?i64 = null;
         var stream: tls_wrapper.Stream = if (self.tls_context) |tls_ctx| blk: {
             log.debug("Performing TLS handshake...", .{});
             const tls_conn = tls_ctx.upgrade(conn.stream) catch |e| {
@@ -478,9 +482,30 @@ pub const Server = struct {
                 conn.stream.close();
                 return null;
             };
+            const handshake_ms = std.time.milliTimestamp();
+            handshake_done_ms = handshake_ms;
+            log.debug(
+                "TLS handshake done in {d}ms (accept to handshake {d}ms)",
+                .{ handshake_ms - accepted_ms, handshake_ms - accept_start_ms },
+            );
             log.debug("TLS handshake completed", .{});
             break :blk .{ .tls = tls_conn };
         } else .{ .plain = conn.stream };
+
+        // After TLS handshake, shorten the initial HTTP request read timeout
+        // to avoid long stalls from speculative TLS connections.
+        if (self.tls_context != null) {
+            const post_handshake_timeout = std.posix.timeval{
+                .sec = 0,
+                .usec = 250 * 1000,
+            };
+            std.posix.setsockopt(
+                stream.handle(),
+                std.posix.SOL.SOCKET,
+                std.posix.SO.RCVTIMEO,
+                std.mem.asBytes(&post_handshake_timeout),
+            ) catch {};
+        }
 
         // Read HTTP request (may arrive in multiple packets)
         const max_header_bytes: usize = 16 * 1024;
@@ -497,7 +522,13 @@ pub const Server = struct {
             var buf: [constants.buffer.general]u8 = undefined;
             const n = stream.read(&buf) catch |e| {
                 if (e == error.WouldBlock) {
-                    log.debug("Read timeout waiting for HTTP request", .{});
+                    const now_ms = std.time.milliTimestamp();
+                    const accept_elapsed = now_ms - accept_start_ms;
+                    const handshake_elapsed = if (handshake_done_ms) |ms| ms - accepted_ms else -1;
+                    log.debug(
+                        "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
+                        .{ accept_elapsed, handshake_elapsed, self.tls_context != null, peer_addr },
+                    );
                     stream.close();
                     return null;
                 }
@@ -513,6 +544,11 @@ pub const Server = struct {
             try req_buf.appendSlice(self.allocator, buf[0..n]);
         }
         log.debug("Read {d} bytes", .{req_buf.items.len});
+        const headers_ms = std.time.milliTimestamp();
+        log.debug(
+            "HTTP headers read in {d}ms (accept to headers {d}ms)",
+            .{ headers_ms - accepted_ms, headers_ms - accept_start_ms },
+        );
 
         // Parse request
         var request = parseRequest(self.allocator, req_buf.items) catch |e| {

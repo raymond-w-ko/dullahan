@@ -36,12 +36,6 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.linkLibrary(snappy_dep.artifact("snappy"));
     }
 
-    // Add tls.zig dependency for HTTPS/WSS support
-    if (b.lazyDependency("tls", .{})) |tls_dep| {
-        const tls = tls_dep.module("tls");
-        dullahan_mod.addImport("tls", tls);
-    }
-
     // Executable
     const exe = b.addExecutable(.{
         .name = "dullahan",
@@ -54,6 +48,10 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    exe.linkLibC();
+    exe.linkSystemLibrary("ssl");
+    exe.linkSystemLibrary("crypto");
 
     b.installArtifact(exe);
 
@@ -75,12 +73,18 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = dullahan_mod,
     });
+    mod_tests.linkLibC();
+    mod_tests.linkSystemLibrary("ssl");
+    mod_tests.linkSystemLibrary("crypto");
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     // Test the executable's root module
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
+    exe_tests.linkLibC();
+    exe_tests.linkSystemLibrary("ssl");
+    exe_tests.linkSystemLibrary("crypto");
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // Integration tests (separate test/ directory)
@@ -94,6 +98,9 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    integration_tests.linkLibC();
+    integration_tests.linkSystemLibrary("ssl");
+    integration_tests.linkSystemLibrary("crypto");
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // `zig build test` runs all tests (unit + integration)

@@ -1,13 +1,63 @@
 //! TLS wrapper for Dullahan
 //!
 //! Provides a unified Stream type that works for both plain TCP and TLS connections.
-//! Uses ianic/tls.zig for TLS 1.3 support.
+//! Uses system OpenSSL (libssl/libcrypto) for TLS support.
 
 const std = @import("std");
 const posix = std.posix;
-const tls_lib = @import("tls");
+const c = @cImport({
+    @cInclude("openssl/ssl.h");
+    @cInclude("openssl/err.h");
+});
 
 const log = std.log.scoped(.tls);
+
+fn initOpenSsl() void {
+    if (@hasDecl(c, "OPENSSL_init_ssl")) {
+        _ = c.OPENSSL_init_ssl(0, null);
+    } else {
+        _ = c.SSL_library_init();
+        c.SSL_load_error_strings();
+    }
+}
+
+fn logOpenSslErrors(context: []const u8) void {
+    var err = c.ERR_get_error();
+    if (err == 0) {
+        log.err("{s}: unknown OpenSSL error", .{context});
+        return;
+    }
+    while (err != 0) {
+        var buf: [256]u8 = undefined;
+        _ = c.ERR_error_string_n(err, &buf, buf.len);
+        const msg = std.mem.sliceTo(buf[0..], 0);
+        log.err("{s}: {s}", .{ context, msg });
+        err = c.ERR_get_error();
+    }
+}
+
+fn logSslFailure(context: []const u8, rc: c_int, ssl_error: c_int) void {
+    log.err("{s}: rc={d} ssl_error={d}", .{ context, rc, ssl_error });
+}
+
+fn handleSslResult(ssl: *c.SSL, rc: c_int, context: []const u8) !usize {
+    const err = c.SSL_get_error(ssl, rc);
+    switch (err) {
+        c.SSL_ERROR_WANT_READ, c.SSL_ERROR_WANT_WRITE => return error.WouldBlock,
+        c.SSL_ERROR_ZERO_RETURN => return 0,
+        c.SSL_ERROR_SYSCALL => {
+            if (rc == 0) return 0;
+            logSslFailure(context, rc, err);
+            logOpenSslErrors(context);
+            return error.TlsSyscall;
+        },
+        else => {
+            logSslFailure(context, rc, err);
+            logOpenSslErrors(context);
+            return error.TlsFailure;
+        },
+    }
+}
 
 /// Configuration for TLS server
 pub const TlsConfig = struct {
@@ -17,11 +67,13 @@ pub const TlsConfig = struct {
 
 /// TLS server context - holds loaded certificates and keys
 pub const TlsContext = struct {
-    cert_key_pair: tls_lib.config.CertKeyPair,
+    ctx: *c.SSL_CTX,
     allocator: std.mem.Allocator,
 
     /// Initialize TLS context by loading certificate and key from PEM files
     pub fn init(allocator: std.mem.Allocator, config: TlsConfig) !TlsContext {
+        initOpenSsl();
+
         log.info("Loading TLS certificate from {s}", .{config.cert_path});
         log.info("Loading TLS key from {s}", .{config.key_path});
 
@@ -33,28 +85,47 @@ pub const TlsContext = struct {
             }
         } else |_| {}
 
-        // Load certificate and key from files
-        // Use fromFilePathAbsolute for absolute paths, fromFilePath for relative
-        const cert_key_pair = tls_lib.config.CertKeyPair.fromFilePath(
-            allocator,
-            std.fs.cwd(),
-            config.cert_path,
-            config.key_path,
-        ) catch |e| {
-            log.err("Failed to load TLS certificate/key: {}", .{e});
-            return e;
+        const method = c.TLS_server_method() orelse {
+            logOpenSslErrors("TLS_server_method");
+            return error.TlsInitFailed;
         };
+        const ctx = c.SSL_CTX_new(method) orelse {
+            logOpenSslErrors("SSL_CTX_new");
+            return error.TlsInitFailed;
+        };
+
+        const cert_path_z = try allocator.dupeZ(u8, config.cert_path);
+        defer allocator.free(cert_path_z);
+        const key_path_z = try allocator.dupeZ(u8, config.key_path);
+        defer allocator.free(key_path_z);
+
+        if (c.SSL_CTX_use_certificate_file(ctx, cert_path_z, c.SSL_FILETYPE_PEM) != 1) {
+            logOpenSslErrors("SSL_CTX_use_certificate_file");
+            c.SSL_CTX_free(ctx);
+            return error.TlsInitFailed;
+        }
+        if (c.SSL_CTX_use_PrivateKey_file(ctx, key_path_z, c.SSL_FILETYPE_PEM) != 1) {
+            logOpenSslErrors("SSL_CTX_use_PrivateKey_file");
+            c.SSL_CTX_free(ctx);
+            return error.TlsInitFailed;
+        }
+        if (c.SSL_CTX_check_private_key(ctx) != 1) {
+            logOpenSslErrors("SSL_CTX_check_private_key");
+            c.SSL_CTX_free(ctx);
+            return error.TlsInitFailed;
+        }
 
         log.info("TLS context initialized successfully", .{});
 
         return .{
-            .cert_key_pair = cert_key_pair,
+            .ctx = ctx,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *TlsContext) void {
-        self.cert_key_pair.deinit(self.allocator);
+        _ = self.allocator;
+        c.SSL_CTX_free(self.ctx);
     }
 
     /// Perform TLS handshake on an accepted connection
@@ -75,45 +146,68 @@ pub const TlsContext = struct {
             log.warn("Failed to set TCP_NODELAY: {}", .{e});
         };
 
-        const tls_conn = tls_lib.server(tcp_stream, .{
-            .auth = &self.cert_key_pair,
-        }) catch |e| {
-            log.err("TLS handshake failed: {}", .{e});
-            return e;
+        const ssl = c.SSL_new(self.ctx) orelse {
+            logOpenSslErrors("SSL_new");
+            return error.TlsInitFailed;
         };
+
+        const mode_flags: c_ulong = c.SSL_MODE_ENABLE_PARTIAL_WRITE | c.SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
+        _ = c.SSL_set_mode(ssl, mode_flags);
+
+        if (c.SSL_set_fd(ssl, @intCast(tcp_stream.handle)) != 1) {
+            logOpenSslErrors("SSL_set_fd");
+            c.SSL_free(ssl);
+            return error.TlsInitFailed;
+        }
+
+        const accept_rc = c.SSL_accept(ssl);
+        if (accept_rc != 1) {
+            const accept_err = c.SSL_get_error(ssl, accept_rc);
+            logSslFailure("SSL_accept", accept_rc, accept_err);
+            logOpenSslErrors("SSL_accept");
+            c.SSL_free(ssl);
+            return error.TlsHandshakeFailed;
+        }
 
         log.debug("TLS handshake completed successfully", .{});
 
         return .{
-            .conn = tls_conn,
+            .ssl = ssl,
             .tcp_stream = tcp_stream,
         };
     }
 };
 
-/// TLS connection - wraps the tls.zig Connection
+/// TLS connection - wraps an OpenSSL SSL* connection
 pub const TlsConnection = struct {
-    conn: tls_lib.Connection(std.net.Stream),
+    ssl: *c.SSL,
     tcp_stream: std.net.Stream,
 
     pub fn read(self: *TlsConnection, buf: []u8) !usize {
-        return self.conn.read(buf) catch |e| {
-            if (e == error.EndOfStream) return 0;
-            return e;
-        };
+        if (buf.len == 0) return 0;
+        const max_len: usize = @intCast(std.math.maxInt(c_int));
+        const len: c_int = @intCast(@min(buf.len, max_len));
+        const rc = c.SSL_read(self.ssl, buf.ptr, len);
+        if (rc > 0) return @intCast(rc);
+        return handleSslResult(self.ssl, rc, "TLS read");
     }
 
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
-        return self.conn.write(data) catch |e| {
-            if (e == error.WouldBlock) return e;
-            log.err("TLS write failed: {} (data_len={})", .{ e, data.len });
-            return e;
-        };
+        if (data.len == 0) return 0;
+        const max_len: usize = @intCast(std.math.maxInt(c_int));
+        const len: c_int = @intCast(@min(data.len, max_len));
+        const rc = c.SSL_write(self.ssl, data.ptr, len);
+        if (rc > 0) return @intCast(rc);
+        return handleSslResult(self.ssl, rc, "TLS write");
     }
 
     pub fn close(self: *TlsConnection) void {
         // Send TLS close_notify alert
-        self.conn.close() catch {};
+        const shutdown_rc = c.SSL_shutdown(self.ssl);
+        if (shutdown_rc == 0) {
+            _ = c.SSL_shutdown(self.ssl);
+        }
+        c.SSL_free(self.ssl);
         self.tcp_stream.close();
     }
 
@@ -127,8 +221,7 @@ pub const TlsConnection = struct {
     /// but the TLS library may have already read and decrypted more data
     /// than we consumed. We need to check this before going back to poll().
     pub fn hasPendingData(self: *TlsConnection) bool {
-        // Check both: decrypted data in read_buf and encrypted data in record reader
-        return self.conn.read_buf.len > 0 or self.conn.rec_rdr.hasMore();
+        return c.SSL_pending(self.ssl) > 0;
     }
 };
 
