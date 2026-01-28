@@ -50,7 +50,7 @@ pub const ClientState = struct {
             self.allocator.free(token);
         }
         self.pane_generations.deinit();
-        self.ws.close();
+        self.ws.deinit();
         self.connected = false;
     }
 

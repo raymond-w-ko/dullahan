@@ -248,6 +248,14 @@ export class TerminalConnection {
   private static readonly PING_INTERVAL_MS = 250;
   private static readonly LATENCY_SAMPLE_COUNT = 8;
 
+  // Outbound backpressure handling
+  private _sendQueue: string[] = [];
+  private _sendQueueBytes: number = 0;
+  private _flushTimer: number | null = null;
+  private static readonly MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+  private static readonly MAX_QUEUE_BYTES = 4 * 1024 * 1024;
+  private static readonly FLUSH_INTERVAL_MS = 50;
+
   // Event emitter for connection events
   private _emitter = new TypedEventEmitter<ConnectionEvents>();
 
@@ -398,6 +406,8 @@ export class TerminalConnection {
       connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeInfo);
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
+      // Flush any queued outbound messages
+      this.flushSendQueue();
       // Start latency pings
       this.startPingTimer();
       this.emit("connect");
@@ -407,6 +417,8 @@ export class TerminalConnection {
       connLog.log("WebSocket disconnected");
       // Stop latency pings
       this.stopPingTimer();
+      // Drop any queued outbound messages
+      this.clearSendQueue();
       this.emit("disconnect");
       this.scheduleReconnect();
     };
@@ -684,6 +696,7 @@ export class TerminalConnection {
 
   disconnect(): void {
     this.stopPingTimer();
+    this.clearSendQueue();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1387,8 +1400,60 @@ export class TerminalConnection {
 
   private send(msg: ClientMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      const payload = JSON.stringify(msg);
+      if (this._sendQueue.length > 0 || this.ws.bufferedAmount > TerminalConnection.MAX_BUFFERED_BYTES) {
+        this.enqueueSend(payload);
+        return;
+      }
+      this.ws.send(payload);
+      if (this.ws.bufferedAmount > TerminalConnection.MAX_BUFFERED_BYTES) {
+        this.scheduleFlush();
+      }
     }
+  }
+
+  private enqueueSend(payload: string): void {
+    if (this._sendQueueBytes + payload.length > TerminalConnection.MAX_QUEUE_BYTES) {
+      connLog.warn("Send queue overflow, disconnecting");
+      this.ws?.close();
+      return;
+    }
+    this._sendQueue.push(payload);
+    this._sendQueueBytes += payload.length;
+    this.scheduleFlush();
+  }
+
+  private flushSendQueue(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    while (this._sendQueue.length > 0 && this.ws.bufferedAmount < TerminalConnection.MAX_BUFFERED_BYTES) {
+      const payload = this._sendQueue.shift()!;
+      this._sendQueueBytes -= payload.length;
+      this.ws.send(payload);
+    }
+    if (this._sendQueue.length > 0) {
+      this.scheduleFlush();
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this._flushTimer !== null) {
+      return;
+    }
+    this._flushTimer = window.setTimeout(() => {
+      this._flushTimer = null;
+      this.flushSendQueue();
+    }, TerminalConnection.FLUSH_INTERVAL_MS);
+  }
+
+  private clearSendQueue(): void {
+    if (this._flushTimer !== null) {
+      window.clearTimeout(this._flushTimer);
+      this._flushTimer = null;
+    }
+    this._sendQueue.length = 0;
+    this._sendQueueBytes = 0;
   }
 
   get isConnected(): boolean {

@@ -26,6 +26,14 @@ pub const WsProxy = struct {
         return .{ .allocator = allocator };
     }
 
+    fn markCongested(client: anytype) void {
+        if (@hasField(@TypeOf(client.*), "write_congested")) {
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+            }
+        }
+    }
+
     // ========================================================================
     // Authentication Checks
     // ========================================================================
@@ -72,12 +80,14 @@ pub const WsProxy = struct {
     pub fn send(client: anytype, msg: []const u8) !void {
         try requireAuth(client);
         try client.ws.sendBinary(msg);
+        markCongested(client);
     }
 
     /// Send binary message to a single client without auth check.
     /// Use this for initial connection handshake messages.
     pub fn sendUnchecked(client: anytype, msg: []const u8) !void {
         try client.ws.sendBinary(msg);
+        markCongested(client);
     }
 
     /// Broadcast binary message to all authenticated clients.
@@ -90,6 +100,7 @@ pub const WsProxy = struct {
                 client.ws.sendBinary(msg) catch |e| {
                     log.warn("broadcast failed for client {s}: {any}", .{ client.shortId(), e });
                 };
+                markCongested(client);
             }
         }
     }
@@ -104,6 +115,7 @@ pub const WsProxy = struct {
             client.ws.sendBinary(msg) catch |e| {
                 log.warn("broadcastAll failed for client {s}: {any}", .{ client.shortId(), e });
             };
+            markCongested(client);
         }
     }
 
@@ -118,6 +130,7 @@ pub const WsProxy = struct {
                 client.ws.sendBinary(msg) catch |e| {
                     log.warn("broadcastIf failed for client {s}: {any}", .{ client.shortId(), e });
                 };
+                markCongested(client);
             }
         }
     }
@@ -137,6 +150,7 @@ pub const WsProxy = struct {
                                 log.warn("sendToMaster failed: {any}", .{e});
                                 return false;
                             };
+                            markCongested(client);
                             return true;
                         }
                     }

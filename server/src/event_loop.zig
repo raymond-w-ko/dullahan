@@ -44,7 +44,7 @@ fn logClientError(comptime context: []const u8, err: anyerror) void {
 /// Handle write error, setting congestion flag if WouldBlock.
 /// Returns true if the error was WouldBlock (client is now congested).
 fn handleWriteError(client: *ClientState, comptime context: []const u8, err: anyerror) bool {
-    if (err == error.WouldBlock) {
+    if (err == error.WouldBlock or err == error.WriteBufferFull) {
         if (!client.write_congested) {
             log.debug("Client {s} write congested, pausing updates", .{client.shortId()});
             client.write_congested = true;
@@ -240,7 +240,7 @@ pub const EventLoop = struct {
         var idx: usize = FIXED_FD_COUNT;
         for (self.clients.items) |client| {
             // Add POLLOUT for congested clients so we know when socket is writable
-            const events: i16 = if (client.write_congested)
+            const events: i16 = if (client.write_congested or client.ws.hasPendingWrite())
                 posix.POLL.IN | posix.POLL.OUT
             else
                 posix.POLL.IN;
@@ -291,16 +291,24 @@ pub const EventLoop = struct {
                 log.info("Client {d} disconnected (poll error/hangup)", .{client_idx});
                 self.removeClient(client_idx);
             } else if (revents & posix.POLL.OUT != 0) {
-                // Socket is writable - clear congestion and send pending updates
+                // Socket is writable - flush pending writes and resume updates
                 if (client_idx < self.clients.items.len) {
                     const client = &self.clients.items[client_idx];
-                    if (client.write_congested) {
-                        log.debug("Client {s} write cleared, resuming updates", .{client.shortId()});
+                    const drained = client.ws.flushWriteBuffer() catch |e| blk: {
+                        _ = handleWriteError(client, "flush write buffer", e);
+                        break :blk false;
+                    };
+                    if (drained) {
+                        if (client.write_congested) {
+                            log.debug("Client {s} write cleared, resuming updates", .{client.shortId()});
+                        }
                         client.write_congested = false;
                         // Send updates for all panes to catch up
                         self.sendClientUpdates(client) catch |e| {
                             _ = handleWriteError(client, "resume updates", e);
                         };
+                    } else {
+                        client.write_congested = true;
                     }
                 }
             }
@@ -317,9 +325,12 @@ pub const EventLoop = struct {
                             log.info("Client {d} disconnected", .{client_idx});
                             self.removeClient(client_idx);
                             break;
-                        } else if (e == error.WouldBlock) {
-                            // Timeout on partial frame - just continue, don't remove client
-                            log.debug("Client {d} read timeout (partial frame?)", .{client_idx});
+                        } else if (e == error.WouldBlock or e == error.WriteBufferFull) {
+                            // No complete frame available yet; keep buffered data and try later.
+                            if (e == error.WriteBufferFull and client_idx < self.clients.items.len) {
+                                self.clients.items[client_idx].write_congested = true;
+                            }
+                            log.debug("Client {d} read would-block (incomplete frame)", .{client_idx});
                             break;
                         } else {
                             log.err("Client {d} error: {any}", .{ client_idx, e });
@@ -480,7 +491,7 @@ pub const EventLoop = struct {
             return;
         };
 
-        client.ws.setTimeouts(100);
+        client.ws.setTimeouts(0);
         try self.clients.append(self.allocator, client);
         conn_log.info("Client connected, total: {d}", .{self.clients.items.len});
     }
@@ -764,7 +775,10 @@ pub const EventLoop = struct {
 
     fn sendPaneUpdate(self: *EventLoop, client: *ClientState, pane: *Pane) !void {
         // Skip congested clients - they'll get updates when socket becomes writable
-        if (client.write_congested) return;
+        if (client.write_congested or client.ws.hasPendingWrite()) {
+            client.write_congested = true;
+            return;
+        }
 
         const pane_id = pane.id;
         const last_gen = client.getGeneration(pane_id);
@@ -776,6 +790,10 @@ pub const EventLoop = struct {
                 const msg = try snapshot.generateTitleMessage(pane.allocator, pane_id, title);
                 defer pane.allocator.free(msg);
                 try client.ws.sendBinary(msg);
+                if (client.ws.hasPendingWrite()) {
+                    client.write_congested = true;
+                    return;
+                }
             }
             pane.clearTitleChanged();
         }
@@ -788,6 +806,10 @@ pub const EventLoop = struct {
                 const msg = try snapshot.generateBellMessage(pane.allocator);
                 defer pane.allocator.free(msg);
                 try client.ws.sendBinary(msg);
+                if (client.ws.hasPendingWrite()) {
+                    client.write_congested = true;
+                    return;
+                }
                 pane.clearBell();
             }
         }
@@ -798,6 +820,10 @@ pub const EventLoop = struct {
                 const msg = try snapshot.generateToastMessage(pane.allocator, pane_id, notif.title, notif.body);
                 defer pane.allocator.free(msg);
                 try client.ws.sendBinary(msg);
+                if (client.ws.hasPendingWrite()) {
+                    client.write_congested = true;
+                    return;
+                }
             }
             pane.clearNotification();
         }
@@ -808,6 +834,10 @@ pub const EventLoop = struct {
             const msg = try snapshot.generateProgressMessage(pane.allocator, pane_id, progress.state, progress.value);
             defer pane.allocator.free(msg);
             try client.ws.sendBinary(msg);
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+                return;
+            }
             pane.clearProgressChanged();
         }
 
@@ -819,6 +849,10 @@ pub const EventLoop = struct {
             const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
             defer pane.allocator.free(snap);
             try client.ws.sendBinary(snap);
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+                return;
+            }
             client.setGeneration(pane_id, pane.generation);
             return;
         }
@@ -839,6 +873,10 @@ pub const EventLoop = struct {
             try client.ws.sendBinary(result.delta);
         }
 
+        if (client.ws.hasPendingWrite()) {
+            client.write_congested = true;
+            return;
+        }
         client.setGeneration(pane_id, pane.generation);
     }
 

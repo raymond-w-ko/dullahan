@@ -5,6 +5,8 @@
 const std = @import("std");
 const Sha1 = std.crypto.hash.Sha1;
 const base64 = std.base64;
+const builtin = @import("builtin");
+const constants = @import("constants.zig");
 const tls_wrapper = @import("tls_wrapper.zig");
 
 const log = std.log.scoped(.websocket);
@@ -123,6 +125,10 @@ pub fn computeAcceptKey(client_key: []const u8) [28]u8 {
 pub const Connection = struct {
     stream: tls_wrapper.Stream,
     allocator: std.mem.Allocator,
+    read_buf: std.ArrayListUnmanaged(u8) = .{},
+    write_buf: std.ArrayListUnmanaged(u8) = .{},
+
+    const max_write_buffer: usize = 8 * 1024 * 1024; // 8MB per client
 
     pub fn init(stream: tls_wrapper.Stream, allocator: std.mem.Allocator) Connection {
         // Set socket options for robustness after suspend/resume
@@ -149,10 +155,23 @@ pub const Connection = struct {
             std.mem.asBytes(&write_timeout),
         ) catch {};
 
+        // Set non-blocking for poll-based event loop.
+        const fl_flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch 0;
+        const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+        _ = std.posix.fcntl(fd, std.posix.F.SETFL, fl_flags | O_NONBLOCK) catch {};
+
         return .{
             .stream = stream,
             .allocator = allocator,
+            .read_buf = .{},
+            .write_buf = .{},
         };
+    }
+
+    pub fn deinit(self: *Connection) void {
+        self.read_buf.deinit(self.allocator);
+        self.write_buf.deinit(self.allocator);
+        self.stream.close();
     }
 
     /// Get underlying file descriptor for polling
@@ -196,87 +215,79 @@ pub const Connection = struct {
 
     /// Send a text message
     pub fn sendText(self: *Connection, message: []const u8) !void {
-        const frame = try createFrame(self.allocator, .text, message);
-        defer self.allocator.free(frame);
-        try self.stream.writeAll(frame);
+        try self.sendFrame(.text, message);
     }
 
     /// Send a binary message
     pub fn sendBinary(self: *Connection, data: []const u8) !void {
-        const frame = try createFrame(self.allocator, .binary, data);
-        defer self.allocator.free(frame);
-        try self.stream.writeAll(frame);
+        try self.sendFrame(.binary, data);
     }
 
     /// Send a close frame
     pub fn sendClose(self: *Connection) !void {
-        const frame = try createFrame(self.allocator, .close, &.{});
-        defer self.allocator.free(frame);
-        try self.stream.writeAll(frame);
+        try self.sendFrame(.close, &.{});
     }
 
     /// Send a pong frame (response to ping)
     pub fn sendPong(self: *Connection, payload: []const u8) !void {
-        const frame = try createFrame(self.allocator, .pong, payload);
-        defer self.allocator.free(frame);
-        try self.stream.writeAll(frame);
+        try self.sendFrame(.pong, payload);
     }
 
     /// Read and parse one WebSocket frame
     /// Returns the opcode and payload (caller must free payload)
     pub fn readFrame(self: *Connection) !struct { opcode: Opcode, payload: []u8 } {
-        // Read header bytes (up to 14 bytes max for header)
-        var header_buf: [14]u8 = undefined;
-
-        // First read 2 bytes minimum
-        const initial = try self.stream.read(header_buf[0..2]);
-        if (initial < 2) return error.ConnectionClosed;
-
-        // Parse to determine how much more we need
-        const byte1 = header_buf[1];
-        const mask = (byte1 & 0x80) != 0;
-        const len_indicator = byte1 & 0x7F;
-
-        var header_len: usize = 2;
-        if (len_indicator == 126) {
-            header_len += 2;
-        } else if (len_indicator == 127) {
-            header_len += 8;
-        }
-        if (mask) header_len += 4;
-
-        // Read remaining header bytes
-        if (header_len > 2) {
-            const remaining = header_len - 2;
-            var total_read: usize = 0;
-            while (total_read < remaining) {
-                const n = try self.stream.read(header_buf[2 + total_read .. 2 + remaining]);
-                if (n == 0) return error.ConnectionClosed;
-                total_read += n;
+        while (true) {
+            if (self.read_buf.items.len < 2) {
+                if (try self.readMore()) |_| {} else {
+                    return error.WouldBlock;
+                }
             }
+
+            const parsed = parseFrameHeader(self.read_buf.items) catch |e| switch (e) {
+                error.InsufficientData => {
+                    if (try self.readMore()) |_| {} else {
+                        return error.WouldBlock;
+                    }
+                    continue;
+                },
+                else => return e,
+            };
+
+            const header = parsed.header;
+            if (header.payload_len > std.math.maxInt(usize)) {
+                return error.FrameTooLarge;
+            }
+
+            const header_len = parsed.header_len;
+            const payload_len: usize = @intCast(header.payload_len);
+            const total_len = header_len + payload_len;
+
+            if (self.read_buf.items.len < total_len) {
+                if (try self.readMore()) |_| {} else {
+                    return error.WouldBlock;
+                }
+                continue;
+            }
+
+            const payload = try self.allocator.alloc(u8, payload_len);
+            errdefer self.allocator.free(payload);
+
+            if (payload_len > 0) {
+                std.mem.copyForwards(u8, payload, self.read_buf.items[header_len .. header_len + payload_len]);
+            }
+
+            if (header.masking_key) |key| {
+                unmaskPayload(payload, key);
+            }
+
+            const remaining = self.read_buf.items.len - total_len;
+            if (remaining > 0) {
+                std.mem.copyForwards(u8, self.read_buf.items[0..remaining], self.read_buf.items[total_len..]);
+            }
+            self.read_buf.items.len = remaining;
+
+            return .{ .opcode = header.opcode, .payload = payload };
         }
-
-        // Parse the complete header
-        const parsed = try parseFrameHeader(header_buf[0..header_len]);
-        const header = parsed.header;
-
-        // Allocate and read payload
-        const payload = try self.allocator.alloc(u8, @intCast(header.payload_len));
-        errdefer self.allocator.free(payload);
-
-        var payload_read: usize = 0;
-        while (payload_read < payload.len) {
-            const n = try self.stream.read(payload[payload_read..]);
-            if (n == 0) return error.ConnectionClosed;
-            payload_read += n;
-        }
-
-        // Unmask if needed
-        if (header.masking_key) |key| {
-            unmaskPayload(payload, key);
-        }
-
-        return .{ .opcode = header.opcode, .payload = payload };
     }
 
     pub fn close(self: *Connection) void {
@@ -288,7 +299,65 @@ pub const Connection = struct {
     /// that wasn't consumed yet. Essential for event loops where poll()
     /// might not wake up for data already buffered in userspace.
     pub fn hasPendingData(self: *Connection) bool {
-        return self.stream.hasPendingData();
+        return self.read_buf.items.len > 0 or self.stream.hasPendingData();
+    }
+
+    /// Check if there's queued outbound data waiting to be written.
+    pub fn hasPendingWrite(self: *const Connection) bool {
+        return self.write_buf.items.len > 0;
+    }
+
+    /// Attempt to flush queued outbound data. Returns true if drained.
+    pub fn flushWriteBuffer(self: *Connection) !bool {
+        while (self.write_buf.items.len > 0) {
+            const n = self.stream.write(self.write_buf.items) catch |e| switch (e) {
+                error.WouldBlock => return false,
+                else => return e,
+            };
+            if (n == 0) return error.ConnectionClosed;
+            const remaining = self.write_buf.items.len - n;
+            if (remaining > 0) {
+                std.mem.copyForwards(u8, self.write_buf.items[0..remaining], self.write_buf.items[n..]);
+            }
+            self.write_buf.items.len = remaining;
+        }
+        return true;
+    }
+
+    fn readMore(self: *Connection) !?usize {
+        var buf: [constants.buffer.general]u8 = undefined;
+        const n = self.stream.read(&buf) catch |e| switch (e) {
+            error.WouldBlock => return null,
+            else => return e,
+        };
+        if (n == 0) return error.ConnectionClosed;
+        try self.read_buf.appendSlice(self.allocator, buf[0..n]);
+        return n;
+    }
+
+    fn sendFrame(self: *Connection, opcode: Opcode, payload: []const u8) !void {
+        const frame = try createFrame(self.allocator, opcode, payload);
+        defer self.allocator.free(frame);
+
+        if (self.write_buf.items.len == 0) {
+            const n = self.stream.write(frame) catch |e| switch (e) {
+                error.WouldBlock => {
+                    try self.write_buf.appendSlice(self.allocator, frame);
+                    return;
+                },
+                else => return e,
+            };
+            if (n == 0) return error.ConnectionClosed;
+            if (n < frame.len) {
+                try self.write_buf.appendSlice(self.allocator, frame[n..]);
+            }
+        } else {
+            try self.write_buf.appendSlice(self.allocator, frame);
+        }
+
+        if (self.write_buf.items.len > max_write_buffer) {
+            return error.WriteBufferFull;
+        }
     }
 };
 

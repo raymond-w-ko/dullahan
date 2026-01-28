@@ -105,6 +105,7 @@ pub const TlsConnection = struct {
 
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
         return self.conn.write(data) catch |e| {
+            if (e == error.WouldBlock) return e;
             log.err("TLS write failed: {} (data_len={})", .{ e, data.len });
             return e;
         };

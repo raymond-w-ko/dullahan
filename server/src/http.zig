@@ -482,27 +482,40 @@ pub const Server = struct {
             break :blk .{ .tls = tls_conn };
         } else .{ .plain = conn.stream };
 
-        // Read HTTP request
-        var buf: [constants.buffer.general]u8 = undefined;
-        const n = stream.read(&buf) catch |e| {
-            if (e == error.WouldBlock) {
-                log.debug("Read timeout waiting for HTTP request", .{});
+        // Read HTTP request (may arrive in multiple packets)
+        const max_header_bytes: usize = 16 * 1024;
+        var req_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer req_buf.deinit(self.allocator);
+        while (std.mem.indexOf(u8, req_buf.items, "\r\n\r\n") == null) {
+            if (req_buf.items.len >= max_header_bytes) {
+                log.warn("HTTP headers exceeded {d} bytes", .{max_header_bytes});
+                sendResponse(&stream, "431 Request Header Fields Too Large", &.{}, "Headers too large") catch {};
                 stream.close();
                 return null;
             }
-            log.debug("Read error: {}", .{e});
-            stream.close();
-            return null;
-        };
-        log.debug("Read {d} bytes", .{n});
-        if (n == 0) {
-            log.debug("Empty request, closing", .{});
-            stream.close();
-            return null;
+
+            var buf: [constants.buffer.general]u8 = undefined;
+            const n = stream.read(&buf) catch |e| {
+                if (e == error.WouldBlock) {
+                    log.debug("Read timeout waiting for HTTP request", .{});
+                    stream.close();
+                    return null;
+                }
+                log.debug("Read error: {}", .{e});
+                stream.close();
+                return null;
+            };
+            if (n == 0) {
+                log.debug("Empty request, closing", .{});
+                stream.close();
+                return null;
+            }
+            try req_buf.appendSlice(self.allocator, buf[0..n]);
         }
+        log.debug("Read {d} bytes", .{req_buf.items.len});
 
         // Parse request
-        var request = parseRequest(self.allocator, buf[0..n]) catch |e| {
+        var request = parseRequest(self.allocator, req_buf.items) catch |e| {
             log.err("Failed to parse HTTP request: {any}", .{e});
             sendResponse(&stream, "400 Bad Request", &.{}, "Bad Request") catch {};
             stream.close();
