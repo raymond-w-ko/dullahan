@@ -90,6 +90,16 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         dlog.info("Debug console initialized", .{});
     }
 
+    // Create additional windows (1-4) with 3x2 grids (6 panes each)
+    const initial_active_window_id = session.active_window_id;
+    for (0..4) |_| {
+        const extra = try session.createWindowWithPaneCount(6);
+        log.info("Created window {d} with {d} panes (3x2 grid)", .{ extra.window_id, extra.pane_ids.len });
+        allocator.free(extra.pane_ids);
+    }
+    // Keep the initial window active on startup
+    session.active_window_id = initial_active_window_id;
+
     var ipc_server = ipc.Server.init(config.ipc) catch |e| {
         if (e == error.AddressInUse) {
             log.err("IPC socket {s} is already in use. Another server may be running.", .{config.ipc.getSocketPath()});

@@ -181,6 +181,7 @@ pub const EventLoop = struct {
                 2 => "2-col",
                 3 => "3-col",
                 4 => "2x2",
+                6 => "3x2",
                 else => "single", // Fallback
             };
 
