@@ -75,6 +75,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     settingsLog.current.log(isOpen ? "SettingsModal open" : "SettingsModal closed");
   }, [isOpen]);
 
+  useEffect(() => {
+    settingsLog.current.log("SettingsModal mount");
+    return () => settingsLog.current.log("SettingsModal unmount");
+  }, []);
+
   if (!isOpen) return null;
 
   // Helper to get typed value from event
@@ -88,6 +93,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     transform: `translate(calc(-50% + ${position.x}px), calc(-50% + ${position.y}px))`,
   };
 
+  const logInputEvent = (label: string, e: Event) => {
+    const target = e.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
+    const tag = (target as HTMLElement)?.tagName ?? "unknown";
+    const type = (target as HTMLInputElement).type ?? "";
+    const value = "value" in target ? target.value : "";
+    const checked = "checked" in target ? String((target as HTMLInputElement).checked) : "";
+    settingsLog.current.log(
+      `${label} tag=${tag} type=${type} value=${value} checked=${checked}`
+    );
+  };
+
   return (
     <div
       ref={modalRef}
@@ -95,7 +111,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       style={modalStyle}
       onClick={(e) => e.stopPropagation()}
     >
-      <div class="settings-inner">
+      <div
+        class="settings-inner"
+        onInput={(e) => logInputEvent("INPUT", e)}
+        onChange={(e) => logInputEvent("CHANGE", e)}
+      >
         <div class="settings-header" onMouseDown={handleDragStart}>
           <h2>Settings</h2>
           <button class="settings-close" onClick={onClose} aria-label="Close">
