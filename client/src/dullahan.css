@@ -689,6 +689,30 @@ body.layout-resizing-vertical * {
   font-size: 0.7rem;
 }
 
+.pane-resync {
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--c8) 60%, transparent);
+  color: var(--c8);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  margin-left: 0.75rem;
+  border-radius: 3px;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.pane-resync:hover {
+  color: var(--c3);
+  border-color: var(--c3);
+}
+
+.pane-resync:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .pane-close {
   background: none;
   border: none;

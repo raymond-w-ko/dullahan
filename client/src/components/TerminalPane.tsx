@@ -107,6 +107,13 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     }
   }, [connection, paneId]);
 
+  const handleResyncClick = useCallback((e: MouseEvent) => {
+    e.stopPropagation(); // Don't trigger pane focus
+    if (connection?.isConnected) {
+      connection.requestResync(paneId, "manual");
+    }
+  }, [connection, paneId]);
+
   // Handle right-click on titlebar for pane context menu
   const handleTitlebarContextMenu = useCallback((e: MouseEvent) => {
     e.preventDefault();
@@ -148,6 +155,14 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
         >
           {snapshot ? `${displayDims.cols}\u00D7${displayDims.rows}` : "\u2014"}
         </span>
+        <button
+          class="pane-resync"
+          onClick={handleResyncClick}
+          disabled={!connection?.isConnected}
+          title="Request a full snapshot resync for this pane"
+        >
+          request full snapshot
+        </button>
         {!isReadOnly && connection?.isMaster && (
           <button
             class="pane-close"
