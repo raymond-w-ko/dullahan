@@ -1140,9 +1140,6 @@ export class TerminalConnection {
       }
     }
 
-    // Update generation
-    paneState.generation = delta.gen;
-
     // Decode styles from delta
     const styles = decodeStyleTableFromBytes(delta.styles);
 
@@ -1160,9 +1157,15 @@ export class TerminalConnection {
     // Decode row IDs from delta (tells us which rows are in viewport)
     if (!delta.rowIds || delta.rowIds.length === 0) {
       deltaLog.error("Delta missing rowIds!", delta);
-      // Fall back to last known rowIds
+      this.requestResync(paneId, "corruption");
+      return;
     }
-    const rowIds = delta.rowIds ? decodeRowIds(delta.rowIds) : (paneState.lastRowIds ?? []);
+    const rowIds = decodeRowIds(delta.rowIds);
+    if (rowIds.length !== delta.rows) {
+      deltaLog.error(`Delta rowIds length mismatch: got ${rowIds.length}, expected ${delta.rows}`);
+      this.requestResync(paneId, "corruption");
+      return;
+    }
     paneState.lastRowIds = rowIds;
 
     // Check which rowIds are in cache
@@ -1176,14 +1179,10 @@ export class TerminalConnection {
       return !cached;
     });
 
-    // Threshold: if more than 10% of rows are missing (min 3), request resync
-    const missingRowThreshold = Math.max(3, Math.floor(delta.rows * 0.1));
-    if (notInCache.length > missingRowThreshold) {
-      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing (threshold ${missingRowThreshold}), requesting resync`);
+    if (notInCache.length > 0) {
+      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache, requesting resync`);
       this.requestResync(paneId, "cache_miss");
       return; // Don't emit corrupted snapshot
-    } else if (notInCache.length > 0) {
-      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache (below threshold)`);
     }
 
     // Build cells array, grapheme table, and hyperlink table from cache for current viewport
@@ -1194,6 +1193,7 @@ export class TerminalConnection {
     const hyperlinks: HyperlinkTable = new Map();
     let fromCache = 0;
     let filled = 0;
+    let cacheCorrupt = false;
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
       if (rowId !== undefined) {
@@ -1204,6 +1204,8 @@ export class TerminalConnection {
           const rowCells = cached.cells;
           if (rowCells.length !== delta.cols) {
             deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
+            cacheCorrupt = true;
+            break;
           }
           cells.push(...rowCells);
 
@@ -1241,6 +1243,10 @@ export class TerminalConnection {
         });
       }
     }
+    if (cacheCorrupt) {
+      this.requestResync(paneId, "corruption");
+      return; // Don't emit corrupted snapshot
+    }
     deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${filled} empty rows, ${graphemes.size} graphemes`);
 
     // Check if any cells reference styles we don't have
@@ -1255,6 +1261,9 @@ export class TerminalConnection {
       this.requestResync(paneId, "style_miss");
       return; // Don't emit corrupted snapshot
     }
+
+    // Update generation only after validation to avoid desync on resync request
+    paneState.generation = delta.gen;
 
     // Update last graphemes and hyperlinks for future merging
     paneState.lastGraphemes = graphemes;

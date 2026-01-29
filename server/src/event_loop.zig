@@ -863,21 +863,27 @@ pub const EventLoop = struct {
         if (last_gen == result.from_gen) {
             // Client can apply this delta
             try client.ws.sendBinary(result.delta);
+
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+                return;
+            }
+            client.setGeneration(pane_id, pane.generation);
         } else {
-            // Client can't apply delta (generation mismatch)
-            // Send delta anyway - it's smaller than snapshot, reducing congestion risk.
-            // Client will detect mismatch and request a sync.
-            log.debug("Pane {d}: client gen {d} != delta from_gen {d}, sending delta anyway (client will resync)", .{
+            // Client can't apply delta (generation mismatch).
+            // Send full snapshot to resync immediately.
+            log.debug("Pane {d}: client gen {d} != delta from_gen {d}, sending snapshot to resync", .{
                 pane_id, last_gen, result.from_gen,
             });
-            try client.ws.sendBinary(result.delta);
+            const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
+            defer pane.allocator.free(snap);
+            try client.ws.sendBinary(snap);
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+                return;
+            }
+            client.setGeneration(pane_id, pane.generation);
         }
-
-        if (client.ws.hasPendingWrite()) {
-            client.write_congested = true;
-            return;
-        }
-        client.setGeneration(pane_id, pane.generation);
     }
 
     pub fn sendSnapshot(self: *EventLoop, ws: *websocket.Connection, pane: *Pane) !void {
