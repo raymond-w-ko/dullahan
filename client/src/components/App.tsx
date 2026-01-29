@@ -27,6 +27,7 @@ export function App() {
 
   // Initialize connection on mount
   useEffect(() => {
+    config.ensureDefaults();
     config.applyToCSS();
     initConnection();
     return () => disconnectConnection();

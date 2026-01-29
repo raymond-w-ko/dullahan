@@ -2,7 +2,8 @@
  * Client Configuration System
  *
  * Uses localStorage for persistence with get(key, fallback) pattern.
- * Never writes defaults - only stores user-changed values.
+ * Writes defaults once on startup (when storage is available) so settings
+ * persist across reloads and new sessions on the same origin.
  */
 
 import { debug } from "./debug";
@@ -125,6 +126,23 @@ export function getBellFeatures(): BellFeatureFlags {
 }
 
 const STORAGE_PREFIX = 'dullahan.';
+
+/**
+ * Ensure all defaults exist in localStorage (no-op if storage unavailable).
+ * Does not overwrite any existing user values.
+ */
+export function ensureDefaults(): void {
+  try {
+    for (const key of Object.keys(DEFAULTS) as ConfigKey[]) {
+      const storageKey = STORAGE_PREFIX + key;
+      if (localStorage.getItem(storageKey) === null) {
+        localStorage.setItem(storageKey, String(DEFAULTS[key]));
+      }
+    }
+  } catch {
+    // localStorage might be unavailable (private mode, etc.)
+  }
+}
 
 /**
  * Get a config value, returning fallback if not set in localStorage

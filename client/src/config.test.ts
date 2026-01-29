@@ -11,6 +11,7 @@ import {
   remove,
   isSet,
   getAll,
+  ensureDefaults,
   DEFAULTS,
   type ConfigKey,
   type BellFeatureFlags,
@@ -286,6 +287,23 @@ describe("getAll", () => {
     const allKeys = Object.keys(all);
 
     expect(allKeys.sort()).toEqual(defaultKeys.sort());
+  });
+});
+
+describe("ensureDefaults", () => {
+  test("writes defaults when missing", () => {
+    ensureDefaults();
+    for (const [key, value] of Object.entries(DEFAULTS)) {
+      expect(mockStorage.get(`dullahan.${key}`)).toBe(String(value));
+    }
+  });
+
+  test("does not overwrite existing values", () => {
+    mockStorage.set("dullahan.theme", "nord");
+    mockStorage.set("dullahan.fontSize", "16");
+    ensureDefaults();
+    expect(mockStorage.get("dullahan.theme")).toBe("nord");
+    expect(mockStorage.get("dullahan.fontSize")).toBe("16");
   });
 });
 
