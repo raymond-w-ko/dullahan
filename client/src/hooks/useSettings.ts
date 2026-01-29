@@ -1,9 +1,10 @@
 // Consolidated settings state management for SettingsModal
 // Eliminates boilerplate by providing a single state object and typed setter
 
-import { useState, useCallback } from "preact/hooks";
+import { useState, useCallback, useRef } from "preact/hooks";
 import * as config from "../config";
 import type { ConfigKey, ConfigSchema } from "../config";
+import { debug } from "../debug";
 
 // Settings managed by SettingsModal (subset of ConfigSchema)
 export interface SettingsState {
@@ -49,6 +50,7 @@ type SettingsKey = keyof SettingsState;
  *   <select value={settings.theme} onChange={(e) => setSetting("theme", e.currentTarget.value)}>
  */
 export function useSettings() {
+  const settingsLog = useRef(debug.category("config"));
   const [settings, setSettings] = useState<SettingsState>(() => ({
     theme: config.get("theme"),
     spacing: config.get("spacing"),
@@ -69,6 +71,7 @@ export function useSettings() {
 
   const setSetting = useCallback(
     <K extends SettingsKey>(key: K, value: SettingsState[K]) => {
+      settingsLog.current.log(`UI ${String(key)}=${String(value)}`);
       // Update local state
       setSettings((prev) => ({ ...prev, [key]: value }));
 

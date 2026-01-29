@@ -136,6 +136,7 @@ export function ensureDefaults(): void {
     for (const key of Object.keys(DEFAULTS) as ConfigKey[]) {
       const storageKey = STORAGE_PREFIX + key;
       if (localStorage.getItem(storageKey) === null) {
+        configLog.log(`SEED ${key}=${String(DEFAULTS[key])}`);
         localStorage.setItem(storageKey, String(DEFAULTS[key]));
       }
     }
@@ -181,6 +182,7 @@ export function get<K extends ConfigKey>(key: K, fallback?: ConfigValue<K>): Con
  */
 export function set<K extends ConfigKey>(key: K, value: ConfigValue<K>): void {
   try {
+    configLog.log(`SET ${key}=${String(value)}`);
     localStorage.setItem(STORAGE_PREFIX + key, String(value));
     
     // Dispatch event so components can react to changes
@@ -198,6 +200,7 @@ export function set<K extends ConfigKey>(key: K, value: ConfigValue<K>): void {
  */
 export function remove(key: ConfigKey): void {
   try {
+    configLog.log(`REMOVE ${key}`);
     localStorage.removeItem(STORAGE_PREFIX + key);
     
     window.dispatchEvent(new CustomEvent('config-change', { 
@@ -263,6 +266,7 @@ export function applyToCSS(): void {
 export function onChange(callback: (key: ConfigKey, value: unknown) => void): () => void {
   const handler = (e: Event) => {
     const { key, value } = (e as CustomEvent).detail;
+    configLog.log(`EVENT ${String(key)}=${String(value)}`);
     callback(key, value);
   };
   

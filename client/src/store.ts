@@ -792,6 +792,7 @@ export function initConnection() {
 
   // Listen for config changes
   config.onChange((key, value) => {
+    storeLog.log(`config-change ${String(key)}=${String(value)}`);
     if (
       key === "theme" ||
       key === "cursorStyle" ||

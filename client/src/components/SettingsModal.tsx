@@ -5,6 +5,7 @@ import { useSettings } from "../hooks/useSettings";
 import type { SettingsState } from "../hooks/useSettings";
 import { THEMES } from "../themes";
 import { isDebug, setDebug } from "../debug";
+import { debug } from "../debug";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { settings, setSetting } = useSettings();
+  const settingsLog = useRef(debug.category("config"));
 
   // Modal behavior (escape key, scroll prevention)
   useModalBehavior({ isOpen, onClose });
@@ -68,6 +70,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     };
     e.preventDefault();
   };
+
+  useEffect(() => {
+    settingsLog.current.log(isOpen ? "SettingsModal open" : "SettingsModal closed");
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
