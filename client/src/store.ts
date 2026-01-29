@@ -10,6 +10,7 @@ import { AUDIO } from "./constants";
 import type { TerminalSnapshot, LayoutUpdate, WindowLayout, LayoutTemplate } from "./terminal/connection";
 import * as config from "./config";
 import { copyToClipboard, pasteFromClipboard } from "./terminal/clipboard";
+import { base64DecodeUtf8, base64EncodeUtf8 } from "./utils/base64";
 
 export interface WindowState {
   id: number;
@@ -654,7 +655,7 @@ function syncClipboardToServer(kind: "c" | "p", text: string): void {
   const conn = store.connection;
   if (!conn || !conn.isConnected) return;
   try {
-    const base64Data = btoa(text);
+    const base64Data = base64EncodeUtf8(text);
     conn.sendClipboardSet(kind, base64Data);
     clipboardLog.log(`Synced '${kind}' to server: ${text.length} chars`);
   } catch (err) {
@@ -729,7 +730,7 @@ export function initConnection() {
   conn.on("clipboardSet", async (paneId, clipboard, base64Data) => {
     // Terminal/server wants to update clipboard
     try {
-      const text = atob(base64Data);
+      const text = base64DecodeUtf8(base64Data);
       const kind = clipboard.charAt(0) as "c" | "p";
 
       // Store in internal clipboard
@@ -770,14 +771,14 @@ export function initConnection() {
 
     if (entry) {
       // Return from internal clipboard
-      const base64Data = btoa(entry.text);
+      const base64Data = base64EncodeUtf8(entry.text);
       conn.sendClipboardResponse(paneId, clipboard, base64Data);
       clipboardLog.log(`GET pane ${paneId}: sent ${entry.text.length} chars from internal '${kind}'`);
     } else {
       // Internal clipboard empty, try system clipboard as fallback
       try {
         const text = await pasteFromClipboard();
-        const base64Data = btoa(text);
+        const base64Data = base64EncodeUtf8(text);
         conn.sendClipboardResponse(paneId, clipboard, base64Data);
         clipboardLog.log(`GET pane ${paneId}: sent ${text.length} chars from system (fallback)`);
       } catch (err) {
