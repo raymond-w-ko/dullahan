@@ -149,7 +149,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 min="8"
                 max="32"
                 value={settings.fontSize}
-                onChange={(e) => setSetting("fontSize", inputInt(e))}
+                onInput={(e) => setSetting("fontSize", inputInt(e))}
               />
             </label>
 
@@ -158,7 +158,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <input
                 type="text"
                 value={settings.fontFamily}
-                onChange={(e) => setSetting("fontFamily", inputValue(e))}
+                onInput={(e) => setSetting("fontFamily", inputValue(e))}
                 placeholder="JetBrains Mono, monospace"
               />
             </label>
@@ -186,7 +186,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <input
                 type="text"
                 value={settings.fontFeature}
-                onChange={(e) => setSetting("fontFeature", inputValue(e))}
+                onInput={(e) => setSetting("fontFeature", inputValue(e))}
                 placeholder='"liga" 1, "ss01" 1'
               />
             </label>
@@ -199,7 +199,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 max="3"
                 step="0.05"
                 value={settings.lineHeight}
-                onChange={(e) => setSetting("lineHeight", inputFloat(e))}
+                onInput={(e) => setSetting("lineHeight", inputFloat(e))}
               />
             </label>
           </div>
@@ -231,7 +231,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <input
                 type="text"
                 value={settings.cursorColor}
-                onChange={(e) => setSetting("cursorColor", inputValue(e))}
+                onInput={(e) => setSetting("cursorColor", inputValue(e))}
                 placeholder="#hex, cell-foreground, cell-background"
               />
             </label>
@@ -241,7 +241,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <input
                 type="text"
                 value={settings.cursorText}
-                onChange={(e) => setSetting("cursorText", inputValue(e))}
+                onInput={(e) => setSetting("cursorText", inputValue(e))}
                 placeholder="#hex, cell-foreground, cell-background"
               />
             </label>
@@ -254,7 +254,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 max="1"
                 step="0.1"
                 value={settings.cursorOpacity}
-                onChange={(e) => setSetting("cursorOpacity", inputFloat(e))}
+                onInput={(e) => setSetting("cursorOpacity", inputFloat(e))}
               />
             </label>
 
@@ -306,7 +306,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               <input
                 type="text"
                 value={settings.bellFeatures}
-                onChange={(e) => setSetting("bellFeatures", inputValue(e))}
+                onInput={(e) => setSetting("bellFeatures", inputValue(e))}
                 placeholder="audio,attention,title"
               />
             </label>
