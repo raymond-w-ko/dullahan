@@ -144,10 +144,14 @@ coverage-client:
 # =============================================================================
 
 dev: client server
-	rm -rf /tmp/dullahan-$(shell id -u)/*.log
+	rm -rf /tmp/dullahan-$(shell id -u)/*.log /tmp/dullahan-$(shell id -u)/*.jsonl
 	pkill -9 -x dullahan || true
-	# DULLAHAN_DEBUG=-all,+http,+tls,+connection ./dullahan serve --tls-cert=$(firstword $(wildcard cert/*.crt)) --tls-key=$(firstword $(wildcard cert/*.key)) --port=7682 --no-delta
-	DULLAHAN_DEBUG=-all,+pane,+dsr,+clipboard ./dullahan serve --tls-cert=$(firstword $(wildcard cert/*.crt)) --tls-key=$(firstword $(wildcard cert/*.key)) --port=7682 --no-delta
+	DULLAHAN_DEBUG=-all,+pane,+dsr,+clipboard \
+								 ./dullahan serve \
+								 --tls-cert=$(firstword $(wildcard cert/*.crt)) \
+								 --tls-key=$(firstword $(wildcard cert/*.key)) \
+								 --pty-log \
+								 --port=7682
 
 prod: dist
 	rm -rf /tmp/dullahan-$(shell id -u)/*.log
