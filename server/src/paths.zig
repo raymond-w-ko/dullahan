@@ -218,12 +218,12 @@ pub const StaticPaths = struct {
         return keytest_log_buf[0..keytest_log_len];
     }
 
-    /// PTY traffic log file path: /tmp/dullahan-<uid>/pty-traffic.log
+    /// PTY traffic log file path: /tmp/dullahan-<uid>/pty-traffic.jsonl
     pub fn ptyTraffic() []const u8 {
         if (!pty_traffic_initialized) {
             const dir = getTempDir();
-            pty_traffic_len = (std.fmt.bufPrint(&pty_traffic_buf, "{s}/pty-traffic.log", .{dir}) catch
-                return "/tmp/pty-traffic.log").len;
+            pty_traffic_len = (std.fmt.bufPrint(&pty_traffic_buf, "{s}/pty-traffic.jsonl", .{dir}) catch
+                return "/tmp/pty-traffic.jsonl").len;
             pty_traffic_initialized = true;
         }
         return pty_traffic_buf[0..pty_traffic_len];
