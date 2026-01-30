@@ -19,6 +19,8 @@ const osc = ghostty.osc;
 const osc_color = osc.color;
 const device_status = ghostty.device_status;
 const kitty_color = ghostty.kitty.color;
+const dcs = ghostty.dcs;
+const apc = ghostty.apc;
 const DeviceAttributeReq = ghostty.DeviceAttributeReq;
 const CursorStyleReq = ghostty.CursorStyleReq;
 const StreamAction = ghostty.StreamAction;
@@ -26,13 +28,15 @@ const StreamAction = ghostty.StreamAction;
 const Pane = @import("pane.zig").Pane;
 const dlog = @import("dlog.zig");
 
-const log = dlog.scoped(.stream_handler);
+const log = dlog.scoped(.pane);
 
 /// Handler that wraps a Terminal and Pane for full VT event handling.
 /// Terminal-modifying events go to the terminal, query/notification events go to the pane.
 pub const Handler = struct {
     terminal: *Terminal,
     pane: *Pane,
+    dcs: dcs.Handler = .{},
+    apc: apc.Handler = .{},
 
     pub fn init(terminal: *Terminal, pane: *Pane) Handler {
         return .{
@@ -42,8 +46,8 @@ pub const Handler = struct {
     }
 
     pub fn deinit(self: *Handler) void {
-        _ = self;
-        // Nothing to clean up - terminal and pane are owned by Pane struct
+        self.dcs.deinit();
+        self.apc.deinit();
     }
 
     /// Main VT event handler - called by ghostty-vt for each parsed action
@@ -192,15 +196,14 @@ pub const Handler = struct {
             .kitty_color_report => try self.kittyColorOperation(value),
 
             // =================================================================
-            // DCS/APC - not currently supported in readonly mode
+            // DCS/APC - stateful parsing for queries and graphics
             // =================================================================
-            .dcs_hook,
-            .dcs_put,
-            .dcs_unhook,
-            .apc_start,
-            .apc_end,
-            .apc_put,
-            => {},
+            .dcs_hook => try self.dcsHook(value),
+            .dcs_put => try self.dcsPut(value),
+            .dcs_unhook => try self.dcsUnhook(),
+            .apc_start => self.apc.start(),
+            .apc_end => try self.apcEnd(),
+            .apc_put => self.apc.feed(self.pane.allocator, value),
 
             // =================================================================
             // Ignored events (queries we don't respond to, or no-ops)
@@ -215,6 +218,108 @@ pub const Handler = struct {
             .title_push,
             .title_pop,
             => {},
+        }
+    }
+
+    fn dcsHook(self: *Handler, payload: ghostty.DCS) !void {
+        var cmd = self.dcs.hook(self.pane.allocator, payload) orelse return;
+        defer cmd.deinit();
+        try self.handleDcsCommand(&cmd);
+    }
+
+    fn dcsPut(self: *Handler, byte: u8) !void {
+        var cmd = self.dcs.put(byte) orelse return;
+        defer cmd.deinit();
+        try self.handleDcsCommand(&cmd);
+    }
+
+    fn dcsUnhook(self: *Handler) !void {
+        var cmd = self.dcs.unhook() orelse return;
+        defer cmd.deinit();
+        try self.handleDcsCommand(&cmd);
+    }
+
+    fn handleDcsCommand(self: *Handler, cmd: *dcs.Command) !void {
+        switch (cmd.*) {
+            .xtgettcap => |*gettcap| {
+                // We don't have terminfo responses wired up yet. Consume requests.
+                while (gettcap.next()) |_| {}
+            },
+            .decrqss => |decrqss| {
+                var response: [128]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&response);
+                const writer = stream.writer();
+
+                const prefix_fmt = "\x1bP{d}$r";
+                const prefix_len = std.fmt.comptimePrint(prefix_fmt, .{0}).len;
+                stream.pos = prefix_len;
+
+                switch (decrqss) {
+                    .none => {},
+                    .sgr => {
+                        const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
+                        stream.pos += buf.len;
+                        try writer.writeByte('m');
+                    },
+                    .decscusr => {
+                        const blink = self.terminal.modes.get(.cursor_blinking);
+                        const style: u8 = switch (self.terminal.screens.active.cursor.cursor_style) {
+                            .block => if (blink) 1 else 2,
+                            .underline => if (blink) 3 else 4,
+                            .bar => if (blink) 5 else 6,
+                            .block_hollow => if (blink) 1 else 2,
+                        };
+                        try writer.print("{d} q", .{style});
+                    },
+                    .decstbm => {
+                        try writer.print("{d};{d}r", .{
+                            self.terminal.scrolling_region.top + 1,
+                            self.terminal.scrolling_region.bottom + 1,
+                        });
+                    },
+                    .decslrm => {
+                        if (self.terminal.modes.get(.enable_left_and_right_margin)) {
+                            try writer.print("{d};{d}s", .{
+                                self.terminal.scrolling_region.left + 1,
+                                self.terminal.scrolling_region.right + 1,
+                            });
+                        }
+                    },
+                }
+
+                const valid = stream.pos > prefix_len;
+                try writer.writeAll("\x1b\\");
+                _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
+                self.pane.writeInput(response[0..stream.pos]) catch |e| {
+                    log.warn("Failed to send DECRQSS response: {any}", .{e});
+                };
+            },
+            .tmux => {
+                // Ignore tmux control mode for now.
+            },
+        }
+    }
+
+    fn apcEnd(self: *Handler) !void {
+        var cmd = self.apc.end() orelse return;
+        defer cmd.deinit(self.pane.allocator);
+
+        if (comptime @hasDecl(ghostty.kitty.graphics, "Command")) {
+            switch (cmd) {
+                .kitty => |*kitty_cmd| {
+                    if (self.terminal.kittyGraphics(self.pane.allocator, kitty_cmd)) |resp| {
+                        var buf: [1024]u8 = undefined;
+                        var writer: std.Io.Writer = .fixed(&buf);
+                        try resp.encode(&writer);
+                        const final = writer.buffered();
+                        if (final.len > 0) {
+                            self.pane.writeInput(final) catch |e| {
+                                log.warn("Failed to send kitty graphics response: {any}", .{e});
+                            };
+                        }
+                    }
+                },
+            }
         }
     }
 

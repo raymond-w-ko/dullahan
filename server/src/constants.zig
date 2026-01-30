@@ -51,6 +51,13 @@ pub const snapshot = struct {
     pub const max_buffer_size: usize = 4 * 1024 * 1024;
 };
 
+/// Default pixel dimensions per cell when no renderer metrics are available.
+/// These are used to populate terminal width_px/height_px for size reports.
+pub const terminal = struct {
+    pub const default_cell_width_px: u16 = 8;
+    pub const default_cell_height_px: u16 = 16;
+};
+
 /// Timeout values in milliseconds.
 pub const timeout = struct {
     /// Default timeout for CLI commands.

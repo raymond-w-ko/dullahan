@@ -190,9 +190,14 @@ pub const Pane = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
+        var default_modes: ghostty.modes.ModePacked = .{};
+        default_modes.grapheme_cluster = true;
+        default_modes.cursor_blinking = true;
+
         var terminal = try Terminal.init(allocator, .{
             .cols = opts.cols,
             .rows = opts.rows,
+            .default_modes = default_modes,
         });
 
         // Enable LNM (Line Feed/New Line Mode) so \n does CR+LF
@@ -202,6 +207,10 @@ pub const Pane = struct {
         // Enable grapheme clustering (mode 2027) so emoji with modifiers,
         // ZWJ sequences, and flag emoji are combined into single cells
         terminal.modes.set(.grapheme_cluster, true);
+
+        // Provide approximate pixel dimensions for size reports.
+        terminal.width_px = @as(u32, opts.cols) * @as(u32, constants.terminal.default_cell_width_px);
+        terminal.height_px = @as(u32, opts.rows) * @as(u32, constants.terminal.default_cell_height_px);
 
         return .{
             .terminal = terminal,
@@ -1010,6 +1019,8 @@ pub const Pane = struct {
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
+        self.terminal.width_px = @as(u32, cols) * @as(u32, constants.terminal.default_cell_width_px);
+        self.terminal.height_px = @as(u32, rows) * @as(u32, constants.terminal.default_cell_height_px);
 
         // Resize PTY if we have one
         if (self.pty) |*pty| {
