@@ -27,6 +27,28 @@ export interface StyledRun {
   wideRanges?: WideCharRange[]; // Ranges of wide (2-cell) characters within text
 }
 
+function isPrivateUseCodePoint(cp: number): boolean {
+  // Private Use Areas:
+  // - BMP:      U+E000..U+F8FF
+  // - Plane 15: U+F0000..U+FFFFD
+  // - Plane 16: U+100000..U+10FFFD
+  return (
+    (cp >= 0xe000 && cp <= 0xf8ff) ||
+    (cp >= 0xf0000 && cp <= 0xffffd) ||
+    (cp >= 0x100000 && cp <= 0x10fffd)
+  );
+}
+
+function hasPrivateUse(text: string): boolean {
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if (cp !== undefined && isPrivateUseCodePoint(cp)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Extract background color from cell content if present.
  * Ghostty stores bg-only cells (like htop's colored headers) with content_tag 2 or 3.
@@ -151,7 +173,7 @@ export function cellsToRuns(
       const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
 
       // Check if this is a wide character
-      const isWide = cell?.wide === Wide.WIDE;
+      const isWide = cell?.wide === Wide.WIDE || (char.length > 0 && hasPrivateUse(char));
 
       // Start a new run if style, selection, bgOverride, or hyperlink changes
       if (
