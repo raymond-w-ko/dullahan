@@ -521,10 +521,11 @@ pub const Pane = struct {
     /// Response format: CSI ? <params> c
     /// We claim VT220 with color support (like Ghostty)
     pub fn sendDA1Response(self: *Pane) void {
-        // Response: ESC [ ? 62 ; 22 c
+        // Response: ESC [ ? 62 ; 22 ; 52 c
         // 62 = VT220 (Level 2)
         // 22 = ANSI color
-        const response = "\x1b[?62;22c";
+        // 52 = OSC 52 clipboard access
+        const response = "\x1b[?62;22;52c";
         self.writeInput(response) catch |e| {
             log.warn("Failed to send DA1 response: {any}", .{e});
         };
@@ -560,8 +561,14 @@ pub const Pane = struct {
     fn sendDSRCursorResponse(self: *Pane) void {
         // Get cursor position from terminal (0-indexed), convert to 1-indexed
         const cursor = self.terminal.screens.active.cursor;
-        const row = cursor.y + 1;
-        const col = cursor.x + 1;
+        var row = cursor.y;
+        var col = cursor.x;
+        if (self.terminal.modes.get(.origin)) {
+            row = row -| self.terminal.scrolling_region.top;
+            col = col -| self.terminal.scrolling_region.left;
+        }
+        row += 1;
+        col += 1;
 
         // Format response: ESC [ row ; col R
         var buf: [32]u8 = undefined;
@@ -788,9 +795,16 @@ pub const Pane = struct {
             .cursor_position => self.sendDSRCursorResponse(),
             .color_scheme => {
                 // Color scheme query (CSI ? 996 n) - report light/dark mode
-                // TODO(du-3ss): Report actual light/dark mode instead of assuming dark.
-                log.warn("DSR color scheme query requested; defaulting to dark mode", .{});
-                self.sendColorSchemeResponse(false);
+                const bg = self.theme_bg orelse .{
+                    constants.colors.bg_r,
+                    constants.colors.bg_g,
+                    constants.colors.bg_b,
+                };
+                const luminance = (@as(u32, bg[0]) * 2126 +
+                    @as(u32, bg[1]) * 7152 +
+                    @as(u32, bg[2]) * 722) / 10_000;
+                const is_light = luminance > 127;
+                self.sendColorSchemeResponse(is_light);
             },
         }
     }
