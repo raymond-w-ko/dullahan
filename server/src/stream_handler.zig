@@ -210,12 +210,8 @@ pub const Handler = struct {
             // Ignored events (queries we don't respond to, or no-ops)
             // =================================================================
             .enquiry => {},
-            .request_mode => {
-                log.debug("Unhandled mode request: {s}", .{@tagName(value.mode)});
-            },
-            .request_mode_unknown => {
-                log.debug("Unhandled unknown mode request: ansi={} mode={d}", .{ value.ansi, value.mode });
-            },
+            .request_mode => try self.requestMode(value.mode),
+            .request_mode_unknown => try self.requestModeUnknown(value.mode, value.ansi),
             .size_report => {
                 log.debug("Unhandled size report request: {s}", .{@tagName(value)});
             },
@@ -625,6 +621,29 @@ pub const Handler = struct {
             .prompt_start,
             => {},
         }
+    }
+
+    fn requestMode(self: *Handler, mode: modes.Mode) !void {
+        const tag: modes.ModeTag = @bitCast(@intFromEnum(mode));
+        const code: u8 = if (self.terminal.modes.get(mode)) 1 else 2;
+
+        var buf: [64]u8 = undefined;
+        const resp = try std.fmt.bufPrint(
+            &buf,
+            "\x1B[{s}{};{}$y",
+            .{ if (tag.ansi) "" else "?", tag.value, code },
+        );
+        try self.pane.writeInput(resp);
+    }
+
+    fn requestModeUnknown(self: *Handler, mode_raw: u16, ansi: bool) !void {
+        var buf: [64]u8 = undefined;
+        const resp = try std.fmt.bufPrint(
+            &buf,
+            "\x1B[{s}{};0$y",
+            .{ if (ansi) "" else "?", mode_raw },
+        );
+        try self.pane.writeInput(resp);
     }
 
     /// Send a DCS XTGETTCAP response (xterm/kitty terminfo query reply).
