@@ -847,7 +847,9 @@ body.layout-resizing-vertical * {
 }
 
 .terminal-line span {
+  display: inline-block;
   vertical-align: top;
+  overflow: hidden;
 }
 
 /* Wide characters (CJK, emoji) need explicit 2-cell width for font alignment.
