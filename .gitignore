@@ -49,7 +49,9 @@ cert/
 
 # Dependency source checkouts (for reference only)
 deps/
-dist/
 coverage/
 server/src/assets/
 perf*
+
+# compiled outputs
+dist/dullahan
