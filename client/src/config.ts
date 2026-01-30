@@ -68,7 +68,7 @@ export const DEFAULTS: ConfigSchema = {
   // Font settings
   fontFamily: 'Iosevka, JetBrains Mono, Fira Code, SF Mono, Menlo, Monaco, Courier New, monospace',
   fontSize: 12,
-  symbolFontFamily: '',
+  symbolFontFamily: 'Symbols Nerd Font',
   symbolFontSize: 0,
   fontStyle: 'normal',
   fontFeature: '',
