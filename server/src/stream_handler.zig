@@ -337,7 +337,7 @@ pub const Handler = struct {
                 const valid = stream.pos > prefix_len;
                 try writer.writeAll("\x1b\\");
                 _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
-                self.pane.writeInput(response[0..stream.pos]) catch |e| {
+                self.pane.writeResponse(response[0..stream.pos]) catch |e| {
                     log.warn("Failed to send DECRQSS response: {any}", .{e});
                 };
             },
@@ -360,7 +360,7 @@ pub const Handler = struct {
                         try resp.encode(&writer);
                         const final = writer.buffered();
                         if (final.len > 0) {
-                            self.pane.writeInput(final) catch |e| {
+                            self.pane.writeResponse(final) catch |e| {
                                 log.warn("Failed to send kitty graphics response: {any}", .{e});
                             };
                         }
@@ -654,7 +654,7 @@ pub const Handler = struct {
             "\x1BP>|{s} {s}\x1B\\",
             .{ terminal_name, version },
         );
-        try self.pane.writeInput(resp);
+        try self.pane.writeResponse(resp);
     }
 
     fn queryKittyKeyboard(self: *Handler) !void {
@@ -662,7 +662,7 @@ pub const Handler = struct {
         const flags = self.terminal.screens.active.kitty_keyboard.current().int();
         var buf: [32]u8 = undefined;
         const resp = try std.fmt.bufPrint(&buf, "\x1b[?{}u", .{flags});
-        try self.pane.writeInput(resp);
+        try self.pane.writeResponse(resp);
     }
 
     fn reportPwd(self: *Handler, url: []const u8) !void {
@@ -681,7 +681,7 @@ pub const Handler = struct {
             "\x1B[{s}{};{}$y",
             .{ if (tag.ansi) "" else "?", tag.value, code },
         );
-        try self.pane.writeInput(resp);
+        try self.pane.writeResponse(resp);
     }
 
     fn requestModeUnknown(self: *Handler, mode_raw: u16, ansi: bool) !void {
@@ -691,7 +691,7 @@ pub const Handler = struct {
             "\x1B[{s}{};0$y",
             .{ if (ansi) "" else "?", mode_raw },
         );
-        try self.pane.writeInput(resp);
+        try self.pane.writeResponse(resp);
     }
 
     /// Send a DCS XTGETTCAP response (xterm/kitty terminfo query reply).
@@ -711,7 +711,7 @@ pub const Handler = struct {
         try writer.writeAll("\x1b\\");
 
         const out = stream.buffer[0..stream.pos];
-        try self.pane.writeInput(out);
+        try self.pane.writeResponse(out);
     }
 };
 

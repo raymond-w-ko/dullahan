@@ -307,15 +307,13 @@ pub const Session = struct {
         return pty_log.getLogPath();
     }
 
-    /// Log bytes sent TO a pane's PTY
-    /// Format: "[HH:MM:SS.mmm] > pane N: xx xx xx | ASCII"
+    /// Log bytes sent TO a pane's PTY (JSONL in pty-traffic.jsonl)
     pub fn logPtySend(self: *Session, pane_id: u16, data: []const u8) void {
         _ = self;
-        pty_log.logSend(pane_id, data);
+        pty_log.logSendInput(pane_id, data);
     }
 
-    /// Log bytes received FROM a pane's PTY
-    /// Format: "[HH:MM:SS.mmm] < pane N: xx xx xx | ASCII"
+    /// Log bytes received FROM a pane's PTY (JSONL in pty-traffic.jsonl)
     pub fn logPtyRecv(self: *Session, pane_id: u16, data: []const u8) void {
         _ = self;
         pty_log.logRecv(pane_id, data);

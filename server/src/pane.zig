@@ -13,6 +13,7 @@ const device_status = ghostty.device_status;
 const Pty = @import("pty.zig").Pty;
 const constants = @import("constants.zig");
 const stream_handler = @import("stream_handler.zig");
+const pty_log = @import("pty_log.zig");
 
 /// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
 /// Re-exported from ghostty for use by event_loop.zig
@@ -330,6 +331,12 @@ pub const Pane = struct {
         }
     }
 
+    /// Write an escape/response sequence to the PTY and log it as a response.
+    pub fn writeResponse(self: *Pane, data: []const u8) !void {
+        pty_log.logSendResponse(self.id, data);
+        return self.writeInput(data);
+    }
+
     /// Write directly to terminal buffer (no PTY required).
     /// Used for virtual panes like debug output that have no shell.
     pub fn feedDirect(self: *Pane, data: []const u8) !void {
@@ -526,7 +533,7 @@ pub const Pane = struct {
         // 22 = ANSI color
         // 52 = OSC 52 clipboard access
         const response = "\x1b[?62;22;52c";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send DA1 response: {any}", .{e});
         };
         log.debug("Sent DA1 response", .{});
@@ -540,7 +547,7 @@ pub const Pane = struct {
         // 10 = firmware version (arbitrary)
         // 0 = ROM cartridge (none)
         const response = "\x1b[>1;10;0c";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send DA2 response: {any}", .{e});
         };
         log.debug("Sent DA2 response", .{});
@@ -550,7 +557,7 @@ pub const Pane = struct {
     /// Response: CSI 0 n (terminal OK)
     fn sendDSRStatusResponse(self: *Pane) void {
         const response = "\x1b[0n";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send DSR status response: {any}", .{e});
         };
         dsr_log.debug("Pane {d}: Sent DSR status response (OK)", .{self.id});
@@ -577,7 +584,7 @@ pub const Pane = struct {
             return;
         };
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send DSR cursor response: {any}", .{e});
         };
         dsr_log.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
@@ -602,7 +609,7 @@ pub const Pane = struct {
             return;
         };
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send in-band size report: {any}", .{e});
         };
         plog.debug(
@@ -636,7 +643,7 @@ pub const Pane = struct {
             return;
         };
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send size report {s}: {any}", .{@tagName(style), e});
         };
         plog.debug("Pane {d}: Sent size report {s}", .{ self.id, @tagName(style) });
@@ -660,7 +667,7 @@ pub const Pane = struct {
         else
             std.fmt.bufPrint(&buf, "\x1b]{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x07", .{ cmd, r16, g16, b16 }) catch return;
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send OSC {d} response: {any}", .{ cmd, e });
         };
         log.debug("Sent OSC {d} response: rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ cmd, r16, g16, b16 });
@@ -670,7 +677,7 @@ pub const Pane = struct {
     pub fn sendFocusIn(self: *Pane) void {
         if (!self.terminal.modes.get(.focus_event)) return;
         const response = "\x1b[I";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send focus-in: {any}", .{e});
             return;
         };
@@ -681,7 +688,7 @@ pub const Pane = struct {
     pub fn sendFocusOut(self: *Pane) void {
         if (!self.terminal.modes.get(.focus_event)) return;
         const response = "\x1b[O";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send focus-out: {any}", .{e});
             return;
         };
@@ -782,7 +789,7 @@ pub const Pane = struct {
         else
             std.fmt.bufPrint(&buf, "\x1b]4;{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x07", .{ idx, r16, g16, b16 }) catch return;
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send OSC 4 response: {any}", .{e});
         };
         log.debug("Sent OSC 4 response: idx={d} rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ idx, r16, g16, b16 });
@@ -813,7 +820,7 @@ pub const Pane = struct {
     /// is_light: true for light mode (1), false for dark mode (2)
     fn sendColorSchemeResponse(self: *Pane, is_light: bool) void {
         const response = if (is_light) "\x1b[?997;1n" else "\x1b[?997;2n";
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send color scheme response: {any}", .{e});
         };
         dsr_log.debug("Pane {d}: Sent color scheme response ({s})", .{ self.id, if (is_light) "light" else "dark" });
@@ -1081,7 +1088,7 @@ pub const Pane = struct {
 
         const response = ClipboardHandler.formatResponse(kind, data, buf) orelse return;
 
-        self.writeInput(response) catch |e| {
+        self.writeResponse(response) catch |e| {
             log.warn("Failed to send OSC 52 response: {any}", .{e});
         };
         log.debug("Sent OSC 52 response: kind={c}, data_len={d}", .{ kind, data.len });
