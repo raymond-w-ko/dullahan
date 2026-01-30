@@ -278,7 +278,7 @@ pub const Handler = struct {
                         continue;
                     }
                     // query-os-name: fish extension for reporting the OS name.
-                    // Response is the plain OS name string (e.g., "Linux"), hex-encoded.
+                    // Response is the plain OS name string (e.g., "Linux"/"macOS"), hex-encoded.
                     if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) {
                         const os_name = getOsName() orelse "unknown";
                         self.sendXtgettcapResponse(key, os_name) catch |e| {
@@ -659,9 +659,75 @@ fn writeHex(writer: anytype, bytes: []const u8) !void {
     }
 }
 
+var cached_os_name_buf: [64]u8 = undefined;
+var cached_os_name_len: usize = 0;
+var cached_os_name_ready: bool = false;
+var cached_os_name_mutex: std.Thread.Mutex = .{};
+
 fn getOsName() ?[]const u8 {
+    cached_os_name_mutex.lock();
+    defer cached_os_name_mutex.unlock();
+
+    if (cached_os_name_ready) {
+        return cached_os_name_buf[0..cached_os_name_len];
+    }
+
+    var temp: [128]u8 = undefined;
+    var len: usize = 0;
+
+    if (std.builtin.target.os.tag == .macos) {
+        len = readCommandOutput(&temp, &.{ "sw_vers", "-productName" }) orelse 0;
+    }
+    if (len == 0) {
+        len = readUnameSysname(&temp) orelse 0;
+    }
+    if (len == 0) {
+        return null;
+    }
+
+    if (len > cached_os_name_buf.len) {
+        len = cached_os_name_buf.len;
+    }
+    std.mem.copyForwards(u8, cached_os_name_buf[0..len], temp[0..len]);
+    cached_os_name_len = len;
+    cached_os_name_ready = true;
+    return cached_os_name_buf[0..len];
+}
+
+fn readUnameSysname(out: []u8) ?usize {
     const uts = std.posix.uname() catch return null;
-    return std.mem.sliceTo(&uts.sysname, 0);
+    const sysname = std.mem.sliceTo(&uts.sysname, 0);
+    if (sysname.len == 0) return null;
+    const len = @min(sysname.len, out.len);
+    std.mem.copyForwards(u8, out[0..len], sysname[0..len]);
+    return len;
+}
+
+fn readCommandOutput(out: []u8, argv: []const []const u8) ?usize {
+    var child = std.process.Child.init(argv, std.heap.page_allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+
+    child.spawn() catch return null;
+    const n = child.stdout.?.read(out) catch |e| {
+        log.debug("Failed to read {s} stdout: {}", .{ argv[0], e });
+        _ = child.kill() catch {};
+        _ = child.wait() catch {};
+        return null;
+    };
+
+    const term = child.wait() catch return null;
+    if (term.Exited != 0) return null;
+
+    var trimmed = std.mem.trim(u8, out[0..n], &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+
+    // If trim removed leading whitespace, compact in-place.
+    if (trimmed.ptr != out.ptr) {
+        std.mem.copyForwards(u8, out[0..trimmed.len], trimmed);
+        trimmed = out[0..trimmed.len];
+    }
+    return trimmed.len;
 }
 
 /// The stream type using our custom handler
