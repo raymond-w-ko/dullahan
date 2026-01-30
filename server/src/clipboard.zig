@@ -117,98 +117,6 @@ pub const ClipboardHandler = struct {
         return false;
     }
 
-    // ========================================================================
-    // OSC 52 parsing
-    // ========================================================================
-
-    /// Handle OSC 52 clipboard operations
-    /// Format: <clipboard-kind> ; <base64-data>
-    /// clipboard-kind: 'c' (clipboard), 's' (selection), 'p' (primary), or combinations
-    /// base64-data: '?' for GET, base64-encoded data for SET
-    pub fn handleOsc52(self: *ClipboardHandler, payload: []const u8, pane_id: u16) void {
-        // Find semicolon separator between kind and data
-        var sep_idx: ?usize = null;
-        for (payload, 0..) |c, idx| {
-            if (c == ';') {
-                sep_idx = idx;
-                break;
-            }
-        }
-
-        if (sep_idx == null) {
-            log.debug("OSC 52: missing semicolon separator", .{});
-            return;
-        }
-
-        const kind_str = payload[0..sep_idx.?];
-        const data_str = payload[sep_idx.? + 1 ..];
-
-        // Parse clipboard kind - default to 'c' (system clipboard) if empty
-        // Multiple kinds can be specified (e.g., "pc" for primary+clipboard)
-        // We select the first one we find in priority order: 'c' > 'p' > 's'
-        var kind: u8 = 'c'; // Default if none specified
-        if (kind_str.len > 0) {
-            // Look for preferred kinds in priority order
-            var found_c = false;
-            var found_p = false;
-            var found_s = false;
-
-            for (kind_str) |k| {
-                switch (k) {
-                    'c' => found_c = true,
-                    'p' => found_p = true,
-                    's' => found_s = true,
-                    else => {},
-                }
-            }
-
-            // Select by priority: c > p > s
-            if (found_c) {
-                kind = 'c';
-            } else if (found_p) {
-                kind = 'p';
-            } else if (found_s) {
-                kind = 's';
-            }
-            // If none of c/p/s found, keep default 'c'
-        }
-
-        // Check for GET request
-        if (data_str.len == 1 and data_str[0] == '?') {
-            log.debug("OSC 52 GET request: kind={c}", .{kind});
-            clog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ pane_id, kind });
-            self.pending_get = kind;
-            self.get_timestamp_ms = std.time.milliTimestamp();
-            return;
-        }
-
-        // SET request - data_str contains base64-encoded content
-        if (data_str.len == 0) {
-            log.debug("OSC 52 SET: empty data (clear clipboard)", .{});
-            // Empty data means clear clipboard - still send to client
-        }
-
-        // Free any existing pending set operation
-        if (self.pending_set) |old| {
-            old.deinit(self.allocator);
-        }
-
-        // Copy the base64 data (we own it)
-        const data_copy = self.allocator.dupe(u8, data_str) catch |e| {
-            log.warn("OSC 52: failed to allocate clipboard data: {any}", .{e});
-            self.pending_set = null;
-            return;
-        };
-
-        self.pending_set = .{
-            .kind = kind,
-            .data = data_copy,
-        };
-
-        log.debug("OSC 52 SET: kind={c}, data_len={d}", .{ kind, data_str.len });
-        clog.debug("OSC 52 SET parsed: pane={d} kind='{c}' data_len={d}", .{ pane_id, kind, data_str.len });
-    }
-
     /// Handle OSC 52 with pre-parsed kind and data from stream handler.
     /// This is called when ghostty-vt has already parsed the OSC 52 sequence.
     /// kind: clipboard kind byte ('c', 's', 'p')
@@ -302,23 +210,22 @@ test "ClipboardHandler init and deinit" {
     try std.testing.expect(!handler.hasGet());
 }
 
-test "OSC 52 SET parsing" {
+test "OSC 52 SET parsed" {
     var handler = ClipboardHandler.init(std.testing.allocator);
     defer handler.deinit();
 
-    // Basic SET
-    handler.handleOsc52("c;SGVsbG8gV29ybGQ=", 0);
+    handler.handleOsc52Parsed('c', "SGVsbG8gV29ybGQ=", 0);
     try std.testing.expect(handler.hasSet());
     const op = handler.getSet().?;
     try std.testing.expectEqual(@as(u8, 'c'), op.kind);
     try std.testing.expectEqualStrings("SGVsbG8gV29ybGQ=", op.data);
 }
 
-test "OSC 52 GET parsing" {
+test "OSC 52 GET parsed" {
     var handler = ClipboardHandler.init(std.testing.allocator);
     defer handler.deinit();
 
-    handler.handleOsc52("c;?", 0);
+    handler.handleOsc52Parsed('c', "?", 0);
     try std.testing.expect(handler.hasGet());
     try std.testing.expectEqual(@as(u8, 'c'), handler.getGetKind().?);
     try std.testing.expect(handler.needsGetSend());
@@ -327,26 +234,11 @@ test "OSC 52 GET parsing" {
     try std.testing.expect(!handler.needsGetSend());
 }
 
-test "OSC 52 kind priority" {
+test "OSC 52 normalized kind defaults to clipboard" {
     var handler = ClipboardHandler.init(std.testing.allocator);
     defer handler.deinit();
 
-    // Multiple kinds - 'c' should win
-    handler.handleOsc52("pcs;SGVsbG8=", 0);
-    try std.testing.expectEqual(@as(u8, 'c'), handler.getSet().?.kind);
-
-    handler.clearSet();
-
-    // Without 'c', 'p' should win
-    handler.handleOsc52("sp;SGVsbG8=", 0);
-    try std.testing.expectEqual(@as(u8, 'p'), handler.getSet().?.kind);
-}
-
-test "OSC 52 empty kind defaults to clipboard" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
-    defer handler.deinit();
-
-    handler.handleOsc52(";SGVsbG8=", 0);
+    handler.handleOsc52Parsed('x', "SGVsbG8=", 0);
     try std.testing.expectEqual(@as(u8, 'c'), handler.getSet().?.kind);
 }
 
@@ -362,7 +254,7 @@ test "clearSet frees memory" {
     var handler = ClipboardHandler.init(std.testing.allocator);
     defer handler.deinit();
 
-    handler.handleOsc52("c;SGVsbG8=", 0);
+    handler.handleOsc52Parsed('c', "SGVsbG8=", 0);
     try std.testing.expect(handler.hasSet());
 
     handler.clearSet();
