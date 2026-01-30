@@ -196,7 +196,7 @@ pub const Pane = struct {
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
         var default_modes: ghostty.modes.ModePacked = .{};
-        default_modes.grapheme_cluster = true;
+        // default_modes.grapheme_cluster = true;
         default_modes.cursor_blinking = true;
 
         var terminal = try Terminal.init(allocator, .{
@@ -213,7 +213,8 @@ pub const Pane = struct {
 
         // Enable grapheme clustering (mode 2027) so emoji with modifiers,
         // ZWJ sequences, and flag emoji are combined into single cells
-        terminal.modes.set(.grapheme_cluster, true);
+        // DON'T DO THIS: GHOSTTY DOES NOT FORCE MODE 2027 BY DEFAULT.
+        // terminal.modes.set(.grapheme_cluster, true);
 
         // Provide approximate pixel dimensions for size reports.
         terminal.width_px = @as(u32, opts.cols) * @as(u32, constants.terminal.default_cell_width_px);
