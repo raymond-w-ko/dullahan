@@ -212,9 +212,7 @@ pub const Handler = struct {
             .enquiry => {},
             .request_mode => try self.requestMode(value.mode),
             .request_mode_unknown => try self.requestModeUnknown(value.mode, value.ansi),
-            .size_report => {
-                log.debug("Unhandled size report request: {s}", .{@tagName(value)});
-            },
+            .size_report => self.pane.sendSizeReport(value),
             .xtversion => try self.reportXtversion(),
             .kitty_keyboard_query => try self.queryKittyKeyboard(),
             .report_pwd => try self.reportPwd(value.url),
@@ -415,9 +413,15 @@ pub const Handler = struct {
 
             .synchronized_output,
             .linefeed,
-            .in_band_size_reports,
             .focus_event,
             => {},
+
+            .in_band_size_reports => {
+                log.debug("In-band size reports {s}", .{if (enabled) "enabled" else "disabled"});
+                if (enabled) {
+                    self.pane.sendInBandSizeReport();
+                }
+            },
 
             .mouse_event_x10 => {
                 if (enabled) {

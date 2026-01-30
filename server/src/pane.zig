@@ -571,6 +571,61 @@ pub const Pane = struct {
         dsr_log.debug("Pane {d}: Sent DSR cursor position row={d}, col={d}", .{ self.id, row, col });
     }
 
+    /// Send an in-band size report (DECSET 2048).
+    /// Response: CSI 48 ; rows ; cols ; height_px ; width_px t
+    pub fn sendInBandSizeReport(self: *Pane) void {
+        const rows = self.rows;
+        const cols = self.cols;
+        const height_px = self.terminal.height_px;
+        const width_px = self.terminal.width_px;
+
+        var buf: [64]u8 = undefined;
+        const response = std.fmt.bufPrint(&buf, "\x1b[48;{d};{d};{d};{d}t", .{
+            rows,
+            cols,
+            height_px,
+            width_px,
+        }) catch {
+            log.warn("Failed to format in-band size report", .{});
+            return;
+        };
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send in-band size report: {any}", .{e});
+        };
+        plog.debug(
+            "Pane {d}: Sent in-band size report rows={d} cols={d} px={d}x{d}",
+            .{ self.id, rows, cols, height_px, width_px },
+        );
+    }
+
+    /// Send an XTWINOPS size report response (CSI t queries).
+    pub fn sendSizeReport(self: *Pane, style: ghostty.SizeReportStyle) void {
+        const rows = self.rows;
+        const cols = self.cols;
+        const height_px = self.terminal.height_px;
+        const width_px = self.terminal.width_px;
+
+        const cell_height: u32 = if (rows > 0) @divTrunc(height_px, rows) else constants.terminal.default_cell_height_px;
+        const cell_width: u32 = if (cols > 0) @divTrunc(width_px, cols) else constants.terminal.default_cell_width_px;
+
+        var buf: [64]u8 = undefined;
+        const response = switch (style) {
+            .csi_14_t => std.fmt.bufPrint(&buf, "\x1b[4;{d};{d}t", .{ height_px, width_px }),
+            .csi_16_t => std.fmt.bufPrint(&buf, "\x1b[6;{d};{d}t", .{ cell_height, cell_width }),
+            .csi_18_t => std.fmt.bufPrint(&buf, "\x1b[8;{d};{d}t", .{ rows, cols }),
+            .csi_21_t => return, // Window title handled elsewhere in Ghostty; ignore here.
+        } catch {
+            log.warn("Failed to format size report {s}", .{@tagName(style)});
+            return;
+        };
+
+        self.writeInput(response) catch |e| {
+            log.warn("Failed to send size report {s}: {any}", .{@tagName(style), e});
+        };
+        plog.debug("Pane {d}: Sent size report {s}", .{ self.id, @tagName(style) });
+    }
+
     /// Send OSC 10/11 color query response.
     /// cmd: 10 (foreground) or 11 (background)
     /// r, g, b: 8-bit color values
@@ -1059,6 +1114,10 @@ pub const Pane = struct {
         // Clear sync output mode (allowed by spec - resize can interrupt sync)
         self.sync_output_enabled = false;
         self.sync_output_start_ns = null;
+
+        if (self.terminal.modes.get(.in_band_size_reports)) {
+            self.sendInBandSizeReport();
+        }
 
         // Increment generation first
         self.generation +%= 1;
