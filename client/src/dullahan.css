@@ -514,11 +514,12 @@ html, body {
    ========================================================================== */
 
 .layout-divider {
-  flex: 0 0 4px;
+  flex: 0 0 0;
   background: transparent;
   z-index: 100;
   position: relative;
   transition: background 0.1s;
+  pointer-events: none;
 }
 
 .layout-divider::before {
@@ -528,6 +529,16 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
+  /* Expand hit area for easier grabbing */
+  margin: 0;
+}
+
+body.layout-divider-enabled .layout-divider {
+  flex: 0 0 4px;
+  pointer-events: auto;
+}
+
+body.layout-divider-enabled .layout-divider::before {
   /* Expand hit area for easier grabbing */
   margin: -2px;
 }

@@ -45,6 +45,36 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Only show layout dividers while Meta or Ctrl is held down
+  useEffect(() => {
+    const setMetaHeld = (held: boolean) => {
+      document.body.classList.toggle("layout-divider-enabled", held);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey) setMetaHeld(true);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Meta" || e.key === "Control") {
+        setMetaHeld(e.metaKey || e.ctrlKey);
+      }
+    };
+
+    const handleBlur = () => setMetaHeld(false);
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("blur", handleBlur);
+      setMetaHeld(false);
+    };
+  }, []);
+
   const store = getStore();
   const { connected, error, theme, settingsOpen, isMaster, masterId, activeWindowId, latency } = store;
 
