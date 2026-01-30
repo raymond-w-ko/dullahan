@@ -623,6 +623,9 @@ pub const Handler = struct {
         }
     }
 
+    /// Send a DCS XTGETTCAP response (xterm/kitty terminfo query reply).
+    /// Format: ESC P 1 + r <hex key> [= <hex value>] ESC \
+    /// Key/value are hex-encoded per XTGETTCAP spec.
     fn sendXtgettcapResponse(self: *Handler, key_hex: []const u8, value: []const u8) !void {
         var buf: [512]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
