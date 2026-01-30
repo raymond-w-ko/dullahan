@@ -1014,7 +1014,17 @@ pub const Pane = struct {
 
     /// Resize the pane
     pub fn resize(self: *Pane, cols: u16, rows: u16, cell_width: ?f32, cell_height: ?f32) !void {
-        plog.debug("Pane {d}: Resize {d}x{d} -> {d}x{d}", .{ self.id, self.cols, self.rows, cols, rows });
+        if (cell_width != null and cell_height != null) {
+            plog.debug(
+                "Pane {d}: Resize {d}x{d} -> {d}x{d} (cell {f}x{f})",
+                .{ self.id, self.cols, self.rows, cols, rows, cell_width.?, cell_height.? },
+            );
+        } else {
+            plog.debug(
+                "Pane {d}: Resize {d}x{d} -> {d}x{d} (cell default)",
+                .{ self.id, self.cols, self.rows, cols, rows },
+            );
+        }
 
         self.cols = cols;
         self.rows = rows;
