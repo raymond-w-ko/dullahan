@@ -215,9 +215,7 @@ pub const Handler = struct {
             .size_report => {
                 log.debug("Unhandled size report request: {s}", .{@tagName(value)});
             },
-            .xtversion => {
-                log.debug("Unhandled XTVersion request", .{});
-            },
+            .xtversion => try self.reportXtversion(),
             .kitty_keyboard_query => {
                 log.debug("Unhandled kitty keyboard query", .{});
             },
@@ -621,6 +619,19 @@ pub const Handler = struct {
             .prompt_start,
             => {},
         }
+    }
+
+    fn reportXtversion(self: *Handler) !void {
+        // XTVERSION response: DCS > | <terminal> <version> ST
+        const terminal_name = "dullahan";
+        const version = "dev";
+        var buf: [128]u8 = undefined;
+        const resp = try std.fmt.bufPrint(
+            &buf,
+            "\x1BP>|{s} {s}\x1B\\",
+            .{ terminal_name, version },
+        );
+        try self.pane.writeInput(resp);
     }
 
     fn requestMode(self: *Handler, mode: modes.Mode) !void {
