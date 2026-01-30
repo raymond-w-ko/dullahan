@@ -26,6 +26,9 @@ pub fn setEnabled(value: bool) void {
     if (value and log_file == null) {
         initLogFile();
     }
+    if (log_file != null) {
+        writeControlEvent(if (value) "pty_log_enabled" else "pty_log_disabled");
+    }
 }
 
 /// Check if logging is enabled
@@ -105,6 +108,17 @@ fn logTraffic(direction: Direction, pane_id: u16, data: []const u8) void {
             escape_info,
         );
     }
+}
+
+fn writeControlEvent(event: []const u8) void {
+    const file = log_file orelse return;
+    var buf: [512]u8 = undefined;
+    const fw = file.writerStreaming(&buf);
+    var w = fw.interface;
+    defer w.flush() catch {};
+
+    const ts_ms = std.time.milliTimestamp();
+    w.print("{{\"ts_ms\":{d},\"event\":\"{s}\"}}\n", .{ ts_ms, event }) catch return;
 }
 
 fn writeLogLine(file: std.fs.File, direction: Direction, pane_id: u16, data: []const u8) void {
