@@ -1,12 +1,12 @@
 //! PTY traffic logging
 //!
 //! Logs PTY I/O traffic to a file in the temp directory.
-//! Format: [HH:MM:SS.mmm] > pane N: hex bytes | ascii
+//! Format: JSONL (one JSON object per line).
 //!
 //! Usage:
 //!   const pty_log = @import("pty_log.zig");
-//!   pty_log.logSend(pane_id, data);  // bytes sent TO PTY
-//!   pty_log.logRecv(pane_id, data);  // bytes received FROM PTY
+//!   pty_log.logSend(pane_id, data);  // bytes sent TO PTY (origin=response)
+//!   pty_log.logRecv(pane_id, data);  // bytes received FROM PTY (origin=program)
 //!   pty_log.setEnabled(true/false);  // toggle logging
 
 const std = @import("std");
@@ -39,7 +39,7 @@ pub fn getLogPath() []const u8 {
 }
 
 /// Initialize the log file (called when first enabled)
-/// Truncates any existing log file and writes a fresh header.
+/// Truncates any existing log file.
 fn initLogFile() void {
     if (log_file != null) return;
 
@@ -55,29 +55,27 @@ fn initLogFile() void {
         0o644,
     ) catch return;
     log_file = .{ .handle = fd };
-
-    // Always write header since we truncated
-    const file = log_file orelse return;
-    file.writeAll("# PTY Traffic Log\n") catch {};
-    file.writeAll("# Format: [HH:MM:SS.mmm] DIR pane N: hex bytes | ascii\n") catch {};
-    file.writeAll("# DIR: > = sent TO PTY, < = received FROM PTY\n") catch {};
-    file.writeAll("#\n") catch {};
 }
 
 /// Log bytes sent TO a pane's PTY
-/// Format: "[HH:MM:SS.mmm] > pane N: xx xx xx | ASCII"
 pub fn logSend(pane_id: u16, data: []const u8) void {
-    logTraffic(">", pane_id, data);
+    logTraffic(.send, pane_id, data);
 }
 
 /// Log bytes received FROM a pane's PTY
-/// Format: "[HH:MM:SS.mmm] < pane N: xx xx xx | ASCII"
 pub fn logRecv(pane_id: u16, data: []const u8) void {
-    logTraffic("<", pane_id, data);
+    logTraffic(.recv, pane_id, data);
 }
 
+const Direction = enum {
+    send,
+    recv,
+};
+
+const max_logged_bytes: usize = 512;
+
 /// Internal helper to format and log PTY traffic
-fn logTraffic(direction: []const u8, pane_id: u16, data: []const u8) void {
+fn logTraffic(direction: Direction, pane_id: u16, data: []const u8) void {
     mutex.lock();
     defer mutex.unlock();
 
@@ -89,61 +87,161 @@ fn logTraffic(direction: []const u8, pane_id: u16, data: []const u8) void {
 
     const file = log_file orelse return;
 
-    // Format: "[HH:MM:SS.mmm] DIR pane N: hex bytes | ascii\n"
-    // Use a fixed buffer for small data, allocate for large
-    var stack_buf: [4096]u8 = undefined;
-    const needed_size = 50 + data.len * 4;
+    writeLogLine(file, direction, pane_id, data);
 
-    if (needed_size <= stack_buf.len) {
-        writeLogLine(file, &stack_buf, direction, pane_id, data);
-    } else {
-        // For very large data, just log a summary
-        var summary_buf: [256]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&summary_buf);
-        const w = fbs.writer();
-
-        writeTimestamp(w);
-        w.print("{s} pane {d}: [{d} bytes]\n", .{ direction, pane_id, data.len }) catch return;
-
-        file.writeAll(fbs.getWritten()) catch {};
+    var escape_offsets: [32]u16 = undefined;
+    var escape_bytes: [32]u8 = undefined;
+    const escape_info = detectEscapeOffsets(data, &escape_offsets, &escape_bytes);
+    if (escape_info.count > 0) {
+        writeEscapeLine(
+            file,
+            direction,
+            pane_id,
+            data,
+            escape_offsets[0..escape_info.count],
+            escape_bytes[0..escape_info.count],
+            escape_info,
+        );
     }
 }
 
-fn writeLogLine(file: std.fs.File, buf: []u8, direction: []const u8, pane_id: u16, data: []const u8) void {
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
+fn writeLogLine(file: std.fs.File, direction: Direction, pane_id: u16, data: []const u8) void {
+    var buf: [8192]u8 = undefined;
+    const fw = file.writer(&buf);
+    var w = fw.interface;
+    defer w.flush() catch {};
+    const origin = if (direction == .send) "response" else "program";
+    const dir_str = if (direction == .send) "send" else "recv";
+    const ts_ms = std.time.milliTimestamp();
+    const truncated = data.len > max_logged_bytes;
+    const slice = data[0..@min(data.len, max_logged_bytes)];
 
-    // Write timestamp [HH:MM:SS.mmm]
-    writeTimestamp(w);
+    w.print(
+        "{{\"ts_ms\":{d},\"event\":\"pty_io\",\"pane_id\":{d},\"origin\":\"{s}\",\"direction\":\"{s}\",\"len\":{d}",
+        .{ ts_ms, pane_id, origin, dir_str, data.len },
+    ) catch return;
 
-    // Write direction and pane
-    w.print("{s} pane {d}: ", .{ direction, pane_id }) catch return;
-
-    // Write hex bytes
-    for (data) |byte| {
-        w.print("{x:0>2} ", .{byte}) catch return;
+    if (truncated) {
+        w.writeAll(",\"truncated\":true") catch return;
     }
 
-    // Write ASCII representation
-    w.writeAll("| ") catch return;
-    for (data) |byte| {
-        const c: u8 = if (byte >= 32 and byte < 127) byte else '.';
-        w.writeByte(c) catch return;
+    w.writeAll(",\"bytes\":[") catch return;
+    writeBytesArray(&w, slice) catch return;
+    w.writeAll("],\"text\":\"") catch return;
+    writeHumanString(&w, slice) catch return;
+    if (truncated) {
+        w.writeAll("\",\"text_truncated\":true}") catch return;
+    } else {
+        w.writeAll("\"}") catch return;
     }
     w.writeByte('\n') catch return;
-
-    file.writeAll(fbs.getWritten()) catch {};
 }
 
-fn writeTimestamp(w: anytype) void {
+fn writeEscapeLine(
+    file: std.fs.File,
+    direction: Direction,
+    pane_id: u16,
+    data: []const u8,
+    offsets: []const u16,
+    bytes: []const u8,
+    info: EscapeInfo,
+) void {
+    var buf: [8192]u8 = undefined;
+    const fw = file.writer(&buf);
+    var w = fw.interface;
+    defer w.flush() catch {};
+    const origin = if (direction == .send) "response" else "program";
+    const dir_str = if (direction == .send) "send" else "recv";
     const ts_ms = std.time.milliTimestamp();
-    const ts_s: u64 = @intCast(@divTrunc(ts_ms, 1000));
-    const ms: u64 = @intCast(@mod(ts_ms, 1000));
-    const day_s = @mod(ts_s, 86400); // seconds since midnight
-    const hours = @divTrunc(day_s, 3600);
-    const mins = @divTrunc(@mod(day_s, 3600), 60);
-    const secs = @mod(day_s, 60);
-    w.print("[{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}] ", .{ hours, mins, secs, ms }) catch {};
+    const truncated = data.len > max_logged_bytes;
+    const slice = data[0..@min(data.len, max_logged_bytes)];
+
+    w.print(
+        "{{\"ts_ms\":{d},\"event\":\"escape_detected\",\"pane_id\":{d},\"origin\":\"{s}\",\"direction\":\"{s}\",\"len\":{d},\"escape_total\":{d}",
+        .{ ts_ms, pane_id, origin, dir_str, data.len, info.total },
+    ) catch return;
+
+    if (truncated) {
+        w.writeAll(",\"truncated\":true") catch return;
+    }
+    if (info.truncated) {
+        w.writeAll(",\"escape_truncated\":true") catch return;
+    }
+
+    w.writeAll(",\"indices\":[") catch return;
+    writeU16Array(&w, offsets) catch return;
+    w.writeAll("],\"escape_bytes\":[") catch return;
+    writeBytesArray(&w, bytes) catch return;
+    w.writeAll("],\"bytes\":[") catch return;
+    writeBytesArray(&w, slice) catch return;
+    w.writeAll("],\"text\":\"") catch return;
+    writeHumanString(&w, slice) catch return;
+    w.writeAll("\"}") catch return;
+    w.writeByte('\n') catch return;
+}
+
+fn writeBytesArray(w: *std.Io.Writer, data: []const u8) !void {
+    for (data, 0..) |byte, idx| {
+        if (idx != 0) try w.writeByte(',');
+        try w.print("\"0x{x:0>2}\"", .{byte});
+    }
+}
+
+fn writeU16Array(w: *std.Io.Writer, data: []const u16) !void {
+    for (data, 0..) |value, idx| {
+        if (idx != 0) try w.writeByte(',');
+        try w.print("{d}", .{value});
+    }
+}
+
+fn writeHumanString(w: *std.Io.Writer, data: []const u8) !void {
+    for (data) |byte| {
+        switch (byte) {
+            '\\' => try w.writeAll("\\\\"),
+            '"' => try w.writeAll("\\\""),
+            '\n' => try w.writeAll("\\n"),
+            '\r' => try w.writeAll("\\r"),
+            '\t' => try w.writeAll("\\t"),
+            else => {
+                if (byte >= 32 and byte < 127) {
+                    try w.writeByte(byte);
+                } else {
+                    try w.print("\\x{x:0>2}", .{byte});
+                }
+            },
+        }
+    }
+}
+
+const EscapeInfo = struct {
+    count: usize,
+    total: usize,
+    truncated: bool,
+};
+
+fn detectEscapeOffsets(data: []const u8, offsets: []u16, bytes: []u8) EscapeInfo {
+    var count: usize = 0;
+    var total: usize = 0;
+    var truncated = false;
+
+    for (data, 0..) |byte, idx| {
+        if (byte == 0x1b or byte == 0x9b or byte == 0x9d or byte == 0x90 or byte == 0x9e or byte == 0x9f) {
+            total += 1;
+            if (count >= offsets.len or count >= bytes.len) {
+                truncated = true;
+                continue;
+            }
+            offsets[count] = @intCast(@min(idx, std.math.maxInt(u16)));
+            bytes[count] = byte;
+            count += 1;
+        }
+    }
+
+    return .{
+        .count = count,
+        .total = total,
+        .truncated = truncated,
+    };
 }
 
 /// Close the log file (for cleanup)
