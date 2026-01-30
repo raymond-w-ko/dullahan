@@ -784,7 +784,9 @@ export class TerminalConnection {
     }
 
     // Queue the resize
-    resizeLog.log(`Queued pane ${paneId}: ${cols}x${rows}`);
+    resizeLog.log(
+      `Queued pane ${paneId}: ${cols}x${rows} (cell ${cellWidth.toFixed(2)}x${cellHeight.toFixed(2)})`
+    );
     this._pendingResizes.set(paneId, { cols, rows, cellWidth, cellHeight });
 
     // Schedule debounced flush to avoid resize cascades in dev builds
@@ -816,7 +818,9 @@ export class TerminalConnection {
     }
 
     for (const [paneId, size] of this._pendingResizes) {
-      resizeLog.log(`Sending pane ${paneId}: ${size.cols}x${size.rows}`);
+      resizeLog.log(
+        `Sending pane ${paneId}: ${size.cols}x${size.rows} (cell ${size.cellWidth.toFixed(2)}x${size.cellHeight.toFixed(2)})`
+      );
       this.send({
         type: "resize",
         paneId,
