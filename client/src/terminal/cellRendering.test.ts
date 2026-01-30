@@ -70,10 +70,10 @@ describe("cellsToRuns", () => {
     expect(lines[0]![0]!.text).toBe("中文");
   });
 
-  test("SPACER_HEAD is also skipped", () => {
-    // SPACER_HEAD is used in some edge cases (e.g., partial overwrite)
+  test("SPACER_HEAD keeps column alignment", () => {
+    // SPACER_HEAD is used for wrapped wide chars; it should occupy a cell
     const cells = [
-      makeCell(0, Wide.SPACER_HEAD),     // spacer head (should be skipped)
+      makeCell(0, Wide.SPACER_HEAD),     // spacer head (should occupy space)
       makeCell(65),                       // A
       makeCell(66),                       // B
     ];
@@ -81,7 +81,7 @@ describe("cellsToRuns", () => {
     const lines = cellsToRuns(cells, emptyStyles, 3, 1);
 
     expect(lines.length).toBe(1);
-    expect(lines[0]![0]!.text).toBe("AB");
+    expect(lines[0]![0]!.text).toBe(" AB");
   });
 
   test("mixed narrow and wide characters", () => {

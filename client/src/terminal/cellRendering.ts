@@ -135,8 +135,10 @@ export function cellsToRuns(
       const idx = y * cols + x;
       const cell = cells[idx];
 
-      // Skip spacer cells (second half of wide characters)
-      if (cell && (cell.wide === Wide.SPACER_TAIL || cell.wide === Wide.SPACER_HEAD)) {
+      // Skip spacer tails (second half of wide characters)
+      // Spacer heads indicate a wrapped wide char on the next line and should
+      // still occupy a cell to keep column alignment.
+      if (cell && cell.wide === Wide.SPACER_TAIL) {
         continue;
       }
 
