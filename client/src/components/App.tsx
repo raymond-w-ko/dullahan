@@ -2,7 +2,7 @@
 // Initializes connection and renders terminal grid
 
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
@@ -24,6 +24,9 @@ import * as config from "../config";
 
 export function App() {
   useStoreSubscription();
+  const dividerHoldTimeoutRef = useRef<number | null>(null);
+  const dividerHoldAwaitingReleaseRef = useRef(false);
+  const dividerHoldHeldRef = useRef(false);
 
   // Initialize connection on mount
   useEffect(() => {
@@ -45,23 +48,55 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Only show layout dividers while Meta or Ctrl is held down
+  // Toggle layout dividers after holding Meta/Ctrl for ~3 seconds
   useEffect(() => {
-    const setMetaHeld = (held: boolean) => {
-      document.body.classList.toggle("layout-divider-enabled", held);
+    const toggleDividers = () => {
+      document.body.classList.toggle("layout-divider-enabled");
     };
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey) setMetaHeld(true);
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Meta" || e.key === "Control") {
-        setMetaHeld(e.metaKey || e.ctrlKey);
+    const clearTimer = () => {
+      if (dividerHoldTimeoutRef.current !== null) {
+        window.clearTimeout(dividerHoldTimeoutRef.current);
+        dividerHoldTimeoutRef.current = null;
       }
     };
 
-    const handleBlur = () => setMetaHeld(false);
+    const isModifierHeld = (e: KeyboardEvent) => e.metaKey || e.ctrlKey;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isModifierHeld(e)) return;
+
+      dividerHoldHeldRef.current = true;
+      if (
+        dividerHoldAwaitingReleaseRef.current ||
+        dividerHoldTimeoutRef.current !== null ||
+        e.repeat
+      ) {
+        return;
+      }
+
+      dividerHoldTimeoutRef.current = window.setTimeout(() => {
+        dividerHoldTimeoutRef.current = null;
+        if (!dividerHoldHeldRef.current) return;
+        toggleDividers();
+        dividerHoldAwaitingReleaseRef.current = true;
+      }, 2000);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== "Meta" && e.key !== "Control") return;
+      dividerHoldHeldRef.current = isModifierHeld(e);
+      if (!dividerHoldHeldRef.current) {
+        clearTimer();
+        dividerHoldAwaitingReleaseRef.current = false;
+      }
+    };
+
+    const handleBlur = () => {
+      dividerHoldHeldRef.current = false;
+      dividerHoldAwaitingReleaseRef.current = false;
+      clearTimer();
+    };
 
     window.addEventListener("keydown", handleKeyDown, true);
     window.addEventListener("keyup", handleKeyUp, true);
@@ -71,7 +106,7 @@ export function App() {
       window.removeEventListener("keydown", handleKeyDown, true);
       window.removeEventListener("keyup", handleKeyUp, true);
       window.removeEventListener("blur", handleBlur);
-      setMetaHeld(false);
+      clearTimer();
     };
   }, []);
 
