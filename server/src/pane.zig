@@ -614,7 +614,11 @@ pub const Pane = struct {
             .csi_14_t => std.fmt.bufPrint(&buf, "\x1b[4;{d};{d}t", .{ height_px, width_px }),
             .csi_16_t => std.fmt.bufPrint(&buf, "\x1b[6;{d};{d}t", .{ cell_height, cell_width }),
             .csi_18_t => std.fmt.bufPrint(&buf, "\x1b[8;{d};{d}t", .{ rows, cols }),
-            .csi_21_t => return, // Window title handled elsewhere in Ghostty; ignore here.
+            .csi_21_t => {
+                // TODO(du-3ss): Respond to XTWINOPS window title queries (CSI 21 t).
+                log.warn("XTWINOPS window title query (CSI 21 t) unhandled", .{});
+                return;
+            },
         } catch {
             log.warn("Failed to format size report {s}", .{@tagName(style)});
             return;
@@ -735,7 +739,8 @@ pub const Pane = struct {
                     self.sendOscColorResponse(12, fg[0], fg[1], fg[2], use_st);
                 },
                 else => {
-                    // Other dynamic colors (pointer, tektronix, etc.) - ignore
+                    // TODO(du-3ss): Respond to additional OSC dynamic color queries.
+                    log.warn("OSC dynamic color query unhandled: {s}", .{@tagName(d)});
                 },
             },
             .palette => |idx| {
@@ -745,7 +750,8 @@ pub const Pane = struct {
                 self.sendOsc4ColorResponse(idx, color.r, color.g, color.b, use_st);
             },
             .special => {
-                // Special colors - ignore for now
+                // TODO(du-3ss): Respond to OSC special color queries.
+                log.warn("OSC special color query unhandled", .{});
             },
         }
         _ = op; // op tells us which OSC triggered this (4, 10, 11, etc.)
@@ -777,7 +783,8 @@ pub const Pane = struct {
             .cursor_position => self.sendDSRCursorResponse(),
             .color_scheme => {
                 // Color scheme query (CSI ? 996 n) - report light/dark mode
-                // For now, assume dark mode
+                // TODO(du-3ss): Report actual light/dark mode instead of assuming dark.
+                log.warn("DSR color scheme query requested; defaulting to dark mode", .{});
                 self.sendColorSchemeResponse(false);
             },
         }

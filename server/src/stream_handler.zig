@@ -249,10 +249,12 @@ pub const Handler = struct {
                 // Respond to a small set of common XTGETTCAP queries.
                 while (gettcap.next()) |key| {
                     log.debug("XTGETTCAP request (hex): {s}", .{key});
+                    var matched = false;
 
                     // indn: terminfo capability for "scroll down n lines".
                     // Response "\\E[%p1%dS" = CSI Ps S (scroll down Ps lines).
                     if (xtgettcapMatches(key, "696E646E")) {
+                        matched = true;
                         self.sendXtgettcapResponse(key, "\\E[%p1%dS") catch |e| {
                             log.warn("Failed to send XTGETTCAP indn response: {any}", .{e});
                         };
@@ -261,6 +263,7 @@ pub const Handler = struct {
                     // Ms: terminfo capability for OSC 52 clipboard operations.
                     // Response "\\E]52;%p1%s;%p2%s\\007" = OSC 52 ; <kind> ; <data> BEL.
                     if (xtgettcapMatches(key, "4D73")) {
+                        matched = true;
                         self.sendXtgettcapResponse(key, "\\E]52;%p1%s;%p2%s\\007") catch |e| {
                             log.warn("Failed to send XTGETTCAP Ms response: {any}", .{e});
                         };
@@ -269,11 +272,16 @@ pub const Handler = struct {
                     // query-os-name: fish extension for reporting the OS name.
                     // Response is the plain OS name string (e.g., "Linux"/"macOS"), hex-encoded.
                     if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) {
+                        matched = true;
                         const os_name = getOsName() orelse "unknown";
                         self.sendXtgettcapResponse(key, os_name) catch |e| {
                             log.warn("Failed to send XTGETTCAP query-os-name response: {any}", .{e});
                         };
                         continue;
+                    }
+                    if (!matched) {
+                        // TODO(du-3ss): Respond to additional XTGETTCAP keys when requested.
+                        log.warn("XTGETTCAP request unhandled (hex): {s}", .{key});
                     }
                 }
             },
@@ -287,7 +295,10 @@ pub const Handler = struct {
                 stream.pos = prefix_len;
 
                 switch (decrqss) {
-                    .none => {},
+                    .none => {
+                        // TODO(du-3ss): Handle additional DECRQSS requests.
+                        log.warn("DECRQSS request unhandled", .{});
+                    },
                     .sgr => {
                         log.debug("DECRQSS: SGR", .{});
                         const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
@@ -469,7 +480,10 @@ pub const Handler = struct {
         switch (req) {
             .primary => self.pane.sendDA1Response(),
             .secondary => self.pane.sendDA2Response(),
-            .tertiary => {}, // Not implemented
+            .tertiary => {
+                // TODO(du-3ss): Implement DA3 (tertiary device attributes) response.
+                log.warn("DA3 (tertiary device attributes) requested but unimplemented", .{});
+            },
         }
     }
 
@@ -571,7 +585,8 @@ pub const Handler = struct {
                     },
                 },
                 .query => |key| {
-                    log.debug("Unhandled kitty color query: {f}", .{key});
+                    // TODO(du-3ss): Implement kitty color query responses.
+                    log.warn("Kitty color query unhandled: {f}", .{key});
                 },
             }
         }
