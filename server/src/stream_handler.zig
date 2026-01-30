@@ -262,6 +262,7 @@ pub const Handler = struct {
                     log.debug("XTGETTCAP request (hex): {s}", .{key});
 
                     // indn: terminfo capability for "scroll down n lines".
+                    // Response "\\E[%p1%dS" = CSI Ps S (scroll down Ps lines).
                     if (xtgettcapMatches(key, "696E646E")) {
                         self.sendXtgettcapResponse(key, "\\E[%p1%dS") catch |e| {
                             log.warn("Failed to send XTGETTCAP indn response: {any}", .{e});
@@ -269,6 +270,7 @@ pub const Handler = struct {
                         continue;
                     }
                     // Ms: terminfo capability for OSC 52 clipboard operations.
+                    // Response "\\E]52;%p1%s;%p2%s\\007" = OSC 52 ; <kind> ; <data> BEL.
                     if (xtgettcapMatches(key, "4D73")) {
                         self.sendXtgettcapResponse(key, "\\E]52;%p1%s;%p2%s\\007") catch |e| {
                             log.warn("Failed to send XTGETTCAP Ms response: {any}", .{e});
@@ -276,6 +278,7 @@ pub const Handler = struct {
                         continue;
                     }
                     // query-os-name: fish extension for reporting the OS name.
+                    // Response is the plain OS name string (e.g., "Linux"), hex-encoded.
                     if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) {
                         const os_name = getOsName() orelse "unknown";
                         self.sendXtgettcapResponse(key, os_name) catch |e| {
