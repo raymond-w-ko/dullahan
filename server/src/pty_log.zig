@@ -87,6 +87,8 @@ fn logTraffic(direction: Direction, pane_id: u16, data: []const u8) void {
 
     const file = log_file orelse return;
 
+    file.seekFromEnd(0) catch {};
+
     writeLogLine(file, direction, pane_id, data);
 
     var escape_offsets: [32]u16 = undefined;
