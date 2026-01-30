@@ -55,7 +55,7 @@ make build|server|client|dist|install|themes|theme-db|coverage|fmt|dev|prod|clea
 | Path | Purpose |
 |------|---------|
 | `~/.config/dullahan/` | Config (layouts.json) |
-| `/tmp/dullahan-<uid>/` | Temp: .sock, .pid, .log, dlog.log, pty-traffic.log |
+| `/tmp/dullahan-<uid>/` | Temp: .sock, .pid, dullahan.log, pty-traffic.log |
 | `ws://localhost:7681` | Client↔Server |
 
 ### Wire Protocol

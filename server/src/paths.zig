@@ -184,7 +184,8 @@ pub const StaticPaths = struct {
         return log_buf[0..log_len];
     }
 
-    /// Debug log file path: /tmp/dullahan-<uid>/dullahan-dlog.log
+    /// Legacy debug log file path: /tmp/dullahan-<uid>/dullahan-dlog.log
+    /// (Debug logs are now consolidated into dullahan.log.)
     pub fn dlog() []const u8 {
         if (!dlog_initialized) {
             const dir = getTempDir();

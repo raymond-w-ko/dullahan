@@ -1,7 +1,7 @@
 //! Dullahan unified logging system with Wine-style category support
 //!
 //! Provides logging to three channels:
-//! 1. Log file (/tmp/dullahan-<uid>/dullahan-dlog.log) - always
+//! 1. Log file (/tmp/dullahan-<uid>/dullahan.log) - always (shared)
 //! 2. Debug console (pane 0) - when session is set
 //! 3. Stderr - for errors, unimplemented features, AND all logs in debug builds
 //!
@@ -56,7 +56,7 @@ fn initLogFile() void {
     paths.ensureTempDir() catch return;
 
     // Open with append mode via posix
-    const log_file_path = paths.StaticPaths.dlog();
+    const log_file_path = paths.StaticPaths.log();
     const fd = std.posix.open(
         log_file_path,
         .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },

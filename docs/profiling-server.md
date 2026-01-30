@@ -175,7 +175,7 @@ DULLAHAN_DEBUG=+delta,+snapshot ./zig-out/bin/dullahan serve
 ./zig-out/bin/dullahan debug-log +delta,+snapshot
 
 # View log
-tail -f /tmp/dullahan-$(id -u)/dullahan-dlog.log
+tail -f /tmp/dullahan-$(id -u)/dullahan.log
 ```
 
 ### Available Debug Categories
@@ -203,7 +203,7 @@ Add timing to see if deltas are growing:
 ./zig-out/bin/dullahan debug-log +delta
 
 # Watch the log for delta sizes
-tail -f /tmp/dullahan-$(id -u)/dullahan-dlog.log | grep -E 'delta|dirty_rows'
+tail -f /tmp/dullahan-$(id -u)/dullahan.log | grep -E 'delta|dirty_rows'
 ```
 
 Look for patterns like:
