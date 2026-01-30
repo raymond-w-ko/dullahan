@@ -216,9 +216,7 @@ pub const Handler = struct {
                 log.debug("Unhandled size report request: {s}", .{@tagName(value)});
             },
             .xtversion => try self.reportXtversion(),
-            .kitty_keyboard_query => {
-                log.debug("Unhandled kitty keyboard query", .{});
-            },
+            .kitty_keyboard_query => try self.queryKittyKeyboard(),
             .report_pwd => {
                 log.debug("Unhandled report PWD (OSC 7): {s}", .{value.url});
             },
@@ -631,6 +629,14 @@ pub const Handler = struct {
             "\x1BP>|{s} {s}\x1B\\",
             .{ terminal_name, version },
         );
+        try self.pane.writeInput(resp);
+    }
+
+    fn queryKittyKeyboard(self: *Handler) !void {
+        // Kitty keyboard protocol query response: CSI ? <flags> u
+        const flags = self.terminal.screens.active.kitty_keyboard.current().int();
+        var buf: [32]u8 = undefined;
+        const resp = try std.fmt.bufPrint(&buf, "\x1b[?{}u", .{flags});
         try self.pane.writeInput(resp);
     }
 
