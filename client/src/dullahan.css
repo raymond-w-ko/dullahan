@@ -41,6 +41,8 @@ html, body {
   /* Font settings */
   --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", monospace;
   --term-font-size: 14px;
+  --term-symbol-font: var(--term-font);
+  --term-symbol-font-size: var(--term-font-size);
   --term-line-height: 1.2;
 
   /* Spacing - compact by default */
@@ -844,6 +846,8 @@ body.layout-resizing-vertical * {
 /* Private-use glyphs (e.g. Nerd Font icons) are constrained to a single cell. */
 .single-char {
   display: inline-block;
+  font-family: var(--term-symbol-font, var(--term-font));
+  font-size: var(--term-symbol-font-size, var(--term-font-size));
   width: var(--cell-width, 1ch);
   text-align: center;
 }

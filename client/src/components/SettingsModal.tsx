@@ -86,6 +86,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const selectValue = (e: Event) => (e.target as HTMLSelectElement).value;
   const inputValue = (e: Event) => (e.target as HTMLInputElement).value;
   const inputInt = (e: Event) => parseInt(inputValue(e), 10);
+  const inputOptionalInt = (e: Event) => {
+    const raw = inputValue(e).trim();
+    return raw.length === 0 ? 0 : parseInt(raw, 10);
+  };
   const inputFloat = (e: Event) => parseFloat(inputValue(e));
   const inputChecked = (e: Event) => (e.target as HTMLInputElement).checked;
 
@@ -160,6 +164,28 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 value={settings.fontFamily}
                 onInput={(e) => setSetting("fontFamily", inputValue(e))}
                 placeholder="JetBrains Mono, monospace"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Symbol Font Size</span>
+              <input
+                type="number"
+                min="0"
+                max="64"
+                value={settings.symbolFontSize === 0 ? "" : settings.symbolFontSize}
+                onInput={(e) => setSetting("symbolFontSize", inputOptionalInt(e))}
+                placeholder="(auto)"
+              />
+            </label>
+
+            <label class="settings-field">
+              <span class="settings-label">Symbol Font Family</span>
+              <input
+                type="text"
+                value={settings.symbolFontFamily}
+                onInput={(e) => setSetting("symbolFontFamily", inputValue(e))}
+                placeholder="(auto)"
               />
             </label>
 
