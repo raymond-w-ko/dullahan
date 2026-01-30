@@ -107,7 +107,7 @@ fn logTraffic(direction: Direction, pane_id: u16, data: []const u8) void {
 
 fn writeLogLine(file: std.fs.File, direction: Direction, pane_id: u16, data: []const u8) void {
     var buf: [8192]u8 = undefined;
-    const fw = file.writer(&buf);
+    const fw = file.writerStreaming(&buf);
     var w = fw.interface;
     defer w.flush() catch {};
     const origin = if (direction == .send) "response" else "program";
@@ -147,7 +147,7 @@ fn writeEscapeLine(
     info: EscapeInfo,
 ) void {
     var buf: [8192]u8 = undefined;
-    const fw = file.writer(&buf);
+    const fw = file.writerStreaming(&buf);
     var w = fw.interface;
     defer w.flush() catch {};
     const origin = if (direction == .send) "response" else "program";
