@@ -113,8 +113,8 @@ fn logTraffic(direction: Direction, pane_id: u16, data: []const u8) void {
 fn writeControlEvent(event: []const u8) void {
     const file = log_file orelse return;
     var buf: [512]u8 = undefined;
-    const fw = file.writerStreaming(&buf);
-    var w = fw.interface;
+    var fw = file.writerStreaming(&buf);
+    var w = &fw.interface;
     defer w.flush() catch {};
 
     const ts_ms = std.time.milliTimestamp();
@@ -123,8 +123,8 @@ fn writeControlEvent(event: []const u8) void {
 
 fn writeLogLine(file: std.fs.File, direction: Direction, pane_id: u16, data: []const u8) void {
     var buf: [8192]u8 = undefined;
-    const fw = file.writerStreaming(&buf);
-    var w = fw.interface;
+    var fw = file.writerStreaming(&buf);
+    var w = &fw.interface;
     defer w.flush() catch {};
     const origin = if (direction == .send) "response" else "program";
     const dir_str = if (direction == .send) "send" else "recv";
@@ -142,9 +142,9 @@ fn writeLogLine(file: std.fs.File, direction: Direction, pane_id: u16, data: []c
     }
 
     w.writeAll(",\"bytes\":[") catch return;
-    writeBytesArray(&w, slice) catch return;
+    writeBytesArray(w, slice) catch return;
     w.writeAll("],\"text\":\"") catch return;
-    writeHumanString(&w, slice) catch return;
+    writeHumanString(w, slice) catch return;
     if (truncated) {
         w.writeAll("\",\"text_truncated\":true}") catch return;
     } else {
@@ -163,8 +163,8 @@ fn writeEscapeLine(
     info: EscapeInfo,
 ) void {
     var buf: [8192]u8 = undefined;
-    const fw = file.writerStreaming(&buf);
-    var w = fw.interface;
+    var fw = file.writerStreaming(&buf);
+    var w = &fw.interface;
     defer w.flush() catch {};
     const origin = if (direction == .send) "response" else "program";
     const dir_str = if (direction == .send) "send" else "recv";
@@ -185,13 +185,13 @@ fn writeEscapeLine(
     }
 
     w.writeAll(",\"indices\":[") catch return;
-    writeU16Array(&w, offsets) catch return;
+    writeU16Array(w, offsets) catch return;
     w.writeAll("],\"escape_bytes\":[") catch return;
-    writeBytesArray(&w, bytes) catch return;
+    writeBytesArray(w, bytes) catch return;
     w.writeAll("],\"bytes\":[") catch return;
-    writeBytesArray(&w, slice) catch return;
+    writeBytesArray(w, slice) catch return;
     w.writeAll("],\"text\":\"") catch return;
-    writeHumanString(&w, slice) catch return;
+    writeHumanString(w, slice) catch return;
     w.writeAll("\"}") catch return;
     w.writeByte('\n') catch return;
 }
