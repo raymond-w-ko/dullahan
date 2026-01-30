@@ -831,8 +831,12 @@ body.layout-resizing-vertical * {
 }
 
 .terminal-line {
-  height: calc(1em * var(--term-line-height));
+  height: calc(var(--term-font-size) * var(--term-line-height));
   white-space: pre;
+}
+
+.terminal-line span {
+  vertical-align: top;
 }
 
 /* Wide characters (CJK, emoji) need explicit 2-cell width for font alignment.
