@@ -257,9 +257,29 @@ pub const Handler = struct {
     fn handleDcsCommand(self: *Handler, cmd: *dcs.Command) !void {
         switch (cmd.*) {
             .xtgettcap => |*gettcap| {
-                // We don't have terminfo responses wired up yet. Log and consume requests.
+                // Respond to a small set of common XTGETTCAP queries.
                 while (gettcap.next()) |key| {
                     log.debug("XTGETTCAP request (hex): {s}", .{key});
+
+                    if (xtgettcapMatches(key, "696E646E")) { // indn
+                        self.sendXtgettcapResponse(key, "\\E[%p1%dS") catch |e| {
+                            log.warn("Failed to send XTGETTCAP indn response: {any}", .{e});
+                        };
+                        continue;
+                    }
+                    if (xtgettcapMatches(key, "4D73")) { // Ms (OSC 52 clipboard)
+                        self.sendXtgettcapResponse(key, "\\E]52;%p1%s;%p2%s\\007") catch |e| {
+                            log.warn("Failed to send XTGETTCAP Ms response: {any}", .{e});
+                        };
+                        continue;
+                    }
+                    if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) { // query-os-name
+                        const os_name = getOsName() orelse "unknown";
+                        self.sendXtgettcapResponse(key, os_name) catch |e| {
+                            log.warn("Failed to send XTGETTCAP query-os-name response: {any}", .{e});
+                        };
+                        continue;
+                    }
                 }
             },
             .decrqss => |decrqss| {
@@ -599,7 +619,41 @@ pub const Handler = struct {
             => {},
         }
     }
+
+    fn sendXtgettcapResponse(self: *Handler, key_hex: []const u8, value: []const u8) !void {
+        var buf: [512]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        const writer = stream.writer();
+
+        try writer.writeAll("\x1bP1+r");
+        try writer.writeAll(key_hex);
+        if (value.len > 0) {
+            try writer.writeByte('=');
+            try writeHex(writer, value);
+        }
+        try writer.writeAll("\x1b\\");
+
+        const out = stream.buffer[0..stream.pos];
+        try self.pane.writeInput(out);
+    }
 };
+
+fn xtgettcapMatches(key_hex: []const u8, expected_hex: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(key_hex, expected_hex);
+}
+
+fn writeHex(writer: anytype, bytes: []const u8) !void {
+    const hex = "0123456789ABCDEF";
+    for (bytes) |b| {
+        try writer.writeByte(hex[b >> 4]);
+        try writer.writeByte(hex[b & 0x0F]);
+    }
+}
+
+fn getOsName() ?[]const u8 {
+    const uts = std.posix.uname() catch return null;
+    return std.mem.sliceTo(&uts.sysname, 0);
+}
 
 /// The stream type using our custom handler
 pub const Stream = ghostty.Stream(Handler);
