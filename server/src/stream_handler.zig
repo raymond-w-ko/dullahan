@@ -208,16 +208,31 @@ pub const Handler = struct {
             // =================================================================
             // Ignored events (queries we don't respond to, or no-ops)
             // =================================================================
-            .enquiry,
-            .request_mode,
-            .request_mode_unknown,
-            .size_report,
-            .xtversion,
-            .kitty_keyboard_query,
-            .report_pwd,
-            .title_push,
-            .title_pop,
-            => {},
+            .enquiry => {},
+            .request_mode => {
+                log.debug("Unhandled mode request: {s}", .{@tagName(value.mode)});
+            },
+            .request_mode_unknown => {
+                log.debug("Unhandled unknown mode request: ansi={} mode={d}", .{ value.ansi, value.mode });
+            },
+            .size_report => {
+                log.debug("Unhandled size report request: {s}", .{@tagName(value)});
+            },
+            .xtversion => {
+                log.debug("Unhandled XTVersion request", .{});
+            },
+            .kitty_keyboard_query => {
+                log.debug("Unhandled kitty keyboard query", .{});
+            },
+            .report_pwd => {
+                log.debug("Unhandled report PWD (OSC 7): {s}", .{value.url});
+            },
+            .title_push => {
+                log.debug("Unhandled title push: {d}", .{value});
+            },
+            .title_pop => {
+                log.debug("Unhandled title pop: {d}", .{value});
+            },
         }
     }
 
@@ -242,8 +257,10 @@ pub const Handler = struct {
     fn handleDcsCommand(self: *Handler, cmd: *dcs.Command) !void {
         switch (cmd.*) {
             .xtgettcap => |*gettcap| {
-                // We don't have terminfo responses wired up yet. Consume requests.
-                while (gettcap.next()) |_| {}
+                // We don't have terminfo responses wired up yet. Log and consume requests.
+                while (gettcap.next()) |key| {
+                    log.debug("XTGETTCAP request (hex): {s}", .{key});
+                }
             },
             .decrqss => |decrqss| {
                 var response: [128]u8 = undefined;
@@ -257,11 +274,13 @@ pub const Handler = struct {
                 switch (decrqss) {
                     .none => {},
                     .sgr => {
+                        log.debug("DECRQSS: SGR", .{});
                         const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
                         stream.pos += buf.len;
                         try writer.writeByte('m');
                     },
                     .decscusr => {
+                        log.debug("DECRQSS: DECSCUSR", .{});
                         const blink = self.terminal.modes.get(.cursor_blinking);
                         const style: u8 = switch (self.terminal.screens.active.cursor.cursor_style) {
                             .block => if (blink) 1 else 2,
@@ -272,12 +291,14 @@ pub const Handler = struct {
                         try writer.print("{d} q", .{style});
                     },
                     .decstbm => {
+                        log.debug("DECRQSS: DECSTBM", .{});
                         try writer.print("{d};{d}r", .{
                             self.terminal.scrolling_region.top + 1,
                             self.terminal.scrolling_region.bottom + 1,
                         });
                     },
                     .decslrm => {
+                        log.debug("DECRQSS: DECSLRM", .{});
                         if (self.terminal.modes.get(.enable_left_and_right_margin)) {
                             try writer.print("{d};{d}s", .{
                                 self.terminal.scrolling_region.left + 1,
@@ -295,7 +316,7 @@ pub const Handler = struct {
                 };
             },
             .tmux => {
-                // Ignore tmux control mode for now.
+                log.debug("Ignoring tmux control-mode DCS", .{});
             },
         }
     }
@@ -528,7 +549,9 @@ pub const Handler = struct {
                         else => {},
                     },
                 },
-                .query => {},
+                .query => |key| {
+                    log.debug("Unhandled kitty color query: {f}", .{key});
+                },
             }
         }
     }
