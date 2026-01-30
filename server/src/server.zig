@@ -23,6 +23,7 @@ pub const RunConfig = struct {
     ws_port: u16 = http.DEFAULT_PORT,
     pty_log: bool = false,
     no_delta: bool = false,
+    no_sync_output: bool = false,
     tls_cert: ?[]const u8 = null,
     tls_key: ?[]const u8 = null,
 
@@ -60,7 +61,9 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     }
 
     // Create global pane registry
-    var pane_registry = PaneRegistry.init(allocator, .{});
+    var pane_registry = PaneRegistry.init(allocator, .{
+        .allow_sync_output = !config.no_sync_output,
+    });
     defer pane_registry.deinit();
 
     // Create session with registry pointer

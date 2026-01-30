@@ -88,6 +88,9 @@ pub const Pane = struct {
     /// When enabled, terminal updates are buffered until mode is disabled
     sync_output_enabled: bool = false,
 
+    /// Whether synchronized output is allowed for this pane
+    sync_output_allowed: bool = true,
+
     /// Timestamp (nanoseconds) when sync mode was enabled
     /// Used for timeout detection (1 second max)
     sync_output_start_ns: ?i128 = null,
@@ -187,6 +190,7 @@ pub const Pane = struct {
         cols: u16 = 80,
         rows: u16 = 24,
         id: u16 = 0,
+        allow_sync_output: bool = true,
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
@@ -220,6 +224,7 @@ pub const Pane = struct {
             .allocator = allocator,
             .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
             .clipboard = ClipboardHandler.init(allocator),
+            .sync_output_allowed = opts.allow_sync_output,
             // vt_stream is lazily initialized in feed() - see comment on field
         };
     }

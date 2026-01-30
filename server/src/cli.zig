@@ -18,6 +18,7 @@ pub const CliArgs = struct {
     ws_port: u16 = 7681,
     pty_log: bool = false,
     no_delta: bool = false,
+    no_sync_output: bool = false,
     help: bool = false,
     serve: bool = false,
     no_spawn: bool = false,
@@ -82,6 +83,8 @@ pub const CliArgs = struct {
                 args.pty_log = true;
             } else if (std.mem.eql(u8, arg, "--no-delta")) {
                 args.no_delta = true;
+            } else if (std.mem.eql(u8, arg, "--no-sync-output")) {
+                args.no_sync_output = true;
             } else if (std.mem.startsWith(u8, arg, "--tls-cert=")) {
                 args.tls_cert = arg["--tls-cert=".len..];
             } else if (std.mem.startsWith(u8, arg, "--tls-key=")) {
@@ -117,6 +120,7 @@ pub fn printUsage() void {
         \\  --port=PORT          WebSocket/HTTP port (default: 7681)
         \\  --pty-log            Enable PTY traffic logging (truncates existing log)
         \\  --no-delta           Disable delta updates (always send full snapshots)
+        \\  --no-sync-output     Ignore synchronized output mode (DECSET 2026)
         \\  --no-spawn           Don't auto-spawn server if not running
         \\  --tls-cert=PATH      TLS certificate file (enables HTTPS/WSS)
         \\  --tls-key=PATH       TLS private key file (required with --tls-cert)

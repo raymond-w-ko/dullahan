@@ -30,10 +30,12 @@ pub const PaneRegistry = struct {
     /// Default dimensions for new panes
     default_cols: u16,
     default_rows: u16,
+    default_allow_sync_output: bool,
 
     pub const Options = struct {
         cols: u16 = 80,
         rows: u16 = 24,
+        allow_sync_output: bool = true,
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) PaneRegistry {
@@ -42,6 +44,7 @@ pub const PaneRegistry = struct {
             .allocator = allocator,
             .default_cols = opts.cols,
             .default_rows = opts.rows,
+            .default_allow_sync_output = opts.allow_sync_output,
         };
     }
 
@@ -61,6 +64,7 @@ pub const PaneRegistry = struct {
         return self.createWithOptions(.{
             .cols = self.default_cols,
             .rows = self.default_rows,
+            .allow_sync_output = self.default_allow_sync_output,
         });
     }
 

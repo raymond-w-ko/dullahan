@@ -95,6 +95,7 @@ pub fn main() !void {
             .ws_port = args.ws_port,
             .pty_log = args.pty_log,
             .no_delta = args.no_delta,
+            .no_sync_output = args.no_sync_output,
             .tls_cert = args.tls_cert,
             .tls_key = args.tls_key,
         };
@@ -148,6 +149,9 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     }
     if (args.no_delta) {
         try argv.append(allocator, "--no-delta");
+    }
+    if (args.no_sync_output) {
+        try argv.append(allocator, "--no-sync-output");
     }
     if (args.tls_cert) |p| {
         var buf: [512]u8 = undefined;

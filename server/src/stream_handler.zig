@@ -391,6 +391,14 @@ pub const Handler = struct {
     }
 
     fn setMode(self: *Handler, mode: modes.Mode, enabled: bool) !void {
+        if (mode == .synchronized_output and enabled and !self.pane.sync_output_allowed) {
+            // TODO(du-3ss): Make synchronized output opt-in configurable per pane.
+            self.terminal.modes.set(mode, false);
+            self.pane.forceSyncDisable();
+            log.warn("Synchronized output requested but disabled by config", .{});
+            return;
+        }
+
         self.terminal.modes.set(mode, enabled);
 
         switch (mode) {
