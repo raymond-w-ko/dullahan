@@ -217,9 +217,7 @@ pub const Handler = struct {
             },
             .xtversion => try self.reportXtversion(),
             .kitty_keyboard_query => try self.queryKittyKeyboard(),
-            .report_pwd => {
-                log.debug("Unhandled report PWD (OSC 7): {s}", .{value.url});
-            },
+            .report_pwd => try self.reportPwd(value.url),
             .title_push => {
                 log.debug("Unhandled title push: {d}", .{value});
             },
@@ -638,6 +636,12 @@ pub const Handler = struct {
         var buf: [32]u8 = undefined;
         const resp = try std.fmt.bufPrint(&buf, "\x1b[?{}u", .{flags});
         try self.pane.writeInput(resp);
+    }
+
+    fn reportPwd(self: *Handler, url: []const u8) !void {
+        // Store the last-reported working directory (OSC 7).
+        try self.terminal.setPwd(url);
+        log.debug("Set pwd from OSC 7: {s}", .{url});
     }
 
     fn requestMode(self: *Handler, mode: modes.Mode) !void {
