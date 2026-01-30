@@ -207,7 +207,9 @@ pub const Pane = struct {
 
         // Enable LNM (Line Feed/New Line Mode) so \n does CR+LF
         // Without this, \n only moves down, not back to column 0
-        terminal.modes.set(.linefeed, true);
+        // WARNING: ENABLING THIS BREAKS NEOVIM RENDERING SUBTLY.
+        // DON'T DO THIS: GHOSTTY DOES NOT FORCE LNM BY DEFAULT.
+        // terminal.modes.set(.linefeed, true);
 
         // Enable grapheme clustering (mode 2027) so emoji with modifiers,
         // ZWJ sequences, and flag emoji are combined into single cells
