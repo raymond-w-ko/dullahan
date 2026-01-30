@@ -1016,7 +1016,7 @@ pub const Pane = struct {
     pub fn resize(self: *Pane, cols: u16, rows: u16, cell_width: ?f32, cell_height: ?f32) !void {
         if (cell_width != null and cell_height != null) {
             plog.debug(
-                "Pane {d}: Resize {d}x{d} -> {d}x{d} (cell {f}x{f})",
+                "Pane {d}: Resize {d}x{d} -> {d}x{d} (cell {d:.2}x{d:.2})",
                 .{ self.id, self.cols, self.rows, cols, rows, cell_width.?, cell_height.? },
             );
         } else {
