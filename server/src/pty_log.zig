@@ -72,8 +72,6 @@ const Origin = enum {
     response,
 };
 
-const max_logged_bytes: usize = 512;
-
 /// Log bytes sent TO a pane's PTY from user input.
 pub fn logSendInput(pane_id: u16, data: []const u8) void {
     logTraffic(.send, .input, pane_id, data);
@@ -130,27 +128,18 @@ fn writeLogLine(file: std.fs.File, direction: Direction, origin: Origin, pane_id
         .response => "response",
     };
     const ts_ms = std.time.milliTimestamp();
-    const truncated = data.len > max_logged_bytes;
-    const slice = data[0..@min(data.len, max_logged_bytes)];
+    const slice = data;
 
     w.print(
         "{{\"ts_ms\":{d},\"event\":\"pty_io\",\"pane_id\":{d},\"origin\":\"{s}\",\"direction\":\"{s}\",\"len\":{d}",
         .{ ts_ms, pane_id, origin_str, dir_str, data.len },
     ) catch return;
 
-    if (truncated) {
-        w.writeAll(",\"truncated\":true") catch return;
-    }
-
     w.writeAll(",\"bytes\":[") catch return;
     writeBytesArray(w, slice) catch return;
     w.writeAll("],\"text\":\"") catch return;
     writeHumanString(w, slice) catch return;
-    if (truncated) {
-        w.writeAll("\",\"text_truncated\":true}") catch return;
-    } else {
-        w.writeAll("\"}") catch return;
-    }
+    w.writeAll("\"}") catch return;
     w.writeByte('\n') catch return;
 }
 
