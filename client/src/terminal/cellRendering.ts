@@ -25,6 +25,7 @@ export interface StyledRun {
   bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
   hyperlink?: string; // URL for OSC 8 hyperlinks
   wideRanges?: WideCharRange[]; // Ranges of wide (2-cell) characters within text
+  singleRanges?: WideCharRange[]; // Ranges of single-cell private-use characters within text
 }
 
 function isPrivateUseCodePoint(cp: number): boolean {
@@ -172,8 +173,11 @@ export function cellsToRuns(
       // Get hyperlink URL if this cell is part of a hyperlink
       const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
 
-      // Check if this is a wide character
-      const isWide = cell?.wide === Wide.WIDE || (char.length > 0 && hasPrivateUse(char));
+      // Check if this is a wide character, or a private-use glyph that should
+      // be constrained to a single cell (e.g. Nerd Font icons).
+      const isWide = cell?.wide === Wide.WIDE;
+      const isPrivateUse = char.length > 0 && hasPrivateUse(char);
+      const isSingle = !isWide && isPrivateUse;
 
       // Start a new run if style, selection, bgOverride, or hyperlink changes
       if (
@@ -191,6 +195,13 @@ export function cellsToRuns(
           const start = currentRun.text.length;
           currentRun.text += char;
           currentRun.wideRanges.push({ start, end: currentRun.text.length });
+        } else if (isSingle) {
+          if (!currentRun.singleRanges) {
+            currentRun.singleRanges = [];
+          }
+          const start = currentRun.text.length;
+          currentRun.text += char;
+          currentRun.singleRanges.push({ start, end: currentRun.text.length });
         } else {
           currentRun.text += char;
         }
@@ -199,6 +210,8 @@ export function cellsToRuns(
         currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
         if (isWide) {
           currentRun.wideRanges = [{ start: 0, end: char.length }];
+        } else if (isSingle) {
+          currentRun.singleRanges = [{ start: 0, end: char.length }];
         }
         runs.push(currentRun);
       }

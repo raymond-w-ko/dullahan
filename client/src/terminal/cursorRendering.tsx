@@ -66,16 +66,30 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
 /**
  * Render text content, wrapping wide characters in explicit-width spans.
  * Wide characters (CJK, emoji) need explicit 2-cell width for proper alignment
- * when mixed with different fallback fonts.
+ * when mixed with different fallback fonts. Private-use glyphs can be
+ * constrained to a single cell.
  */
 function renderTextWithWideChars(
   text: string,
   wideRanges: WideCharRange[] | undefined,
+  singleRanges: WideCharRange[] | undefined,
   baseClass: string,
   style: h.JSX.CSSProperties | undefined
 ): preact.JSX.Element | preact.JSX.Element[] {
-  // No wide characters - render as single element
-  if (!wideRanges || wideRanges.length === 0) {
+  const ranges: Array<{ start: number; end: number; className: string }> = [];
+  if (wideRanges) {
+    for (const range of wideRanges) {
+      ranges.push({ start: range.start, end: range.end, className: "wide-char" });
+    }
+  }
+  if (singleRanges) {
+    for (const range of singleRanges) {
+      ranges.push({ start: range.start, end: range.end, className: "single-char" });
+    }
+  }
+
+  // No special characters - render as single element
+  if (ranges.length === 0) {
     return (
       <span class={baseClass} style={style}>
         {text}
@@ -83,12 +97,14 @@ function renderTextWithWideChars(
     );
   }
 
-  // Has wide characters - split and render segments
+  ranges.sort((a, b) => a.start - b.start);
+
+  // Has special characters - split and render segments
   const elements: preact.JSX.Element[] = [];
   let pos = 0;
 
-  for (const range of wideRanges) {
-    // Render narrow text before this wide character
+  for (const range of ranges) {
+    // Render normal text before this range
     if (range.start > pos) {
       const narrowText = text.slice(pos, range.start);
       elements.push(
@@ -98,18 +114,22 @@ function renderTextWithWideChars(
       );
     }
 
-    // Render wide character with explicit width
-    const wideChar = text.slice(range.start, range.end);
+    // Render special character with explicit width
+    const specialChar = text.slice(range.start, range.end);
     elements.push(
-      <span key={`w${range.start}`} class={`${baseClass} wide-char`.trim()} style={style}>
-        {wideChar}
+      <span
+        key={`s${range.start}`}
+        class={`${baseClass} ${range.className}`.trim()}
+        style={style}
+      >
+        {specialChar}
       </span>
     );
 
     pos = range.end;
   }
 
-  // Render any remaining narrow text after the last wide character
+  // Render any remaining normal text after the last range
   if (pos < text.length) {
     const narrowText = text.slice(pos);
     elements.push(
@@ -142,7 +162,8 @@ function renderRunElement(
   // For hyperlinks, render as <a> tag for styling/cursor, but click is handled by MouseHandler
   if (run.hyperlink) {
     // For hyperlinks with wide chars, we need to handle it specially
-    if (run.wideRanges && run.wideRanges.length > 0) {
+    if ((run.wideRanges && run.wideRanges.length > 0) ||
+        (run.singleRanges && run.singleRanges.length > 0)) {
       return (
         <a
           key={key}
@@ -151,7 +172,7 @@ function renderRunElement(
           href={run.hyperlink}
           title={run.hyperlink}
         >
-          {renderTextWithWideChars(text, run.wideRanges, "", undefined)}
+          {renderTextWithWideChars(text, run.wideRanges, run.singleRanges, "", undefined)}
         </a>
       );
     }
@@ -168,8 +189,9 @@ function renderRunElement(
     );
   }
 
-  // No wide characters - simple span
-  if (!run.wideRanges || run.wideRanges.length === 0) {
+  // No special characters - simple span
+  if ((!run.wideRanges || run.wideRanges.length === 0) &&
+      (!run.singleRanges || run.singleRanges.length === 0)) {
     return (
       <span key={key} class={classes} style={style}>
         {text}
@@ -177,10 +199,10 @@ function renderRunElement(
     );
   }
 
-  // Has wide characters - render with explicit widths
+  // Has special characters - render with explicit widths
   return (
     <span key={key}>
-      {renderTextWithWideChars(text, run.wideRanges, classes, style)}
+      {renderTextWithWideChars(text, run.wideRanges, run.singleRanges, classes, style)}
     </span>
   );
 }

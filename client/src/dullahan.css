@@ -841,6 +841,13 @@ body.layout-resizing-vertical * {
   text-align: center;
 }
 
+/* Private-use glyphs (e.g. Nerd Font icons) are constrained to a single cell. */
+.single-char {
+  display: inline-block;
+  width: var(--cell-width, 1ch);
+  text-align: center;
+}
+
 /* Cursor styles - use --cursor-bg if set, else theme default */
 .cursor-block {
   background: var(--cursor-bg, var(--term-cursor-bg));
