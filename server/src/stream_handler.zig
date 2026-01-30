@@ -27,6 +27,7 @@ const StreamAction = ghostty.StreamAction;
 
 const Pane = @import("pane.zig").Pane;
 const dlog = @import("dlog.zig");
+const builtin = @import("builtin");
 
 const log = dlog.scoped(.pane);
 
@@ -675,7 +676,7 @@ fn getOsName() ?[]const u8 {
     var temp: [128]u8 = undefined;
     var len: usize = 0;
 
-    if (std.builtin.target.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         len = readCommandOutput(&temp, &.{ "sw_vers", "-productName" }) orelse 0;
     }
     if (len == 0) {
@@ -695,7 +696,7 @@ fn getOsName() ?[]const u8 {
 }
 
 fn readUnameSysname(out: []u8) ?usize {
-    const uts = std.posix.uname() catch return null;
+    const uts = std.posix.uname();
     const sysname = std.mem.sliceTo(&uts.sysname, 0);
     if (sysname.len == 0) return null;
     const len = @min(sysname.len, out.len);
