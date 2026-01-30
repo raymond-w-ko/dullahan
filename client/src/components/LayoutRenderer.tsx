@@ -40,6 +40,7 @@ function NodesWithDividers({
   containerRef,
   onResize,
   onDragEnd: parentDragEnd,
+  onResizeLayout,
 }: {
   nodes: LayoutNode[];
   level: number;
@@ -47,6 +48,7 @@ function NodesWithDividers({
   containerRef: { current: HTMLElement | null };
   onResize: (index: number, deltaPercent: number) => void;
   onDragEnd?: () => void;
+  onResizeLayout?: (nodes: LayoutNode[]) => void;
 }) {
   const isHorizontal = level % 2 === 0;
   const direction = isHorizontal ? "horizontal" : "vertical";
@@ -98,8 +100,9 @@ function NodesWithDividers({
         node={node}
         level={level}
         index={i}
+        siblings={nodes}
         windowId={windowId}
-        onResizeLayout={undefined} // Children handle their own resize
+        onResizeLayout={onResizeLayout}
       />
     );
 
@@ -127,12 +130,14 @@ function NodeRenderer({
   node,
   level,
   index,
+  siblings,
   windowId,
   onResizeLayout,
 }: {
   node: LayoutNode;
   level: number;
   index: number;
+  siblings: LayoutNode[];
   windowId?: number;
   onResizeLayout?: (nodes: LayoutNode[]) => void;
 }): h.JSX.Element {
@@ -142,6 +147,21 @@ function NodeRenderer({
   // Use flex-basis for sizing: in horizontal layout it controls width, in vertical it controls height
   const size = isHorizontal ? node.width : node.height;
   const style = { flex: `0 0 ${size}%` };
+
+  const handleResizeLayout = useCallback(
+    (childNodes: LayoutNode[]) => {
+      if (!onResizeLayout) return;
+      const updated = cloneNodes(siblings);
+      const target = updated[index];
+      if (isContainer(target)) {
+        target.children = childNodes;
+      } else {
+        return;
+      }
+      onResizeLayout(updated);
+    },
+    [siblings, index, onResizeLayout]
+  );
 
   if (isPane(node)) {
     // Pane node - render terminal
@@ -181,7 +201,7 @@ function NodeRenderer({
         containerClass={containerClass}
         style={style}
         windowId={windowId}
-        onResizeLayout={onResizeLayout}
+        onResizeLayout={handleResizeLayout}
       />
     );
   }
@@ -287,6 +307,7 @@ function ContainerRenderer({
         containerRef={containerRef}
         onResize={handleResize}
         onDragEnd={handleDragEnd}
+        onResizeLayout={onResizeLayout}
       />
     </div>
   );
@@ -388,6 +409,7 @@ export function LayoutRenderer({
         containerRef={containerRef}
         onResize={handleResize}
         onDragEnd={handleDragEnd}
+        onResizeLayout={onResizeLayout}
       />
     </div>
   );
