@@ -1013,14 +1013,31 @@ pub const Pane = struct {
     }
 
     /// Resize the pane
-    pub fn resize(self: *Pane, cols: u16, rows: u16) !void {
+    pub fn resize(self: *Pane, cols: u16, rows: u16, cell_width: ?f32, cell_height: ?f32) !void {
         plog.debug("Pane {d}: Resize {d}x{d} -> {d}x{d}", .{ self.id, self.cols, self.rows, cols, rows });
 
         self.cols = cols;
         self.rows = rows;
         try self.terminal.resize(self.allocator, cols, rows);
-        self.terminal.width_px = @as(u32, cols) * @as(u32, constants.terminal.default_cell_width_px);
-        self.terminal.height_px = @as(u32, rows) * @as(u32, constants.terminal.default_cell_height_px);
+        if (cell_width) |cw| {
+            if (cell_height) |ch| {
+                if (cw > 0 and ch > 0) {
+                    const width_px: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(cols)) * cw));
+                    const height_px: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(rows)) * ch));
+                    self.terminal.width_px = width_px;
+                    self.terminal.height_px = height_px;
+                } else {
+                    self.terminal.width_px = @as(u32, cols) * @as(u32, constants.terminal.default_cell_width_px);
+                    self.terminal.height_px = @as(u32, rows) * @as(u32, constants.terminal.default_cell_height_px);
+                }
+            } else {
+                self.terminal.width_px = @as(u32, cols) * @as(u32, constants.terminal.default_cell_width_px);
+                self.terminal.height_px = @as(u32, rows) * @as(u32, constants.terminal.default_cell_height_px);
+            }
+        } else {
+            self.terminal.width_px = @as(u32, cols) * @as(u32, constants.terminal.default_cell_width_px);
+            self.terminal.height_px = @as(u32, rows) * @as(u32, constants.terminal.default_cell_height_px);
+        }
 
         // Resize PTY if we have one
         if (self.pty) |*pty| {

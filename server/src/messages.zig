@@ -22,6 +22,8 @@ pub const ResizeMessage = struct {
     paneId: u16,
     cols: u16,
     rows: u16,
+    cellWidth: ?f32 = null,
+    cellHeight: ?f32 = null,
 };
 
 pub const ScrollMessage = struct {
@@ -200,6 +202,8 @@ pub const ParsedResize = struct {
     paneId: u16,
     cols: u16,
     rows: u16,
+    cellWidth: ?f32 = null,
+    cellHeight: ?f32 = null,
 };
 
 pub const ParsedScroll = struct {

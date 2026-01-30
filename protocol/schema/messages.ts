@@ -73,6 +73,8 @@ export interface ResizeMessage {
   paneId: number;
   cols: number;
   rows: number;
+  cellWidth?: number;
+  cellHeight?: number;
 }
 
 /** Scroll viewport request */

@@ -274,11 +274,15 @@ describe("Client → Server Messages", () => {
         paneId: 1,
         cols: 80,
         rows: 24,
+        cellWidth: 9.5,
+        cellHeight: 18,
       };
 
       expect(msg.type).toBe("resize");
       expect(msg.cols).toBe(80);
       expect(msg.rows).toBe(24);
+      expect(msg.cellWidth).toBe(9.5);
+      expect(msg.cellHeight).toBe(18);
     });
 
     test("large terminal", () => {

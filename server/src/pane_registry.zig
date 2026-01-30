@@ -157,7 +157,7 @@ pub const PaneRegistry = struct {
 
         var it = self.panes.valueIterator();
         while (it.next()) |pane_ptr| {
-            try pane_ptr.*.resize(cols, rows);
+            try pane_ptr.*.resize(cols, rows, null, null);
         }
     }
 };

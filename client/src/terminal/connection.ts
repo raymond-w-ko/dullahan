@@ -232,8 +232,8 @@ export class TerminalConnection {
   private _panes: Map<number, PaneState> = new Map();
 
   // Pending resize tracking - resizes are queued and sent when connected
-  private _pendingResizes: Map<number, { cols: number; rows: number }> = new Map();
-  private _lastSentResizes: Map<number, { cols: number; rows: number }> = new Map();
+  private _pendingResizes: Map<number, { cols: number; rows: number; cellWidth: number; cellHeight: number }> = new Map();
+  private _lastSentResizes: Map<number, { cols: number; rows: number; cellWidth: number; cellHeight: number }> = new Map();
   private _resizeDebounceTimer: number | null = null;
   private static readonly RESIZE_DEBOUNCE_MS = 333;
 
@@ -742,9 +742,9 @@ export class TerminalConnection {
    * Send resize for a specific pane (immediate, bypasses pending queue)
    * Only master can resize.
    */
-  sendResize(paneId: number, cols: number, rows: number): void {
+  sendResize(paneId: number, cols: number, rows: number, cellWidth: number, cellHeight: number): void {
     if (!this.isMaster) return;
-    this.send({ type: "resize", paneId, cols, rows });
+    this.send({ type: "resize", paneId, cols, rows, cellWidth, cellHeight });
   }
 
   /**
@@ -755,9 +755,9 @@ export class TerminalConnection {
    * Uses a persistent measurement element (.terminal-measure) that stays in the DOM
    * for efficiency and debuggability in Chrome DevTools.
    */
-  calculatePaneSize(container: HTMLElement): { cols: number; rows: number } {
-    const { cols, rows } = calculateTerminalSize(container);
-    return { cols, rows };
+  calculatePaneSize(container: HTMLElement): { cols: number; rows: number; cellWidth: number; cellHeight: number } {
+    const { cols, rows, cellWidth, cellHeight } = calculateTerminalSize(container);
+    return { cols, rows, cellWidth, cellHeight };
   }
 
   /**
@@ -765,7 +765,7 @@ export class TerminalConnection {
    * Does not send immediately - call flushPendingResizes() or wait for connection.
    * Skips if dimensions match last sent values.
    */
-  setPaneSize(paneId: number, cols: number, rows: number): void {
+  setPaneSize(paneId: number, cols: number, rows: number, cellWidth: number, cellHeight: number): void {
     // Skip if not ready
     if (cols < 0 || rows < 0) {
       return;
@@ -773,13 +773,19 @@ export class TerminalConnection {
 
     // Skip if same as last sent
     const lastSent = this._lastSentResizes.get(paneId);
-    if (lastSent && lastSent.cols === cols && lastSent.rows === rows) {
+    if (
+      lastSent &&
+      lastSent.cols === cols &&
+      lastSent.rows === rows &&
+      lastSent.cellWidth === cellWidth &&
+      lastSent.cellHeight === cellHeight
+    ) {
       return;
     }
 
     // Queue the resize
     resizeLog.log(`Queued pane ${paneId}: ${cols}x${rows}`);
-    this._pendingResizes.set(paneId, { cols, rows });
+    this._pendingResizes.set(paneId, { cols, rows, cellWidth, cellHeight });
 
     // Schedule debounced flush to avoid resize cascades in dev builds
     this.scheduleResizeFlush();
@@ -811,7 +817,14 @@ export class TerminalConnection {
 
     for (const [paneId, size] of this._pendingResizes) {
       resizeLog.log(`Sending pane ${paneId}: ${size.cols}x${size.rows}`);
-      this.send({ type: "resize", paneId, cols: size.cols, rows: size.rows });
+      this.send({
+        type: "resize",
+        paneId,
+        cols: size.cols,
+        rows: size.rows,
+        cellWidth: size.cellWidth,
+        cellHeight: size.cellHeight,
+      });
       this._lastSentResizes.set(paneId, size);
     }
     this._pendingResizes.clear();

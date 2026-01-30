@@ -214,6 +214,8 @@ fn handleResize(el: *EventLoop, client: *ClientState, resize_msg: ParsedResize) 
     const pane_id = resize_msg.paneId;
     const cols = resize_msg.cols;
     const rows = resize_msg.rows;
+    const cell_width = resize_msg.cellWidth;
+    const cell_height = resize_msg.cellHeight;
 
     if (cols < constants.limits.min_cols or cols > constants.limits.max_cols or
         rows < constants.limits.min_rows or rows > constants.limits.max_rows)
@@ -231,7 +233,7 @@ fn handleResize(el: *EventLoop, client: *ClientState, resize_msg: ParsedResize) 
         log.warn("Resize for unknown pane {d}", .{pane_id});
         return;
     };
-    try pane.resize(cols, rows);
+    try pane.resize(cols, rows, cell_width, cell_height);
 }
 
 fn handleScroll(el: *EventLoop, scroll_msg: ParsedScroll) void {

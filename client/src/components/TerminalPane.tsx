@@ -63,7 +63,13 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
       if (size.cols > 0 && size.rows > 0) {
         // Update store and notify server with the captured paneId
         setPaneDimensions(currentPaneId, size.cols, size.rows);
-        connection.setPaneSize(currentPaneId, size.cols, size.rows);
+        connection.setPaneSize(
+          currentPaneId,
+          size.cols,
+          size.rows,
+          size.cellWidth,
+          size.cellHeight
+        );
       }
     };
 

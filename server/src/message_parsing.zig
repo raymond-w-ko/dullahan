@@ -88,7 +88,13 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
         }) catch return null;
         defer parsed.deinit();
         return .{
-            .msg = .{ .resize = .{ .paneId = parsed.value.paneId, .cols = parsed.value.cols, .rows = parsed.value.rows } },
+            .msg = .{ .resize = .{
+                .paneId = parsed.value.paneId,
+                .cols = parsed.value.cols,
+                .rows = parsed.value.rows,
+                .cellWidth = parsed.value.cellWidth,
+                .cellHeight = parsed.value.cellHeight,
+            } },
             .cleanup = .{ .none = {} },
         };
     } else if (std.mem.eql(u8, type_str, "scroll")) {
@@ -360,8 +366,22 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
         const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
         const cols: u16 = @intCast(cols_payload.getUint() catch return null);
         const rows: u16 = @intCast(rows_payload.getUint() catch return null);
+        const cell_width: ?f32 = if (payload.mapGet("cellWidth") catch null) |p|
+            @floatCast(p.asFloat() catch return null)
+        else
+            null;
+        const cell_height: ?f32 = if (payload.mapGet("cellHeight") catch null) |p|
+            @floatCast(p.asFloat() catch return null)
+        else
+            null;
         return .{
-            .msg = .{ .resize = .{ .paneId = pane_id, .cols = cols, .rows = rows } },
+            .msg = .{ .resize = .{
+                .paneId = pane_id,
+                .cols = cols,
+                .rows = rows,
+                .cellWidth = cell_width,
+                .cellHeight = cell_height,
+            } },
             .payload = payload,
         };
     } else if (std.mem.eql(u8, type_str, "scroll")) {
