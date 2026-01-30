@@ -128,6 +128,11 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
         const opt = std.fmt.bufPrint(&buf, "--socket={s}", .{p}) catch unreachable;
         try argv.append(allocator, try allocator.dupe(u8, opt));
     }
+    if (args.pid_path) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--pid={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
     if (args.static_dir) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--static-dir={s}", .{p}) catch unreachable;

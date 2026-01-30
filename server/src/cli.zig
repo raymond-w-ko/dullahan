@@ -71,6 +71,8 @@ pub const CliArgs = struct {
                 args.timeout_ms = std.fmt.parseInt(u32, val, 10) catch constants.timeout.cli_default_ms;
             } else if (std.mem.startsWith(u8, arg, "--socket=")) {
                 args.socket_path = @as(?[]const u8, arg["--socket=".len..]);
+            } else if (std.mem.startsWith(u8, arg, "--pid=")) {
+                args.pid_path = @as(?[]const u8, arg["--pid=".len..]);
             } else if (std.mem.startsWith(u8, arg, "--static-dir=")) {
                 args.static_dir = arg["--static-dir=".len..];
             } else if (std.mem.startsWith(u8, arg, "--port=")) {
@@ -96,27 +98,21 @@ pub const CliArgs = struct {
 };
 
 pub fn printUsage() void {
-    const usage =
-        \\Usage: dullahan [OPTIONS] <COMMAND>
-        \\
-        \\Commands:
-        \\  serve                      Run as server (foreground)
-        \\  status                     Show server status
-        \\  ping                       Check if server is responsive
-        \\  quit                       Shutdown the server
-        \\  help                       Show available commands
-        \\  shell                      Show detected shell and detection steps
-        \\  panes                      List all pane IDs
-        \\  windows                    List windows with pane IDs (JSON)
-        \\  send <pane_id> [text]      Send text to pane (reads stdin if no text)
-        \\  clipboard-set <c|p> <text> Set internal clipboard (c=clipboard, p=primary)
-        \\  clipboard-get <c|p>        Get internal clipboard content
-        \\  test                       Run test utilities (see 'dullahan test help')
+    std.debug.print("Usage: dullahan [OPTIONS] <COMMAND>\n\n", .{});
+    std.debug.print("Commands:\n", .{});
+    std.debug.print("  {s:<18} {s}\n", .{ "serve", "Run as server (foreground)" });
+    std.debug.print("  {s:<18} {s}\n", .{ "test", "Run test utilities (see 'dullahan test help')" });
+    inline for (std.meta.fields(ipc.Command)) |field| {
+        const cmd: ipc.Command = @enumFromInt(field.value);
+        std.debug.print("  {s:<18} {s}\n", .{ field.name, cmd.description() });
+    }
+    std.debug.print(
         \\
         \\Options:
         \\  -h, --help           Show this help
         \\  --timeout=MS         Command timeout in milliseconds (default: 5000)
         \\  --socket=PATH        Socket path (default: /tmp/dullahan-<uid>/dullahan.sock)
+        \\  --pid=PATH           PID file path (default: /tmp/dullahan-<uid>/dullahan.pid)
         \\  --static-dir=PATH    Serve static files from directory
         \\  --port=PORT          WebSocket/HTTP port (default: 7681)
         \\  --pty-log            Enable PTY traffic logging (truncates existing log)
@@ -132,12 +128,13 @@ pub fn printUsage() void {
         \\  dullahan serve --tls-cert=cert.pem --tls-key=key.pem  # Start HTTPS server
         \\  dullahan panes                          # List pane IDs: "0 1 2"
         \\  dullahan windows                        # List windows with panes (JSON)
+        \\  dullahan dump                           # Dump terminal state (compact)
+        \\  dullahan dump-raw                       # Dump raw terminal cells
         \\  dullahan send 1 "echo hello"            # Send to pane 1
         \\  echo "ls -la" | dullahan send 1         # Send from stdin to pane 1
         \\  dullahan test keytest-kitty             # Run keyboard tester
         \\
-    ;
-    std.debug.print("{s}", .{usage});
+    , .{});
 }
 
 pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
