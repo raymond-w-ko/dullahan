@@ -261,19 +261,22 @@ pub const Handler = struct {
                 while (gettcap.next()) |key| {
                     log.debug("XTGETTCAP request (hex): {s}", .{key});
 
-                    if (xtgettcapMatches(key, "696E646E")) { // indn
+                    // indn: terminfo capability for "scroll down n lines".
+                    if (xtgettcapMatches(key, "696E646E")) {
                         self.sendXtgettcapResponse(key, "\\E[%p1%dS") catch |e| {
                             log.warn("Failed to send XTGETTCAP indn response: {any}", .{e});
                         };
                         continue;
                     }
-                    if (xtgettcapMatches(key, "4D73")) { // Ms (OSC 52 clipboard)
+                    // Ms: terminfo capability for OSC 52 clipboard operations.
+                    if (xtgettcapMatches(key, "4D73")) {
                         self.sendXtgettcapResponse(key, "\\E]52;%p1%s;%p2%s\\007") catch |e| {
                             log.warn("Failed to send XTGETTCAP Ms response: {any}", .{e});
                         };
                         continue;
                     }
-                    if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) { // query-os-name
+                    // query-os-name: fish extension for reporting the OS name.
+                    if (xtgettcapMatches(key, "71756572792D6F732D6E616D65")) {
                         const os_name = getOsName() orelse "unknown";
                         self.sendXtgettcapResponse(key, os_name) catch |e| {
                             log.warn("Failed to send XTGETTCAP query-os-name response: {any}", .{e});
