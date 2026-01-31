@@ -1,8 +1,83 @@
 const std = @import("std");
 
+fn pathExists(path: []const u8) bool {
+    if (!std.fs.path.isAbsolute(path)) return false;
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn resolveOpenSslPrefix(b: *std.Build, openssl_dir: ?[]const u8) ?[]const u8 {
+    if (openssl_dir) |dir| return dir;
+
+    const candidates = [_][]const u8{
+        "/opt/homebrew/opt/openssl@3",
+        "/usr/local/opt/openssl@3",
+        "/opt/homebrew/opt/openssl@1.1",
+        "/usr/local/opt/openssl@1.1",
+    };
+
+    for (candidates) |prefix| {
+        const header = b.pathJoin(&.{ prefix, "include", "openssl", "ssl.h" });
+        if (pathExists(header)) return prefix;
+    }
+
+    return null;
+}
+
+fn linkOpenSsl(
+    b: *std.Build,
+    step: *std.Build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    openssl_dir: ?[]const u8,
+    openssl_include_dir: ?[]const u8,
+    openssl_lib_dir: ?[]const u8,
+) void {
+    var include_dir = openssl_include_dir;
+    var lib_dir = openssl_lib_dir;
+
+    if (openssl_dir) |prefix| {
+        if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
+        if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
+    }
+
+    if (target.result.os.tag == .macos) {
+        if (include_dir == null or lib_dir == null) {
+            if (resolveOpenSslPrefix(b, openssl_dir)) |prefix| {
+                if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
+                if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
+            }
+        }
+    }
+
+    if (include_dir) |path| {
+        if (pathExists(path)) step.addIncludePath(.{ .cwd_relative = path });
+    }
+    if (lib_dir) |path| {
+        if (pathExists(path)) step.addLibraryPath(.{ .cwd_relative = path });
+    }
+
+    step.linkSystemLibrary2("ssl", .{ .use_pkg_config = .yes });
+    step.linkSystemLibrary2("crypto", .{ .use_pkg_config = .yes });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const openssl_dir = b.option(
+        []const u8,
+        "openssl-dir",
+        "Path to OpenSSL prefix (e.g. /opt/homebrew/opt/openssl@3)",
+    );
+    const openssl_include_dir = b.option(
+        []const u8,
+        "openssl-include-dir",
+        "Path to OpenSSL headers (contains openssl/ssl.h)",
+    );
+    const openssl_lib_dir = b.option(
+        []const u8,
+        "openssl-lib-dir",
+        "Path to OpenSSL libraries (contains libssl)",
+    );
 
     // Create a module for the core library (can be imported by tests and exe)
     const dullahan_mod = b.addModule("dullahan", .{
@@ -50,8 +125,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibC();
-    exe.linkSystemLibrary("ssl");
-    exe.linkSystemLibrary("crypto");
+    linkOpenSsl(b, exe, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
 
     b.installArtifact(exe);
 
@@ -74,8 +148,7 @@ pub fn build(b: *std.Build) void {
         .root_module = dullahan_mod,
     });
     mod_tests.linkLibC();
-    mod_tests.linkSystemLibrary("ssl");
-    mod_tests.linkSystemLibrary("crypto");
+    linkOpenSsl(b, mod_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     // Test the executable's root module
@@ -83,8 +156,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
     exe_tests.linkLibC();
-    exe_tests.linkSystemLibrary("ssl");
-    exe_tests.linkSystemLibrary("crypto");
+    linkOpenSsl(b, exe_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // Integration tests (separate test/ directory)
@@ -99,8 +171,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     integration_tests.linkLibC();
-    integration_tests.linkSystemLibrary("ssl");
-    integration_tests.linkSystemLibrary("crypto");
+    linkOpenSsl(b, integration_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // `zig build test` runs all tests (unit + integration)
