@@ -413,8 +413,20 @@ export class TerminalConnection {
       this.emit("connect");
     };
 
-    this.ws.onclose = () => {
-      connLog.log("WebSocket disconnected");
+    this.ws.onclose = (event) => {
+      const detail = {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        url: this.ws?.url ?? this.url,
+        readyState: this.ws?.readyState,
+        reconnectAttempts: this.reconnectAttempts,
+        clientId: this._clientId,
+        masterId: this._masterId,
+      };
+      const error = new Error(`WebSocket disconnected (code ${event.code})`);
+      connLog.error("WebSocket disconnected:", detail, event);
+      if (error.stack) connLog.error("WebSocket disconnect stack:", error.stack);
       // Stop latency pings
       this.stopPingTimer();
       // Drop any queued outbound messages
