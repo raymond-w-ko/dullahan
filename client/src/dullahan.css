@@ -81,7 +81,7 @@ html, body {
    ========================================================================== */
 
 .bottombar {
-  height: 24px;
+  height: 20px;
   background: rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: row;
@@ -92,8 +92,8 @@ html, body {
 }
 
 .bottombar-logo {
-  width: 2rem;
-  height: 2rem;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -669,10 +669,11 @@ body.layout-resizing-vertical * {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--space-1);
+  padding: 0;
   background: var(--term-selection-bg);
   font-size: var(--term-font-size);
   line-height: var(--term-line-height);
+  height: calc(var(--term-font-size) * var(--term-line-height));
   flex-shrink: 0;
 }
 
@@ -712,7 +713,7 @@ body.layout-resizing-vertical * {
   background: none;
   border: 1px solid color-mix(in srgb, var(--c8) 60%, transparent);
   color: var(--c8);
-  font-size: 0.7rem;
+  font-size: 0.5rem;
   line-height: 1;
   cursor: pointer;
   padding: 0.15rem 0.4rem;
@@ -742,6 +743,7 @@ body.layout-resizing-vertical * {
   transition: color 0.15s;
   padding: 0;
   margin-left: 1rem;
+  margin-right: 1rem;
   width: 0.75rem;
   height: 0.75rem;
   display: flex;
