@@ -39,7 +39,7 @@ html, body {
   --term-selection-fg: #ffffff;
 
   /* Font settings */
-  --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", monospace;
+  --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", "Symbols Nerd Font", monospace;
   --term-font-size: 14px;
   --term-symbol-font: var(--term-font);
   --term-symbol-font-size: var(--term-font-size);

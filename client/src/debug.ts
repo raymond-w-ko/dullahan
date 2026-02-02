@@ -42,6 +42,8 @@ interface DebugConfig {
   raw: string;
 }
 
+const DEFAULT_DEBUG_CONFIG = '-all,+connection';
+
 /**
  * Parse Wine-style debug config string
  * Examples: "+all,-mouse", "+mouse,+keyboard", "-all,+connection"
@@ -120,8 +122,8 @@ function loadDebugConfig(): DebugConfig {
     return parseDebugConfig(stored);
   }
 
-  // Disabled by default
-  return { allEnabled: false, enabled: new Set(), disabled: new Set(), raw: '' };
+  // Default when not specified
+  return parseDebugConfig(DEFAULT_DEBUG_CONFIG);
 }
 
 // Current debug configuration (mutable for runtime changes)
