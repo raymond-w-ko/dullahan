@@ -43,7 +43,7 @@ html, body {
   --term-font-size: 14px;
   --term-symbol-font: var(--term-font);
   --term-symbol-font-size: var(--term-font-size);
-  --term-line-height: 14.5px;
+  --term-line-height: 14px;
 
   /* Spacing - compact by default */
   --space-1: 2px;
