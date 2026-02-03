@@ -91,6 +91,13 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     return raw.length === 0 ? 0 : parseInt(raw, 10);
   };
   const inputFloat = (e: Event) => parseFloat(inputValue(e));
+  const inputLineHeight = (e: Event) => {
+    const value = inputFloat(e);
+    if (!Number.isFinite(value) || value <= 2.0) {
+      return settings.fontSize;
+    }
+    return Math.round(value / 0.25) * 0.25;
+  };
   const inputChecked = (e: Event) => (e.target as HTMLInputElement).checked;
 
   const modalStyle = {
@@ -218,14 +225,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </label>
 
             <label class="settings-field">
-              <span class="settings-label">Line Height</span>
+              <span class="settings-label">Line Height (px)</span>
               <input
                 type="number"
-                min="1"
-                max="3"
-                step="0.05"
+                min="4"
+                max="96"
+                step="0.25"
                 value={settings.lineHeight}
-                onInput={(e) => setSetting("lineHeight", inputFloat(e))}
+                onInput={(e) => setSetting("lineHeight", inputLineHeight(e))}
               />
             </label>
           </div>

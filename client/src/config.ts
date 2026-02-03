@@ -9,6 +9,23 @@
 import { debug } from "./debug";
 
 const configLog = debug.category('config');
+const LINE_HEIGHT_STEP = 0.25;
+const LINE_HEIGHT_INVALID_MAX = 2.0;
+
+function roundToStep(value: number, step: number): number {
+  return Math.round(value / step) * step;
+}
+
+function normalizeLineHeight(value: number, fontSize: number): number {
+  const safeFontSize =
+    Number.isFinite(fontSize) && fontSize > 0 ? fontSize : DEFAULTS.fontSize;
+
+  if (!Number.isFinite(value) || value <= LINE_HEIGHT_INVALID_MAX) {
+    return roundToStep(safeFontSize, LINE_HEIGHT_STEP);
+  }
+
+  return roundToStep(value, LINE_HEIGHT_STEP);
+}
 
 // Type definitions for config values
 export interface ConfigSchema {
@@ -72,7 +89,7 @@ export const DEFAULTS: ConfigSchema = {
   symbolFontSize: 0,
   fontStyle: 'normal',
   fontFeature: '',
-  lineHeight: 1.2,
+  lineHeight: 14.5,
   
   // Cell adjustments
   adjustCellWidth: 0,
@@ -166,7 +183,15 @@ export function get<K extends ConfigKey>(key: K, fallback?: ConfigValue<K>): Con
     
     if (defaultType === 'number') {
       const num = parseFloat(stored);
-      return (isNaN(num) ? defaultValue : num) as ConfigValue<K>;
+      if (isNaN(num)) {
+        return defaultValue as ConfigValue<K>;
+      }
+
+      if (key === 'lineHeight') {
+        return normalizeLineHeight(num, get('fontSize')) as ConfigValue<K>;
+      }
+
+      return num as ConfigValue<K>;
     }
     
     if (defaultType === 'boolean') {
@@ -268,7 +293,7 @@ export function applyToCSS(): void {
   );
   root.style.setProperty('--term-font-weight', get('fontStyle'));
   root.style.setProperty('--term-font-feature', get('fontFeature') || 'normal');
-  root.style.setProperty('--term-line-height', String(get('lineHeight')));
+  root.style.setProperty('--term-line-height', `${get('lineHeight')}px`);
   
   // Cursor
   root.style.setProperty('--term-cursor-opacity', String(get('cursorOpacity')));

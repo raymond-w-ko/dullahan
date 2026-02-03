@@ -43,7 +43,7 @@ html, body {
   --term-font-size: 14px;
   --term-symbol-font: var(--term-font);
   --term-symbol-font-size: var(--term-font-size);
-  --term-line-height: 1.2;
+  --term-line-height: 14.5px;
 
   /* Spacing - compact by default */
   --space-1: 2px;
@@ -673,7 +673,7 @@ body.layout-resizing-vertical * {
   background: var(--term-selection-bg);
   font-size: var(--term-font-size);
   line-height: var(--term-line-height);
-  height: calc(var(--term-font-size) * var(--term-line-height));
+  height: var(--term-line-height);
   flex-shrink: 0;
 }
 
@@ -850,7 +850,7 @@ body.layout-resizing-vertical * {
 }
 
 .terminal-line {
-  height: calc(var(--term-font-size) * var(--term-line-height));
+  height: var(--term-line-height);
   white-space: pre;
 }
 

@@ -185,8 +185,14 @@ describe("get", () => {
   });
 
   test("handles float numbers", () => {
+    mockStorage.set("dullahan.lineHeight", "15.75");
+    expect(get("lineHeight")).toBe(15.75);
+  });
+
+  test("uses font size when line height is invalid", () => {
+    mockStorage.set("dullahan.fontSize", "18");
     mockStorage.set("dullahan.lineHeight", "1.5");
-    expect(get("lineHeight")).toBe(1.5);
+    expect(get("lineHeight")).toBe(18);
   });
 
   test("handles negative numbers", () => {
@@ -223,8 +229,8 @@ describe("set", () => {
   });
 
   test("stores float numbers", () => {
-    set("lineHeight", 1.35);
-    expect(mockStorage.get("dullahan.lineHeight")).toBe("1.35");
+    set("lineHeight", 15.25);
+    expect(mockStorage.get("dullahan.lineHeight")).toBe("15.25");
   });
 });
 
@@ -357,7 +363,7 @@ describe("DEFAULTS", () => {
 
   test("has reasonable line height", () => {
     expect(DEFAULTS.lineHeight).toBeGreaterThan(0);
-    expect(DEFAULTS.lineHeight).toBeLessThan(5);
+    expect(DEFAULTS.lineHeight).toBeLessThan(200);
   });
 
   test("has reasonable cursor opacity", () => {
