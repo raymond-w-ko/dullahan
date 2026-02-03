@@ -40,6 +40,76 @@ function isPrivateUseCodePoint(cp: number): boolean {
   );
 }
 
+function getCellCodepoint(cell: Cell | undefined): number {
+  if (!cell) return 0;
+  if (
+    cell.content.tag === ContentTag.CODEPOINT ||
+    cell.content.tag === ContentTag.CODEPOINT_GRAPHEME
+  ) {
+    return cell.content.codepoint;
+  }
+  return 0;
+}
+
+function isWhitespaceCodepoint(cp: number): boolean {
+  return cp === 0 || cp === 0x0020 || cp === 0x2002;
+}
+
+function isPowerline(cp: number): boolean {
+  return cp >= 0xe0b0 && cp <= 0xe0d7;
+}
+
+function isBoxDrawing(cp: number): boolean {
+  return cp >= 0x2500 && cp <= 0x257f;
+}
+
+function isBlockElement(cp: number): boolean {
+  return cp >= 0x2580 && cp <= 0x259f;
+}
+
+function isLegacyComputing(cp: number): boolean {
+  return (cp >= 0x1fb00 && cp <= 0x1fbff) || (cp >= 0x1cc00 && cp <= 0x1cebf);
+}
+
+function isGraphicsElement(cp: number): boolean {
+  return isBoxDrawing(cp) || isBlockElement(cp) || isLegacyComputing(cp) || isPowerline(cp);
+}
+
+function isSymbolLikeCodepoint(cp: number): boolean {
+  return isPrivateUseCodePoint(cp);
+}
+
+function shouldExpandSymbol(
+  cells: Cell[],
+  idx: number,
+  cols: number
+): boolean {
+  const cell = cells[idx];
+  if (!cell) return false;
+  if (cell.wide !== Wide.NARROW) return false;
+
+  const cp = getCellCodepoint(cell);
+  if (!isSymbolLikeCodepoint(cp)) return false;
+
+  const x = idx % cols;
+  if (x >= cols - 1) return false;
+
+  const nextCell = cells[idx + 1];
+  if (!nextCell || nextCell.wide !== Wide.NARROW) return false;
+  const nextCp = getCellCodepoint(nextCell);
+  if (!isWhitespaceCodepoint(nextCp)) return false;
+
+  if (x > 0) {
+    const prevCell = cells[idx - 1];
+    const prevCp = getCellCodepoint(prevCell);
+    if (isSymbolLikeCodepoint(prevCp) && !isGraphicsElement(prevCp)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function hasPrivateUse(text: string): boolean {
   for (const ch of text) {
     const cp = ch.codePointAt(0);
@@ -153,8 +223,13 @@ export function cellsToRuns(
   for (let y = 0; y < rows; y++) {
     const runs: StyledRun[] = [];
     let currentRun: StyledRun | null = null;
+    let skipNext = false;
 
     for (let x = 0; x < cols; x++) {
+      if (skipNext) {
+        skipNext = false;
+        continue;
+      }
       const idx = y * cols + x;
       const cell = cells[idx];
 
@@ -163,6 +238,11 @@ export function cellsToRuns(
       // still occupy a cell to keep column alignment.
       if (cell && cell.wide === Wide.SPACER_TAIL) {
         continue;
+      }
+
+      const expandSymbol = shouldExpandSymbol(cells, idx, cols);
+      if (expandSymbol) {
+        skipNext = true;
       }
 
       const char = cell ? cellToChar(cell, graphemes, idx) : " ";
@@ -175,7 +255,7 @@ export function cellsToRuns(
 
       // Check if this is a wide character, or a private-use glyph that should
       // be constrained to a single cell (e.g. Nerd Font icons).
-      const isWide = cell?.wide === Wide.WIDE;
+      const isWide = cell?.wide === Wide.WIDE || expandSymbol;
       const isPrivateUse = char.length > 0 && hasPrivateUse(char);
       const isSingle = !isWide && isPrivateUse;
 

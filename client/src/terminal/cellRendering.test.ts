@@ -99,6 +99,38 @@ describe("cellsToRuns", () => {
     expect(lines[0]![0]!.text).toBe("A中B");
   });
 
+  test("symbol-like PUA expands when followed by whitespace", () => {
+    const iconCp = 0xea61;
+    const icon = String.fromCodePoint(iconCp);
+    const cells = [
+      makeCell(iconCp), // Nerd Font icon
+      makeCell(0),      // space (whitespace)
+      makeCell(65),     // A
+    ];
+
+    const lines = cellsToRuns(cells, emptyStyles, 3, 1);
+
+    expect(lines[0]![0]!.text).toBe(`${icon}A`);
+    expect(lines[0]![0]!.wideRanges).toEqual([{ start: 0, end: 1 }]);
+    expect(lines[0]![0]!.singleRanges).toBeUndefined();
+  });
+
+  test("symbol-like PUA stays single when next cell is not whitespace", () => {
+    const iconCp = 0xea61;
+    const icon = String.fromCodePoint(iconCp);
+    const cells = [
+      makeCell(iconCp), // Nerd Font icon
+      makeCell(66),     // B
+      makeCell(65),     // A
+    ];
+
+    const lines = cellsToRuns(cells, emptyStyles, 3, 1);
+
+    expect(lines[0]![0]!.text).toBe(`${icon}BA`);
+    expect(lines[0]![0]!.wideRanges).toBeUndefined();
+    expect(lines[0]![0]!.singleRanges).toEqual([{ start: 0, end: 1 }]);
+  });
+
   test("wide characters with different styles create separate runs", () => {
     const cells = [
       makeCell(0x4e2d, Wide.WIDE, 1),    // 中 (style 1)
