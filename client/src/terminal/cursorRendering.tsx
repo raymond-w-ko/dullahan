@@ -203,10 +203,11 @@ function renderTextWithWideChars(
 
     // Render special character with explicit width
     const specialChar = text.slice(range.start, range.end);
+    const nullClass = specialChar.length === 0 ? "null-char" : "";
     elements.push(
       <span
         key={`s${range.start}`}
-        class={`${baseClass} ${range.className}`.trim()}
+        class={`${baseClass} ${range.className} ${nullClass}`.trim()}
         style={style}
       >
         {specialChar}

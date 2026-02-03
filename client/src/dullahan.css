@@ -877,6 +877,10 @@ body.layout-resizing-vertical * {
   text-align: center;
 }
 
+.null-char {
+  width: 0;
+}
+
 /* Cursor styles - use --cursor-bg if set, else theme default */
 .cursor-block {
   background: var(--cursor-bg, var(--term-cursor-bg));
