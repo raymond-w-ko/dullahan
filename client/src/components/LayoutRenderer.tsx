@@ -153,6 +153,9 @@ function NodeRenderer({
       if (!onResizeLayout) return;
       const updated = cloneNodes(siblings);
       const target = updated[index];
+      if (!target) {
+        return;
+      }
       if (isContainer(target)) {
         target.children = childNodes;
       } else {
