@@ -50,6 +50,93 @@ function runClasses(run: StyledRun): string {
   return run.selected ? `${classes} selected`.trim() : classes;
 }
 
+interface RunSegment {
+  start: number;
+  end: number;
+  cells: number;
+  isWide: boolean;
+}
+
+function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
+  if (!ranges || ranges.length === 0) {
+    return [];
+  }
+  return [...ranges].sort((a, b) => a.start - b.start);
+}
+
+function isIndexInRanges(index: number, ranges?: WideCharRange[]): boolean {
+  if (!ranges || ranges.length === 0) {
+    return false;
+  }
+  for (const range of ranges) {
+    if (index >= range.start && index < range.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildRunSegments(text: string, wideRanges?: WideCharRange[]): RunSegment[] {
+  const ranges = sortRanges(wideRanges);
+  const segments: RunSegment[] = [];
+  let rangeIndex = 0;
+  let currentRange = ranges[0];
+  let i = 0;
+
+  while (i < text.length) {
+    if (currentRange && currentRange.start === i) {
+      segments.push({
+        start: currentRange.start,
+        end: currentRange.end,
+        cells: 2,
+        isWide: true,
+      });
+      i = currentRange.end;
+      rangeIndex += 1;
+      currentRange = ranges[rangeIndex];
+      continue;
+    }
+
+    const cp = text.codePointAt(i);
+    const len = cp !== undefined && cp > 0xffff ? 2 : 1;
+    segments.push({
+      start: i,
+      end: i + len,
+      cells: 1,
+      isWide: false,
+    });
+    i += len;
+  }
+
+  return segments;
+}
+
+function runCellWidth(run: StyledRun): number {
+  const segments = buildRunSegments(run.text, run.wideRanges);
+  return segments.reduce((sum, segment) => sum + segment.cells, 0);
+}
+
+function resolveCursorSegment(
+  run: StyledRun,
+  offsetCells: number
+): { start: number; end: number; isWide: boolean; isSingle: boolean } | null {
+  const segments = buildRunSegments(run.text, run.wideRanges);
+  let cellPos = 0;
+  for (const segment of segments) {
+    if (offsetCells < cellPos + segment.cells) {
+      const isSingle = isIndexInRanges(segment.start, run.singleRanges);
+      return {
+        start: segment.start,
+        end: segment.end,
+        isWide: segment.isWide,
+        isSingle,
+      };
+    }
+    cellPos += segment.cells;
+  }
+  return null;
+}
+
 /** Get inline style for a run, including bgOverride RGB colors */
 function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
   const baseStyle = styleToInline(run.style);
@@ -240,14 +327,17 @@ export function renderLine(
   for (let i = 0; i < runs.length; i++) {
     const run = runs[i]!;
     const runStart = x;
-    const runEnd = x + run.text.length;
+    const runEnd = x + runCellWidth(run);
 
     if (cursor.x >= runStart && cursor.x < runEnd) {
       // Cursor is in this run - split it
       const offset = cursor.x - runStart;
-      const before = run.text.slice(0, offset);
-      const cursorChar = run.text[offset] || " ";
-      const after = run.text.slice(offset + 1);
+      const segment = resolveCursorSegment(run, offset);
+      const cursorStart = segment?.start ?? offset;
+      const cursorEnd = segment?.end ?? offset + 1;
+      const before = run.text.slice(0, cursorStart);
+      const cursorChar = run.text.slice(cursorStart, cursorEnd) || " ";
+      const after = run.text.slice(cursorEnd);
 
       if (before) {
         elements.push(renderRunElement(run, `${i}-before`, before));
@@ -275,9 +365,15 @@ export function renderLine(
         cursorInlineStyle.color = cursorFg;
       }
 
-      const classes = preserveStyle
+      const widthClass = segment?.isWide
+        ? "wide-char"
+        : segment?.isSingle
+          ? "single-char"
+          : "";
+      const classesBase = preserveStyle
         ? `${cursorClass} ${runClasses(run)}`.trim()
         : cursorClass;
+      const classes = widthClass ? `${classesBase} ${widthClass}`.trim() : classesBase;
 
       elements.push(
         <span
