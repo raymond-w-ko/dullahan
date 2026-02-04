@@ -623,7 +623,7 @@ body.layout-resizing-vertical * {
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  box-shadow: 0 0 24px 6px color-mix(in srgb, var(--c2) 60%, transparent);
+  box-shadow: 0 0 8px 4px color-mix(in srgb, var(--c2) 30%, transparent) inset;
 }
 
 .terminal-pane--placeholder {
