@@ -369,7 +369,7 @@ export function TerminalView({
       )}
       {lines.map((runs, y) => (
         <div key={y} class="terminal-line">
-          {renderLine(runs, y, cursor, cursorConfig, isActive)}
+          {renderLine(runs, y, cursor, cursorConfig, isActive, cols)}
         </div>
       ))}
     </pre>

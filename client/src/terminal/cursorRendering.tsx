@@ -10,7 +10,7 @@ import {
 } from "./terminalStyle";
 import type { StyledRun, WideCharRange } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
-import { ColorTag } from "../../../protocol/schema/style";
+import { ColorTag, DEFAULT_STYLE } from "../../../protocol/schema/style";
 
 /** Cursor configuration from user settings */
 export interface CursorConfig {
@@ -50,13 +50,6 @@ function runClasses(run: StyledRun): string {
   return run.selected ? `${classes} selected`.trim() : classes;
 }
 
-interface RunSegment {
-  start: number;
-  end: number;
-  cells: number;
-  isWide: boolean;
-}
-
 function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
   if (!ranges || ranges.length === 0) {
     return [];
@@ -64,77 +57,129 @@ function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
   return [...ranges].sort((a, b) => a.start - b.start);
 }
 
-function isIndexInRanges(index: number, ranges?: WideCharRange[]): boolean {
-  if (!ranges || ranges.length === 0) {
-    return false;
-  }
-  for (const range of ranges) {
-    if (index >= range.start && index < range.end) {
-      return true;
-    }
-  }
-  return false;
+interface GlyphSegment {
+  text: string;
+  cells: number;
+  isWide: boolean;
+  isSingle: boolean;
+  classes: string;
+  style: h.JSX.CSSProperties | undefined;
+  hyperlink?: string;
+  styleRef: Style;
 }
 
-function buildRunSegments(text: string, wideRanges?: WideCharRange[]): RunSegment[] {
-  const ranges = sortRanges(wideRanges);
-  const segments: RunSegment[] = [];
-  let rangeIndex = 0;
-  let currentRange = ranges[0];
-  let i = 0;
+interface PositionedGlyph extends GlyphSegment {
+  startCell: number;
+  endCell: number;
+}
 
-  while (i < text.length) {
-    if (currentRange && currentRange.start === i) {
-      segments.push({
-        start: currentRange.start,
-        end: currentRange.end,
+function buildRunGlyphs(run: StyledRun): GlyphSegment[] {
+  const baseClasses = runClasses(run);
+  const baseStyle = runInlineStyle(run);
+  const wideRanges = sortRanges(run.wideRanges);
+  const singleRanges = sortRanges(run.singleRanges);
+  let wideIndex = 0;
+  let singleIndex = 0;
+  let nextWide = wideRanges[0];
+  let nextSingle = singleRanges[0];
+  const glyphs: GlyphSegment[] = [];
+
+  for (let i = 0; i < run.text.length; ) {
+    if (nextWide && nextWide.start === i) {
+      const end = nextWide.end;
+      glyphs.push({
+        text: run.text.slice(i, end),
         cells: 2,
         isWide: true,
+        isSingle: false,
+        classes: baseClasses,
+        style: baseStyle,
+        hyperlink: run.hyperlink,
+        styleRef: run.style,
       });
-      i = currentRange.end;
-      rangeIndex += 1;
-      currentRange = ranges[rangeIndex];
+      i = end;
+      wideIndex += 1;
+      nextWide = wideRanges[wideIndex];
       continue;
     }
 
-    const cp = text.codePointAt(i);
+    if (nextSingle && nextSingle.start === i) {
+      const end = nextSingle.end;
+      glyphs.push({
+        text: run.text.slice(i, end),
+        cells: 1,
+        isWide: false,
+        isSingle: true,
+        classes: baseClasses,
+        style: baseStyle,
+        hyperlink: run.hyperlink,
+        styleRef: run.style,
+      });
+      i = end;
+      singleIndex += 1;
+      nextSingle = singleRanges[singleIndex];
+      continue;
+    }
+
+    const cp = run.text.codePointAt(i);
     const len = cp !== undefined && cp > 0xffff ? 2 : 1;
-    segments.push({
-      start: i,
-      end: i + len,
+    glyphs.push({
+      text: run.text.slice(i, i + len),
       cells: 1,
       isWide: false,
+      isSingle: false,
+      classes: baseClasses,
+      style: baseStyle,
+      hyperlink: run.hyperlink,
+      styleRef: run.style,
     });
     i += len;
   }
 
-  return segments;
+  return glyphs;
 }
 
-function runCellWidth(run: StyledRun): number {
-  const segments = buildRunSegments(run.text, run.wideRanges);
-  return segments.reduce((sum, segment) => sum + segment.cells, 0);
-}
-
-function resolveCursorSegment(
-  run: StyledRun,
-  offsetCells: number
-): { start: number; end: number; isWide: boolean; isSingle: boolean } | null {
-  const segments = buildRunSegments(run.text, run.wideRanges);
+function buildLineGlyphs(runs: StyledRun[], cols: number): PositionedGlyph[] {
+  const glyphs: PositionedGlyph[] = [];
   let cellPos = 0;
-  for (const segment of segments) {
-    if (offsetCells < cellPos + segment.cells) {
-      const isSingle = isIndexInRanges(segment.start, run.singleRanges);
-      return {
-        start: segment.start,
-        end: segment.end,
-        isWide: segment.isWide,
-        isSingle,
-      };
+
+  for (const run of runs) {
+    const runGlyphs = buildRunGlyphs(run);
+    for (const glyph of runGlyphs) {
+      const startCell = cellPos;
+      const endCell = cellPos + glyph.cells;
+      glyphs.push({ ...glyph, startCell, endCell });
+      cellPos = endCell;
     }
-    cellPos += segment.cells;
   }
-  return null;
+
+  // Normalize to exact column count
+  if (cellPos > cols) {
+    while (glyphs.length > 0 && cellPos > cols) {
+      const last = glyphs.pop();
+      if (!last) {
+        break;
+      }
+      cellPos -= last.cells;
+    }
+  }
+
+  while (cellPos < cols) {
+    glyphs.push({
+      text: " ",
+      cells: 1,
+      isWide: false,
+      isSingle: false,
+      classes: "",
+      style: undefined,
+      styleRef: DEFAULT_STYLE,
+      startCell: cellPos,
+      endCell: cellPos + 1,
+    });
+    cellPos += 1;
+  }
+
+  return glyphs;
 }
 
 /** Get inline style for a run, including bgOverride RGB colors */
@@ -156,165 +201,16 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
  * when mixed with different fallback fonts. Private-use glyphs can be
  * constrained to a single cell.
  */
-function renderTextWithWideChars(
-  text: string,
-  wideRanges: WideCharRange[] | undefined,
-  singleRanges: WideCharRange[] | undefined,
-  baseClass: string,
-  style: h.JSX.CSSProperties | undefined
-): preact.JSX.Element | preact.JSX.Element[] {
-  const ranges: Array<{ start: number; end: number; className: string }> = [];
-  if (wideRanges) {
-    for (const range of wideRanges) {
-      ranges.push({ start: range.start, end: range.end, className: "wide-char" });
-    }
-  }
-  if (singleRanges) {
-    for (const range of singleRanges) {
-      ranges.push({ start: range.start, end: range.end, className: "single-char" });
-    }
-  }
-
-  // No special characters - render as single element
-  if (ranges.length === 0) {
-    return (
-      <span class={baseClass} style={style}>
-        {text}
-      </span>
-    );
-  }
-
-  ranges.sort((a, b) => a.start - b.start);
-
-  // Has special characters - split and render segments
-  const elements: preact.JSX.Element[] = [];
-  let pos = 0;
-
-  for (const range of ranges) {
-    // Render normal text before this range
-    if (range.start > pos) {
-      const narrowText = text.slice(pos, range.start);
-      elements.push(
-        <span key={`n${pos}`} class={baseClass} style={style}>
-          {narrowText}
-        </span>
-      );
-    }
-
-    // Render special character with explicit width
-    const specialChar = text.slice(range.start, range.end);
-    const nullClass = specialChar.length === 0 ? "null-char" : "";
-    elements.push(
-      <span
-        key={`s${range.start}`}
-        class={`${baseClass} ${range.className} ${nullClass}`.trim()}
-        style={style}
-      >
-        {specialChar}
-      </span>
-    );
-
-    pos = range.end;
-  }
-
-  // Render any remaining normal text after the last range
-  if (pos < text.length) {
-    const narrowText = text.slice(pos);
-    elements.push(
-      <span key={`n${pos}`} class={baseClass} style={style}>
-        {narrowText}
-      </span>
-    );
-  }
-
-  return elements;
-}
-
-/**
- * Render a run element, either as a hyperlink (<a>) or a plain span.
- * Hyperlinks get special styling and click handling.
- * Wide characters are wrapped in explicit-width spans.
- */
-function renderRunElement(
-  run: StyledRun,
-  key: string | number,
-  text: string,
-  extraClass?: string,
-  extraStyle?: h.JSX.CSSProperties
-): preact.JSX.Element {
-  const classes = extraClass
-    ? `${runClasses(run)} ${extraClass}`.trim()
-    : runClasses(run);
-  const style = extraStyle || runInlineStyle(run);
-
-  // For hyperlinks, render as <a> tag for styling/cursor, but click is handled by MouseHandler
-  if (run.hyperlink) {
-    // For hyperlinks with wide chars, we need to handle it specially
-    if ((run.wideRanges && run.wideRanges.length > 0) ||
-        (run.singleRanges && run.singleRanges.length > 0)) {
-      return (
-        <a
-          key={key}
-          class={`${classes} hyperlink`.trim()}
-          style={style}
-          href={run.hyperlink}
-          title={run.hyperlink}
-        >
-          {renderTextWithWideChars(text, run.wideRanges, run.singleRanges, "", undefined)}
-        </a>
-      );
-    }
-    return (
-      <a
-        key={key}
-        class={`${classes} hyperlink`.trim()}
-        style={style}
-        href={run.hyperlink}
-        title={run.hyperlink}
-      >
-        {text}
-      </a>
-    );
-  }
-
-  // No special characters - simple span
-  if ((!run.wideRanges || run.wideRanges.length === 0) &&
-      (!run.singleRanges || run.singleRanges.length === 0)) {
-    return (
-      <span key={key} class={classes} style={style}>
-        {text}
-      </span>
-    );
-  }
-
-  // Has special characters - render with explicit widths
-  return (
-    <span key={key}>
-      {renderTextWithWideChars(text, run.wideRanges, run.singleRanges, classes, style)}
-    </span>
-  );
-}
-
 /** Render a line of runs, inserting cursor if needed */
 export function renderLine(
   runs: StyledRun[],
   y: number,
   cursor: CursorState,
   cursorConfig: CursorConfig,
-  isActive: boolean
+  isActive: boolean,
+  cols: number
 ): preact.JSX.Element {
-  // Only show cursor on active pane, and only if cursor is visible and on this line
-  if (!isActive || !cursor.visible || cursor.y !== y) {
-    return (
-      <>
-        {runs.map((run, i) => renderRunElement(run, i, run.text))}
-      </>
-    );
-  }
-
-  // Cursor is on this line - need to split at cursor position
-  const elements: preact.JSX.Element[] = [];
-  let x = 0;
+  const glyphs = buildLineGlyphs(runs, cols);
   // Determine if cursor should blink:
   // - '' (auto): use server's DEC Mode 12 state (cursor.blink)
   // - 'true': always blink (override server)
@@ -324,36 +220,26 @@ export function renderLine(
   const cursorClass = `cursor-${cursorConfig.style}${shouldBlink ? " cursor-blink" : ""}`;
   // For non-block cursors, preserve original text styling
   const preserveStyle = cursorConfig.style !== "block";
+  const showCursor = isActive && cursor.visible && cursor.y === y;
+  const elements: preact.JSX.Element[] = [];
+  let cursorRendered = false;
 
-  for (let i = 0; i < runs.length; i++) {
-    const run = runs[i]!;
-    const runStart = x;
-    const runEnd = x + runCellWidth(run);
-
-    if (cursor.x >= runStart && cursor.x < runEnd) {
-      // Cursor is in this run - split it
-      const offset = cursor.x - runStart;
-      const segment = resolveCursorSegment(run, offset);
-      const cursorStart = segment?.start ?? offset;
-      const cursorEnd = segment?.end ?? offset + 1;
-      const before = run.text.slice(0, cursorStart);
-      const cursorChar = run.text.slice(cursorStart, cursorEnd) || " ";
-      const after = run.text.slice(cursorEnd);
-
-      if (before) {
-        elements.push(renderRunElement(run, `${i}-before`, before));
-      }
-
-      // Build cursor style
-      const baseStyle = preserveStyle ? runInlineStyle(run) || {} : {};
+  for (let i = 0; i < glyphs.length; i++) {
+    const glyph = glyphs[i]!;
+    const isCursor = showCursor &&
+      cursor.x >= glyph.startCell &&
+      cursor.x < glyph.endCell;
+    if (isCursor) {
+      cursorRendered = true;
+      const baseStyle = preserveStyle ? glyph.style || {} : {};
       const cursorBg = resolveCursorColor(
         cursorConfig.color,
-        run.style,
+        glyph.styleRef,
         "--term-cursor-bg"
       );
       const cursorFg = resolveCursorColor(
         cursorConfig.textColor,
-        run.style,
+        glyph.styleRef,
         "--term-cursor-fg"
       );
 
@@ -362,23 +248,21 @@ export function renderLine(
         cursorInlineStyle["--cursor-bg"] = cursorBg;
       }
       if (cursorFg && cursorConfig.style === "block") {
-        // Text color only applies to block cursor
         cursorInlineStyle.color = cursorFg;
       }
 
-      const widthClass = segment?.isWide
+      const widthClass = glyph.isWide
         ? "wide-char"
-        : segment?.isSingle
+        : glyph.isSingle
           ? "single-char"
           : "";
       const classesBase = preserveStyle
-        ? `${cursorClass} ${runClasses(run)}`.trim()
+        ? `${cursorClass} ${glyph.classes}`.trim()
         : cursorClass;
-      const classes = widthClass ? `${classesBase} ${widthClass}`.trim() : classesBase;
-
+      const classes = [classesBase, widthClass].filter(Boolean).join(" ");
       elements.push(
         <span
-          key={`${i}-cursor`}
+          key={`g-${i}`}
           class={classes}
           style={
             Object.keys(cursorInlineStyle).length
@@ -386,22 +270,44 @@ export function renderLine(
               : undefined
           }
         >
-          {cursorChar}
+          {glyph.text}
         </span>
       );
-
-      if (after) {
-        elements.push(renderRunElement(run, `${i}-after`, after));
-      }
-    } else {
-      elements.push(renderRunElement(run, i, run.text));
+      continue;
     }
 
-    x = runEnd;
+    const widthClass = glyph.isWide
+      ? "wide-char"
+      : glyph.isSingle
+        ? "single-char"
+        : "";
+    const baseClasses = [glyph.classes, widthClass].filter(Boolean).join(" ");
+    const classes = glyph.hyperlink
+      ? `${baseClasses} hyperlink`.trim()
+      : baseClasses;
+
+    if (glyph.hyperlink) {
+      elements.push(
+        <a
+          key={`g-${i}`}
+          class={classes}
+          style={glyph.style}
+          href={glyph.hyperlink}
+          title={glyph.hyperlink}
+        >
+          {glyph.text}
+        </a>
+      );
+    } else {
+      elements.push(
+        <span key={`g-${i}`} class={classes} style={glyph.style}>
+          {glyph.text}
+        </span>
+      );
+    }
   }
 
-  // Cursor beyond end of line
-  if (cursor.x >= x) {
+  if (showCursor && !cursorRendered && cursor.x >= cols) {
     elements.push(
       <span key="cursor-end" class={cursorClass}>
         {" "}
