@@ -57,7 +57,7 @@ function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
   return [...ranges].sort((a, b) => a.start - b.start);
 }
 
-interface GlyphSegment {
+interface LineSegment {
   text: string;
   cells: number;
   isWide: boolean;
@@ -68,12 +68,57 @@ interface GlyphSegment {
   styleRef: Style;
 }
 
-interface PositionedGlyph extends GlyphSegment {
+interface PositionedSegment extends LineSegment {
   startCell: number;
   endCell: number;
 }
 
-function buildRunGlyphs(run: StyledRun): GlyphSegment[] {
+function countCodepoints(text: string): number {
+  let count = 0;
+  for (const _ of text) {
+    count += 1;
+  }
+  return count;
+}
+
+function sliceCodepoints(text: string, count: number): string {
+  if (count <= 0) return "";
+  let idx = 0;
+  let pos = 0;
+  for (const ch of text) {
+    if (idx === count) {
+      break;
+    }
+    pos += ch.length;
+    idx += 1;
+  }
+  return text.slice(0, pos);
+}
+
+function splitAtCodepoint(text: string, index: number): { before: string; rest: string } {
+  if (index <= 0) {
+    return { before: "", rest: text };
+  }
+  let idx = 0;
+  let pos = 0;
+  for (const ch of text) {
+    if (idx === index) {
+      break;
+    }
+    pos += ch.length;
+    idx += 1;
+  }
+  return { before: text.slice(0, pos), rest: text.slice(pos) };
+}
+
+function takeFirstCodepoint(text: string): { ch: string; rest: string } {
+  for (const ch of text) {
+    return { ch, rest: text.slice(ch.length) };
+  }
+  return { ch: "", rest: "" };
+}
+
+function buildRunSegments(run: StyledRun): LineSegment[] {
   const baseClasses = runClasses(run);
   const baseStyle = runInlineStyle(run);
   const wideRanges = sortRanges(run.wideRanges);
@@ -82,12 +127,32 @@ function buildRunGlyphs(run: StyledRun): GlyphSegment[] {
   let singleIndex = 0;
   let nextWide = wideRanges[0];
   let nextSingle = singleRanges[0];
-  const glyphs: GlyphSegment[] = [];
+  const segments: LineSegment[] = [];
+  let bufferStart = 0;
+  let bufferCells = 0;
+
+  const flushBuffer = (end: number) => {
+    if (bufferCells === 0) {
+      return;
+    }
+    segments.push({
+      text: run.text.slice(bufferStart, end),
+      cells: bufferCells,
+      isWide: false,
+      isSingle: false,
+      classes: baseClasses,
+      style: baseStyle,
+      hyperlink: run.hyperlink,
+      styleRef: run.style,
+    });
+    bufferCells = 0;
+  };
 
   for (let i = 0; i < run.text.length; ) {
     if (nextWide && nextWide.start === i) {
+      flushBuffer(i);
       const end = nextWide.end;
-      glyphs.push({
+      segments.push({
         text: run.text.slice(i, end),
         cells: 2,
         isWide: true,
@@ -100,12 +165,14 @@ function buildRunGlyphs(run: StyledRun): GlyphSegment[] {
       i = end;
       wideIndex += 1;
       nextWide = wideRanges[wideIndex];
+      bufferStart = i;
       continue;
     }
 
     if (nextSingle && nextSingle.start === i) {
+      flushBuffer(i);
       const end = nextSingle.end;
-      glyphs.push({
+      segments.push({
         text: run.text.slice(i, end),
         cells: 1,
         isWide: false,
@@ -118,68 +185,82 @@ function buildRunGlyphs(run: StyledRun): GlyphSegment[] {
       i = end;
       singleIndex += 1;
       nextSingle = singleRanges[singleIndex];
+      bufferStart = i;
       continue;
     }
 
+    if (bufferCells === 0) {
+      bufferStart = i;
+    }
     const cp = run.text.codePointAt(i);
     const len = cp !== undefined && cp > 0xffff ? 2 : 1;
-    glyphs.push({
-      text: run.text.slice(i, i + len),
-      cells: 1,
-      isWide: false,
-      isSingle: false,
-      classes: baseClasses,
-      style: baseStyle,
-      hyperlink: run.hyperlink,
-      styleRef: run.style,
-    });
+    bufferCells += 1;
     i += len;
   }
 
-  return glyphs;
+  flushBuffer(run.text.length);
+  return segments;
 }
 
-function buildLineGlyphs(runs: StyledRun[], cols: number): PositionedGlyph[] {
-  const glyphs: PositionedGlyph[] = [];
+function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[] {
+  const segments: PositionedSegment[] = [];
   let cellPos = 0;
 
   for (const run of runs) {
-    const runGlyphs = buildRunGlyphs(run);
-    for (const glyph of runGlyphs) {
-      const startCell = cellPos;
-      const endCell = cellPos + glyph.cells;
-      glyphs.push({ ...glyph, startCell, endCell });
-      cellPos = endCell;
-    }
-  }
-
-  // Normalize to exact column count
-  if (cellPos > cols) {
-    while (glyphs.length > 0 && cellPos > cols) {
-      const last = glyphs.pop();
-      if (!last) {
+    const runSegments = buildRunSegments(run);
+    for (const segment of runSegments) {
+      if (cellPos >= cols) {
         break;
       }
-      cellPos -= last.cells;
+      const remaining = cols - cellPos;
+      if (segment.cells <= remaining) {
+        const startCell = cellPos;
+        const endCell = cellPos + segment.cells;
+        segments.push({ ...segment, startCell, endCell });
+        cellPos = endCell;
+      } else {
+        if (segment.isWide || remaining === 0) {
+          cellPos = cols;
+          break;
+        }
+        const truncatedText = sliceCodepoints(segment.text, remaining);
+        if (truncatedText.length > 0) {
+          const startCell = cellPos;
+          const endCell = cellPos + remaining;
+          segments.push({
+            ...segment,
+            text: truncatedText,
+            cells: remaining,
+            startCell,
+            endCell,
+          });
+        }
+        cellPos = cols;
+        break;
+      }
+    }
+    if (cellPos >= cols) {
+      break;
     }
   }
 
   while (cellPos < cols) {
-    glyphs.push({
-      text: " ",
-      cells: 1,
+    const remaining = cols - cellPos;
+    segments.push({
+      text: " ".repeat(remaining),
+      cells: remaining,
       isWide: false,
       isSingle: false,
       classes: "",
       style: undefined,
       styleRef: DEFAULT_STYLE,
       startCell: cellPos,
-      endCell: cellPos + 1,
+      endCell: cellPos + remaining,
     });
-    cellPos += 1;
+    cellPos = cols;
   }
 
-  return glyphs;
+  return segments;
 }
 
 /** Get inline style for a run, including bgOverride RGB colors */
@@ -210,7 +291,7 @@ export function renderLine(
   isActive: boolean,
   cols: number
 ): preact.JSX.Element {
-  const glyphs = buildLineGlyphs(runs, cols);
+  const segments = buildLineSegments(runs, cols);
   // Determine if cursor should blink:
   // - '' (auto): use server's DEC Mode 12 state (cursor.blink)
   // - 'true': always blink (override server)
@@ -224,22 +305,22 @@ export function renderLine(
   const elements: preact.JSX.Element[] = [];
   let cursorRendered = false;
 
-  for (let i = 0; i < glyphs.length; i++) {
-    const glyph = glyphs[i]!;
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]!;
     const isCursor = showCursor &&
-      cursor.x >= glyph.startCell &&
-      cursor.x < glyph.endCell;
+      cursor.x >= segment.startCell &&
+      cursor.x < segment.endCell;
     if (isCursor) {
       cursorRendered = true;
-      const baseStyle = preserveStyle ? glyph.style || {} : {};
+      const baseStyle = preserveStyle ? segment.style || {} : {};
       const cursorBg = resolveCursorColor(
         cursorConfig.color,
-        glyph.styleRef,
+        segment.styleRef,
         "--term-cursor-bg"
       );
       const cursorFg = resolveCursorColor(
         cursorConfig.textColor,
-        glyph.styleRef,
+        segment.styleRef,
         "--term-cursor-fg"
       );
 
@@ -251,60 +332,83 @@ export function renderLine(
         cursorInlineStyle.color = cursorFg;
       }
 
-      const widthClass = glyph.isWide
+      const widthClass = segment.isWide
         ? "wide-char"
-        : glyph.isSingle
+        : segment.isSingle
           ? "single-char"
           : "";
       const classesBase = preserveStyle
-        ? `${cursorClass} ${glyph.classes}`.trim()
+        ? `${cursorClass} ${segment.classes}`.trim()
         : cursorClass;
       const classes = [classesBase, widthClass].filter(Boolean).join(" ");
-      elements.push(
-        <span
-          key={`g-${i}`}
-          class={classes}
-          style={
-            Object.keys(cursorInlineStyle).length
-              ? cursorInlineStyle
-              : undefined
-          }
-        >
-          {glyph.text}
-        </span>
-      );
+
+      if (segment.isWide) {
+        elements.push(
+          <span
+            key={`s-${i}-cursor`}
+            class={classes}
+            style={
+              Object.keys(cursorInlineStyle).length
+                ? cursorInlineStyle
+                : undefined
+            }
+          >
+            {segment.text}
+          </span>
+        );
+      } else {
+        const offset = cursor.x - segment.startCell;
+        const { before, rest } = splitAtCodepoint(segment.text, offset);
+        const { ch: cursorChar, rest: after } = takeFirstCodepoint(rest);
+
+        if (before.length > 0) {
+          elements.push(
+            renderSegmentElement(
+              {
+                ...segment,
+                text: before,
+                cells: countCodepoints(before),
+                isWide: false,
+                isSingle: false,
+              },
+              `s-${i}-before`
+            )
+          );
+        }
+
+        elements.push(
+          <span
+            key={`s-${i}-cursor`}
+            class={classes}
+            style={
+              Object.keys(cursorInlineStyle).length
+                ? cursorInlineStyle
+                : undefined
+            }
+          >
+            {cursorChar || " "}
+          </span>
+        );
+
+        if (after.length > 0) {
+          elements.push(
+            renderSegmentElement(
+              {
+                ...segment,
+                text: after,
+                cells: countCodepoints(after),
+                isWide: false,
+                isSingle: false,
+              },
+              `s-${i}-after`
+            )
+          );
+        }
+      }
       continue;
     }
 
-    const widthClass = glyph.isWide
-      ? "wide-char"
-      : glyph.isSingle
-        ? "single-char"
-        : "";
-    const baseClasses = [glyph.classes, widthClass].filter(Boolean).join(" ");
-    const classes = glyph.hyperlink
-      ? `${baseClasses} hyperlink`.trim()
-      : baseClasses;
-
-    if (glyph.hyperlink) {
-      elements.push(
-        <a
-          key={`g-${i}`}
-          class={classes}
-          style={glyph.style}
-          href={glyph.hyperlink}
-          title={glyph.hyperlink}
-        >
-          {glyph.text}
-        </a>
-      );
-    } else {
-      elements.push(
-        <span key={`g-${i}`} class={classes} style={glyph.style}>
-          {glyph.text}
-        </span>
-      );
-    }
+    elements.push(renderSegmentElement(segment, `s-${i}`));
   }
 
   if (showCursor && !cursorRendered && cursor.x >= cols) {
@@ -316,4 +420,39 @@ export function renderLine(
   }
 
   return <>{elements}</>;
+}
+
+function renderSegmentElement(
+  segment: LineSegment,
+  key: string
+): preact.JSX.Element {
+  const widthClass = segment.isWide
+    ? "wide-char"
+    : segment.isSingle
+      ? "single-char"
+      : "";
+  const baseClasses = [segment.classes, widthClass].filter(Boolean).join(" ");
+  const classes = segment.hyperlink
+    ? `${baseClasses} hyperlink`.trim()
+    : baseClasses;
+
+  if (segment.hyperlink) {
+    return (
+      <a
+        key={key}
+        class={classes}
+        style={segment.style}
+        href={segment.hyperlink}
+        title={segment.hyperlink}
+      >
+        {segment.text}
+      </a>
+    );
+  }
+
+  return (
+    <span key={key} class={classes} style={segment.style}>
+      {segment.text}
+    </span>
+  );
 }
