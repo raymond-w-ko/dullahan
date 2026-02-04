@@ -41,6 +41,9 @@ pub const debug_config = @import("debug_config.zig");
 // Path utilities (UID-specific temp directory)
 pub const paths = @import("paths.zig");
 
+// OS name cache (used for query responses)
+pub const os_name = @import("os_name.zig");
+
 // PTY traffic logging
 pub const pty_log = @import("pty_log.zig");
 
