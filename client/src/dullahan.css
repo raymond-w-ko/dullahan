@@ -614,6 +614,16 @@ body.layout-resizing-vertical * {
   border: none;
   border-radius: 0.375rem;
   overflow: hidden;
+  position: relative;
+}
+
+.terminal-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: 0 0 24px 6px color-mix(in srgb, var(--c2) 60%, transparent);
 }
 
 .terminal-pane--placeholder {
