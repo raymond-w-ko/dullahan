@@ -617,7 +617,7 @@ body.layout-resizing-vertical * {
   position: relative;
 }
 
-.terminal-pane::after {
+.terminal-pane--focused::after {
   content: "";
   position: absolute;
   inset: 0;
