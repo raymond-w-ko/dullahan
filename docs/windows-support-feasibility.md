@@ -77,7 +77,7 @@ CreateProcessW(shell, ..., &startup_info, ...);
 
 **Current implementation:**
 - Unix domain sockets (`AF.UNIX`, `SOCK.STREAM`)
-- Socket path: `/tmp/dullahan-<uid>/dullahan.sock`
+- Socket path: `/tmp/dullahan-<uid>/dullahan-<port>.sock`
 - `posix.poll()` for event waiting
 - Process check via `posix.kill(pid, 0)`
 

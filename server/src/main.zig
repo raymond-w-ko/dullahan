@@ -62,14 +62,17 @@ pub fn main() !void {
     // Resolve OS name once before any other startup work.
     os_name.init();
 
-    // Initialize debug logging (loads DULLAHAN_DEBUG env var)
-    dlog.init();
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     const args = try cli.CliArgs.parse(allocator);
+
+    // Ensure temp file paths include the requested port.
+    paths.setPort(args.ws_port);
+
+    // Initialize debug logging (loads DULLAHAN_DEBUG env var)
+    dlog.init();
 
     if (args.help) {
         cli.printUsage();

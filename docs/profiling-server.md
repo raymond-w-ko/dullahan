@@ -24,7 +24,7 @@ Check server memory usage without any profiling tools:
 
 ```bash
 # Find server PID
-PID=$(cat /tmp/dullahan-$(id -u)/dullahan.pid)
+PID=$(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid)
 
 # One-shot memory check (RSS = actual RAM used)
 ps -o pid,rss,vsz,comm -p $PID
@@ -42,7 +42,7 @@ cat /proc/$PID/smaps_rollup
 
 ```bash
 # Get server PID
-PID=$(cat /tmp/dullahan-$(id -u)/dullahan.pid)
+PID=$(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid)
 
 # Record for 30 seconds (adjust as needed)
 sudo perf record -F 99 -p $PID -g -- sleep 30
@@ -117,7 +117,7 @@ heaptrack_print heaptrack.dullahan.*.zst | head -100
 ### Trace All Syscalls
 
 ```bash
-PID=$(cat /tmp/dullahan-$(id -u)/dullahan.pid)
+PID=$(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid)
 
 # Trace with timing (shows slow syscalls)
 sudo strace -p $PID -T -f 2>&1 | head -200
@@ -175,7 +175,7 @@ DULLAHAN_DEBUG=+delta,+snapshot ./zig-out/bin/dullahan serve
 ./zig-out/bin/dullahan debug-log +delta,+snapshot
 
 # View log
-tail -f /tmp/dullahan-$(id -u)/dullahan.log
+tail -f /tmp/dullahan-$(id -u)/dullahan-<port>.log
 ```
 
 ### Available Debug Categories
@@ -203,7 +203,7 @@ Add timing to see if deltas are growing:
 ./zig-out/bin/dullahan debug-log +delta
 
 # Watch the log for delta sizes
-tail -f /tmp/dullahan-$(id -u)/dullahan.log | grep -E 'delta|dirty_rows'
+tail -f /tmp/dullahan-$(id -u)/dullahan-<port>.log | grep -E 'delta|dirty_rows'
 ```
 
 Look for patterns like:
@@ -215,13 +215,13 @@ Look for patterns like:
 
 ```bash
 # 1. Check memory isn't growing unboundedly
-watch -n 5 "ps -o rss -p $(cat /tmp/dullahan-$(id -u)/dullahan.pid) | tail -1"
+watch -n 5 "ps -o rss -p $(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid) | tail -1"
 
 # 2. Check CPU isn't pinned
-top -p $(cat /tmp/dullahan-$(id -u)/dullahan.pid)
+top -p $(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid)
 
 # 3. Check for slow syscalls
-sudo strace -p $(cat /tmp/dullahan-$(id -u)/dullahan.pid) -c
+sudo strace -p $(cat /tmp/dullahan-$(id -u)/dullahan-<port>.pid) -c
 # Ctrl+C after 10 seconds, look at "seconds" column
 
 # 4. Check delta sync stats in client

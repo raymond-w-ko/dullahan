@@ -4,11 +4,35 @@
 //! to prevent conflicts between users on shared systems.
 //!
 //! Paths:
-//!   - Temp files: /tmp/dullahan-<uid>/
+//!   - Temp files: /tmp/dullahan-<uid>/ (filenames include port infix)
 //!   - Config files: ~/.config/dullahan/
 
 const std = @import("std");
 const posix = std.posix;
+
+const default_port: u16 = 7681;
+var port_value: u16 = default_port;
+
+pub fn setPort(port: u16) void {
+    if (port_value == port) return;
+    port_value = port;
+    resetStaticPaths();
+}
+
+fn getPort() u16 {
+    return port_value;
+}
+
+fn resetStaticPaths() void {
+    StaticPaths.socket_initialized = false;
+    StaticPaths.pid_initialized = false;
+    StaticPaths.log_initialized = false;
+    StaticPaths.dlog_initialized = false;
+    StaticPaths.capture_initialized = false;
+    StaticPaths.keytest_log_initialized = false;
+    StaticPaths.pty_traffic_initialized = false;
+    StaticPaths.layouts_initialized = false;
+}
 
 /// Get the UID-specific temp directory path: /tmp/dullahan-<uid>
 /// Returns a static buffer that is valid for the lifetime of the program.
@@ -151,79 +175,79 @@ pub const StaticPaths = struct {
     var layouts_len: usize = 0;
     var layouts_initialized: bool = false;
 
-    /// Socket path: /tmp/dullahan-<uid>/dullahan.sock
+    /// Socket path: /tmp/dullahan-<uid>/dullahan-<port>.sock
     pub fn socket() []const u8 {
         if (!socket_initialized) {
             const dir = getTempDir();
-            socket_len = (std.fmt.bufPrint(&socket_buf, "{s}/dullahan.sock", .{dir}) catch
-                return "/tmp/dullahan.sock").len;
+            socket_len = (std.fmt.bufPrint(&socket_buf, "{s}/dullahan-{d}.sock", .{ dir, getPort() }) catch
+                return "/tmp/dullahan-7681.sock").len;
             socket_initialized = true;
         }
         return socket_buf[0..socket_len];
     }
 
-    /// PID file path: /tmp/dullahan-<uid>/dullahan.pid
+    /// PID file path: /tmp/dullahan-<uid>/dullahan-<port>.pid
     pub fn pid() []const u8 {
         if (!pid_initialized) {
             const dir = getTempDir();
-            pid_len = (std.fmt.bufPrint(&pid_buf, "{s}/dullahan.pid", .{dir}) catch
-                return "/tmp/dullahan.pid").len;
+            pid_len = (std.fmt.bufPrint(&pid_buf, "{s}/dullahan-{d}.pid", .{ dir, getPort() }) catch
+                return "/tmp/dullahan-7681.pid").len;
             pid_initialized = true;
         }
         return pid_buf[0..pid_len];
     }
 
-    /// Main log file path: /tmp/dullahan-<uid>/dullahan.log
+    /// Main log file path: /tmp/dullahan-<uid>/dullahan-<port>.log
     pub fn log() []const u8 {
         if (!log_initialized) {
             const dir = getTempDir();
-            log_len = (std.fmt.bufPrint(&log_buf, "{s}/dullahan.log", .{dir}) catch
-                return "/tmp/dullahan.log").len;
+            log_len = (std.fmt.bufPrint(&log_buf, "{s}/dullahan-{d}.log", .{ dir, getPort() }) catch
+                return "/tmp/dullahan-7681.log").len;
             log_initialized = true;
         }
         return log_buf[0..log_len];
     }
 
-    /// Legacy debug log file path: /tmp/dullahan-<uid>/dullahan-dlog.log
+    /// Legacy debug log file path: /tmp/dullahan-<uid>/dullahan-dlog-<port>.log
     /// (Debug logs are now consolidated into dullahan.log.)
     pub fn dlog() []const u8 {
         if (!dlog_initialized) {
             const dir = getTempDir();
-            dlog_len = (std.fmt.bufPrint(&dlog_buf, "{s}/dullahan-dlog.log", .{dir}) catch
-                return "/tmp/dullahan-dlog.log").len;
+            dlog_len = (std.fmt.bufPrint(&dlog_buf, "{s}/dullahan-dlog-{d}.log", .{ dir, getPort() }) catch
+                return "/tmp/dullahan-dlog-7681.log").len;
             dlog_initialized = true;
         }
         return dlog_buf[0..dlog_len];
     }
 
-    /// Capture hex file path: /tmp/dullahan-<uid>/dullahan-capture.hex
+    /// Capture hex file path: /tmp/dullahan-<uid>/dullahan-capture-<port>.hex
     pub fn capture() []const u8 {
         if (!capture_initialized) {
             const dir = getTempDir();
-            capture_len = (std.fmt.bufPrint(&capture_buf, "{s}/dullahan-capture.hex", .{dir}) catch
-                return "/tmp/dullahan-capture.hex").len;
+            capture_len = (std.fmt.bufPrint(&capture_buf, "{s}/dullahan-capture-{d}.hex", .{ dir, getPort() }) catch
+                return "/tmp/dullahan-capture-7681.hex").len;
             capture_initialized = true;
         }
         return capture_buf[0..capture_len];
     }
 
-    /// Keytest log file path: /tmp/dullahan-<uid>/keytest-kitty.log
+    /// Keytest log file path: /tmp/dullahan-<uid>/keytest-kitty-<port>.log
     pub fn keytestLog() []const u8 {
         if (!keytest_log_initialized) {
             const dir = getTempDir();
-            keytest_log_len = (std.fmt.bufPrint(&keytest_log_buf, "{s}/keytest-kitty.log", .{dir}) catch
-                return "/tmp/keytest-kitty.log").len;
+            keytest_log_len = (std.fmt.bufPrint(&keytest_log_buf, "{s}/keytest-kitty-{d}.log", .{ dir, getPort() }) catch
+                return "/tmp/keytest-kitty-7681.log").len;
             keytest_log_initialized = true;
         }
         return keytest_log_buf[0..keytest_log_len];
     }
 
-    /// PTY traffic log file path: /tmp/dullahan-<uid>/pty-traffic.jsonl
+    /// PTY traffic log file path: /tmp/dullahan-<uid>/pty-traffic-<port>.jsonl
     pub fn ptyTraffic() []const u8 {
         if (!pty_traffic_initialized) {
             const dir = getTempDir();
-            pty_traffic_len = (std.fmt.bufPrint(&pty_traffic_buf, "{s}/pty-traffic.jsonl", .{dir}) catch
-                return "/tmp/pty-traffic.jsonl").len;
+            pty_traffic_len = (std.fmt.bufPrint(&pty_traffic_buf, "{s}/pty-traffic-{d}.jsonl", .{ dir, getPort() }) catch
+                return "/tmp/pty-traffic-7681.jsonl").len;
             pty_traffic_initialized = true;
         }
         return pty_traffic_buf[0..pty_traffic_len];
@@ -247,9 +271,12 @@ test "getTempDir returns valid path" {
 }
 
 test "StaticPaths returns valid paths" {
+    setPort(7654);
     const socket = StaticPaths.socket();
-    try std.testing.expect(std.mem.endsWith(u8, socket, "/dullahan.sock"));
+    try std.testing.expect(std.mem.endsWith(u8, socket, "/dullahan-7654.sock"));
 
     const pid = StaticPaths.pid();
-    try std.testing.expect(std.mem.endsWith(u8, pid, "/dullahan.pid"));
+    try std.testing.expect(std.mem.endsWith(u8, pid, "/dullahan-7654.pid"));
+
+    setPort(7681);
 }

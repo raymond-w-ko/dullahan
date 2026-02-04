@@ -127,7 +127,7 @@ dullahan debug-log list
 
 Server logs go to **three channels**:
 
-1. **Log File**: `/tmp/dullahan-<uid>/dullahan.log`
+1. **Log File**: `/tmp/dullahan-<uid>/dullahan-<port>.log`
    - Always written (when category enabled)
    - Shared with the standard server log output
    - Timestamped, plain text format
@@ -453,7 +453,7 @@ With ANSI colors: timestamp=gray, level=colored, category=gray
 
 3. Check log file exists:
    ```bash
-   cat /tmp/dullahan-$(id -u)/dullahan.log
+   cat /tmp/dullahan-$(id -u)/dullahan-<port>.log
    ```
 
 ### Client logs not appearing

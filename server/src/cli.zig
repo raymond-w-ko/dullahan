@@ -114,8 +114,8 @@ pub fn printUsage() void {
         \\Options:
         \\  -h, --help           Show this help
         \\  --timeout=MS         Command timeout in milliseconds (default: 5000)
-        \\  --socket=PATH        Socket path (default: /tmp/dullahan-<uid>/dullahan.sock)
-        \\  --pid=PATH           PID file path (default: /tmp/dullahan-<uid>/dullahan.pid)
+        \\  --socket=PATH        Socket path (default: /tmp/dullahan-<uid>/dullahan-<port>.sock)
+        \\  --pid=PATH           PID file path (default: /tmp/dullahan-<uid>/dullahan-<port>.pid)
         \\  --static-dir=PATH    Serve static files from directory
         \\  --port=PORT          WebSocket/HTTP port (default: 7681)
         \\  --pty-log            Enable PTY traffic logging (truncates existing log)
@@ -146,6 +146,9 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
         std.debug.print("Error: No command specified. Use --help for usage.\n", .{});
         return error.NoCommand;
     };
+
+    // Ensure paths use the requested port (affects socket/pid/log filenames).
+    paths.setPort(args.ws_port);
 
     // Ensure temp directory exists
     paths.ensureTempDir() catch |e| {
@@ -264,17 +267,57 @@ fn readStdin(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {
-    _ = args; // Server will compute its own paths from UID
-
     // Get path to self
     var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const self_path = try std.fs.selfExePath(&self_path_buf);
 
-    // Server will use the same paths module, computing paths from UID
-    var child = std.process.Child.init(
-        &.{ self_path, "serve" },
-        allocator,
-    );
+    var argv: std.ArrayListUnmanaged([]const u8) = .{};
+    defer argv.deinit(allocator);
+
+    try argv.append(allocator, self_path);
+    try argv.append(allocator, "serve");
+
+    if (args.socket_path) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--socket={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.pid_path) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--pid={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.static_dir) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--static-dir={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.ws_port != 7681) {
+        var buf: [64]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--port={d}", .{args.ws_port}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.pty_log) {
+        try argv.append(allocator, "--pty-log");
+    }
+    if (args.no_delta) {
+        try argv.append(allocator, "--no-delta");
+    }
+    if (args.no_sync_output) {
+        try argv.append(allocator, "--no-sync-output");
+    }
+    if (args.tls_cert) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--tls-cert={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+    if (args.tls_key) |p| {
+        var buf: [512]u8 = undefined;
+        const opt = std.fmt.bufPrint(&buf, "--tls-key={s}", .{p}) catch unreachable;
+        try argv.append(allocator, try allocator.dupe(u8, opt));
+    }
+
+    var child = std.process.Child.init(argv.items, allocator);
 
     // Detach from parent
     child.stdin_behavior = .Ignore;

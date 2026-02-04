@@ -1,7 +1,7 @@
 //! Dullahan unified logging system with Wine-style category support
 //!
 //! Provides logging to three channels:
-//! 1. Log file (/tmp/dullahan-<uid>/dullahan.log) - always (shared)
+//! 1. Log file (/tmp/dullahan-<uid>/dullahan-<port>.log) - always (shared)
 //! 2. Debug console (pane 0) - when session is set
 //! 3. Stderr - for errors, unimplemented features, AND all logs in debug builds
 //!

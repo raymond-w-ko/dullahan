@@ -9,7 +9,7 @@
 //!   - Pane 2: Shell terminal 2
 //!
 //! PTY traffic logging can be enabled via 'dullahan pty-log-on'
-//! and writes to /tmp/dullahan-<uid>/pty-traffic.log
+//! and writes to /tmp/dullahan-<uid>/pty-traffic-<port>.jsonl
 
 const std = @import("std");
 const posix = std.posix;
@@ -307,13 +307,13 @@ pub const Session = struct {
         return pty_log.getLogPath();
     }
 
-    /// Log bytes sent TO a pane's PTY (JSONL in pty-traffic.jsonl)
+    /// Log bytes sent TO a pane's PTY (JSONL in pty-traffic-<port>.jsonl)
     pub fn logPtySend(self: *Session, pane_id: u16, data: []const u8) void {
         _ = self;
         pty_log.logSendInput(pane_id, data);
     }
 
-    /// Log bytes received FROM a pane's PTY (JSONL in pty-traffic.jsonl)
+    /// Log bytes received FROM a pane's PTY (JSONL in pty-traffic-<port>.jsonl)
     pub fn logPtyRecv(self: *Session, pane_id: u16, data: []const u8) void {
         _ = self;
         pty_log.logRecv(pane_id, data);

@@ -18,7 +18,7 @@ User instructions override all rules below.
 ### Server (Zig)
 - Uses `libghostty-vt` for terminal emulation, source of truth for state
 - Single binary: `zig-out/bin/dullahan`
-- IPC socket: `/tmp/dullahan-<uid>/dullahan.sock` (CLI control)
+- IPC socket: `/tmp/dullahan-<uid>/dullahan-<port>.sock` (CLI control)
 - WebSocket: port `7681` (client data)
 - StreamHandler routes VT events (terminal→Terminal, queries→Pane)
 
@@ -55,7 +55,7 @@ make build|server|client|dist|install|themes|theme-db|coverage|fmt|dev|prod|clea
 | Path | Purpose |
 |------|---------|
 | `~/.config/dullahan/` | Config (layouts.json) |
-| `/tmp/dullahan-<uid>/` | Temp: .sock, .pid, dullahan.log, pty-traffic.log |
+| `/tmp/dullahan-<uid>/` | Temp: `dullahan-<port>.sock`, `dullahan-<port>.pid`, `dullahan-<port>.log`, `pty-traffic-<port>.jsonl` |
 | `ws://localhost:7681` | Client↔Server |
 
 ### Wire Protocol
