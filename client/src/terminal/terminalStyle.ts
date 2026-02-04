@@ -5,6 +5,130 @@ import { h } from "preact";
 import { ColorTag, Underline } from "../../../protocol/schema/style";
 import type { Style, Color } from "../../../protocol/schema/style";
 
+interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+interface ThemeColors {
+  themeName: string;
+  appEl: Element;
+  termFg?: RgbColor;
+  termBg?: RgbColor;
+  palette: Array<RgbColor | undefined>;
+}
+
+const FAINT_OPACITY = 0.5;
+
+let cachedTheme: ThemeColors | null = null;
+
+function parseCssColor(value: string): RgbColor | undefined {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+
+  if (trimmed.startsWith("#")) {
+    const hex = trimmed.slice(1);
+    if (hex.length === 3) {
+      const r = parseInt(hex.slice(0, 1) + hex.slice(0, 1), 16);
+      const g = parseInt(hex.slice(1, 2) + hex.slice(1, 2), 16);
+      const b = parseInt(hex.slice(2, 3) + hex.slice(2, 3), 16);
+      return { r, g, b };
+    }
+    if (hex.length === 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return { r, g, b };
+    }
+    return undefined;
+  }
+
+  const rgbMatch = trimmed.match(/rgba?\(([^)]+)\)/);
+  if (!rgbMatch) return undefined;
+  const rgbBody = rgbMatch[1];
+  if (!rgbBody) return undefined;
+  const parts = rgbBody
+    .split(/[,/ ]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length < 3) return undefined;
+
+  const parseChannel = (part: string): number | null => {
+    if (part.endsWith("%")) {
+      const pct = Number.parseFloat(part);
+      if (Number.isNaN(pct)) return null;
+      return Math.round((pct / 100) * 255);
+    }
+    const num = Number.parseFloat(part);
+    if (Number.isNaN(num)) return null;
+    return Math.round(num);
+  };
+
+  const p0 = parts[0];
+  const p1 = parts[1];
+  const p2 = parts[2];
+  if (!p0 || !p1 || !p2) return undefined;
+  const r = parseChannel(p0);
+  const g = parseChannel(p1);
+  const b = parseChannel(p2);
+  if (r === null || g === null || b === null) return undefined;
+  return {
+    r: Math.min(255, Math.max(0, r)),
+    g: Math.min(255, Math.max(0, g)),
+    b: Math.min(255, Math.max(0, b)),
+  };
+}
+
+function getThemeColors(): ThemeColors | null {
+  if (typeof document === "undefined") return cachedTheme;
+  const appEl = document.querySelector(".app");
+  if (!appEl) return cachedTheme;
+  const themeName = appEl.getAttribute("data-theme") ?? "";
+  if (cachedTheme && cachedTheme.appEl === appEl && cachedTheme.themeName === themeName) {
+    return cachedTheme;
+  }
+
+  const style = getComputedStyle(appEl);
+  const palette: Array<RgbColor | undefined> = [];
+  for (let i = 0; i < 16; i++) {
+    palette.push(parseCssColor(style.getPropertyValue(`--c${i}`)));
+  }
+
+  cachedTheme = {
+    themeName,
+    appEl,
+    termFg: parseCssColor(style.getPropertyValue("--term-fg")),
+    termBg: parseCssColor(style.getPropertyValue("--term-bg")),
+    palette,
+  };
+  return cachedTheme;
+}
+
+function resolveRgb(
+  color: Color,
+  theme: ThemeColors | null,
+  fallback?: RgbColor
+): RgbColor | undefined {
+  switch (color.tag) {
+    case ColorTag.RGB:
+      return { r: color.r, g: color.g, b: color.b };
+    case ColorTag.PALETTE:
+      return theme?.palette[color.index] ?? fallback;
+    case ColorTag.NONE:
+    default:
+      return fallback;
+  }
+}
+
+function blendRgb(fg: RgbColor, bg: RgbColor, alpha: number): string {
+  const inv = 1 - alpha;
+  const r = Math.round(fg.r * alpha + bg.r * inv);
+  const g = Math.round(fg.g * alpha + bg.g * inv);
+  const b = Math.round(fg.b * alpha + bg.b * inv);
+  return `rgb(${r},${g},${b})`;
+}
+
 /** Get cell color as CSS value */
 export function getCellColor(style: Style, type: "fg" | "bg"): string | undefined {
   const color = type === "fg" ? style.fgColor : style.bgColor;
@@ -47,7 +171,6 @@ export function styleToClasses(style: Style): string {
   // Attributes (inverse handled above, not as a class)
   if (style.flags.bold) classes.push("bold");
   if (style.flags.italic) classes.push("italic");
-  if (style.flags.faint) classes.push("faint");
   if (style.flags.blink) classes.push("blink");
   if (style.flags.invisible) classes.push("invisible");
   if (style.flags.strikethrough) classes.push("strikethrough");
@@ -108,6 +231,27 @@ export function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
   if (bgColor.tag === ColorTag.RGB) {
     css.backgroundColor = `rgb(${bgColor.r},${bgColor.g},${bgColor.b})`;
     hasInline = true;
+  }
+
+  // Faint: dim foreground only by blending with effective background
+  if (style.flags.faint) {
+    const theme = getThemeColors();
+    const termFg = theme?.termFg;
+    const termBg = theme?.termBg;
+    const fgRgb = resolveRgb(fgColor, theme, termFg);
+    const bgRgb = resolveRgb(bgColor, theme, termBg);
+
+    if (fgRgb && bgRgb) {
+      css.color = blendRgb(fgRgb, bgRgb, FAINT_OPACITY);
+      hasInline = true;
+    } else if (fgRgb) {
+      css.color = `rgb(${fgRgb.r},${fgRgb.g},${fgRgb.b})`;
+      hasInline = true;
+    } else {
+      // Fallback to whole-cell opacity if we cannot resolve theme colors
+      css.opacity = FAINT_OPACITY;
+      hasInline = true;
+    }
   }
 
   // Underline color (always inline if set, CSS doesn't support this well)
