@@ -131,6 +131,18 @@ describe("cellsToRuns", () => {
     expect(lines[0]![0]!.singleRanges).toEqual([{ start: 0, end: 1 }]);
   });
 
+  test("forced single codepoint renders as single-char", () => {
+    const cp = 0x279b;
+    const ch = String.fromCodePoint(cp);
+    const cells = [makeCell(cp), makeCell(65)];
+
+    const lines = cellsToRuns(cells, emptyStyles, 2, 1);
+
+    expect(lines[0]![0]!.text).toBe(`${ch}A`);
+    expect(lines[0]![0]!.wideRanges).toBeUndefined();
+    expect(lines[0]![0]!.singleRanges).toEqual([{ start: 0, end: 1 }]);
+  });
+
   test("wide characters with different styles create separate runs", () => {
     const cells = [
       makeCell(0x4e2d, Wide.WIDE, 1),    // 中 (style 1)

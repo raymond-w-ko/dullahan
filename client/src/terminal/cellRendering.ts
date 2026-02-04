@@ -79,6 +79,14 @@ function isSymbolLikeCodepoint(cp: number): boolean {
   return isPrivateUseCodePoint(cp);
 }
 
+const forcedSingleCodepoints = new Set<number>([
+  0x279b,
+]);
+
+function isForcedSingleCodepoint(cp: number): boolean {
+  return forcedSingleCodepoints.has(cp);
+}
+
 function shouldExpandSymbol(
   cells: Cell[],
   idx: number,
@@ -256,8 +264,9 @@ export function cellsToRuns(
       // Check if this is a wide character, or a private-use glyph that should
       // be constrained to a single cell (e.g. Nerd Font icons).
       const isWide = cell?.wide === Wide.WIDE || expandSymbol;
+      const cp = getCellCodepoint(cell);
       const isPrivateUse = char.length > 0 && hasPrivateUse(char);
-      const isSingle = !isWide && isPrivateUse;
+      const isSingle = !isWide && (isPrivateUse || isForcedSingleCodepoint(cp));
 
       // Start a new run if style, selection, bgOverride, or hyperlink changes
       if (
