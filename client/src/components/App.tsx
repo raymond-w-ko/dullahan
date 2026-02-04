@@ -48,7 +48,7 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Toggle layout dividers after holding Meta/Ctrl for ~3 seconds
+  // Toggle layout dividers after holding Meta for ~3 seconds
   useEffect(() => {
     const toggleDividers = () => {
       document.body.classList.toggle("layout-divider-enabled");
@@ -61,7 +61,7 @@ export function App() {
       }
     };
 
-    const isModifierHeld = (e: KeyboardEvent) => e.metaKey || e.ctrlKey;
+    const isModifierHeld = (e: KeyboardEvent) => e.metaKey;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isModifierHeld(e)) return;
@@ -84,7 +84,7 @@ export function App() {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== "Meta" && e.key !== "Control") return;
+      if (e.key !== "Meta") return;
       dividerHoldHeldRef.current = isModifierHeld(e);
       if (!dividerHoldHeldRef.current) {
         clearTimer();
