@@ -424,6 +424,13 @@ export class TerminalConnection {
   }
 
   connect(): void {
+    this._authToken = getAuthToken();
+    if (!this._authToken) {
+      connLog.warn("Auth token missing; skipping WebSocket connect");
+      this.emit("error", "Missing auth token. Add ?token=... to the URL.");
+      return;
+    }
+
     if (this.ws) {
       this.ws.close();
     }
@@ -752,6 +759,12 @@ export class TerminalConnection {
   }
 
   private scheduleReconnect(): void {
+    this._authToken = getAuthToken();
+    if (!this._authToken) {
+      connLog.warn("Auth token missing; reconnect disabled");
+      this.emit("error", "Missing auth token. Add ?token=... to the URL.");
+      return;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
     }
