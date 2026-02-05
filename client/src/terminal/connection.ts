@@ -397,13 +397,7 @@ export class TerminalConnection {
       // Reset reconnect backoff on successful connection
       this.reconnectAttempts = 0;
       // Send hello message to identify this client with theme info
-      const themeInfo = this.getThemeInfo();
-      this.send({
-        type: "hello",
-        clientId: this._clientId,
-        ...themeInfo,
-      });
-      connLog.log("Sent hello with client ID:", this._clientId, "theme:", themeInfo);
+      this.sendHello("connect");
       // Flush any pending resizes now that we're connected
       this.flushPendingResizes();
       // Flush any queued outbound messages
@@ -468,6 +462,30 @@ export class TerminalConnection {
         connLog.error("Failed to parse message:", e);
       }
     };
+  }
+
+  /** Resend hello with updated theme info (used on theme changes). */
+  sendThemeUpdate(): void {
+    if (!this.isConnected) {
+      return;
+    }
+    if (!this.isMaster) {
+      connLog.log("Skipping theme hello (not master)");
+      return;
+    }
+    this.sendHello("theme-update");
+  }
+
+  /** Send hello with logging (used on connect and theme updates). */
+  private sendHello(reason: "connect" | "theme-update"): void {
+    const themeInfo = this.getThemeInfo();
+    const msg: ClientMessage = {
+      type: "hello",
+      clientId: this._clientId,
+      ...themeInfo,
+    };
+    this.send(msg);
+    connLog.log(`Sent hello (${reason}) with client ID:`, this._clientId, "theme:", themeInfo);
   }
 
   private handleBinaryMessage(msg: ServerMessage): void {

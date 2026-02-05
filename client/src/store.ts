@@ -803,6 +803,13 @@ export function initConnection() {
     ) {
       syncConfig();
     }
+    if (key === "theme") {
+      const conn = store.connection;
+      if (conn?.isConnected) {
+        // Defer to allow data-theme updates before sampling CSS vars.
+        window.setTimeout(() => conn.sendThemeUpdate(), 0);
+      }
+    }
     // Font-related settings need dimension recalculation
     if (
       key === "fontSize" ||
