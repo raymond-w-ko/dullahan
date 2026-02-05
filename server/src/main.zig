@@ -184,15 +184,6 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
 
     // Echo tokens even when running in background by reading the tokens file.
     const tokens_path = paths.StaticPaths.tokens();
-    var prev_buf: [256]u8 = undefined;
-    var prev_len: usize = 0;
-    var has_prev = false;
-    if (std.fs.openFileAbsolute(tokens_path, .{})) |prev_file| {
-        defer prev_file.close();
-        prev_len = prev_file.readAll(&prev_buf) catch 0;
-        has_prev = prev_len > 0;
-    } else |_| {}
-
     const max_attempts: u32 = 60;
     var attempt: u32 = 0;
     while (attempt < max_attempts) : (attempt += 1) {
@@ -217,34 +208,17 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
             std.Thread.sleep(50 * std.time.ns_per_ms);
             continue;
         }
-        if (has_prev and n == prev_len and std.mem.eql(u8, buf[0..n], prev_buf[0..n])) {
-            // File still contains old tokens; wait for server to write new ones.
+        const parsed = parseTokensBuffer(buf[0..n]) orelse {
             std.Thread.sleep(50 * std.time.ns_per_ms);
             continue;
-        }
-
-        var master: ?[]const u8 = null;
-        var view: ?[]const u8 = null;
-        var iter = std.mem.splitScalar(u8, buf[0..n], '\n');
-        while (iter.next()) |line| {
-            if (line.len == 0) continue;
-            if (std.mem.startsWith(u8, line, "master=")) {
-                master = line["master=".len..];
-            } else if (std.mem.startsWith(u8, line, "view=")) {
-                view = line["view=".len..];
-            }
-        }
+        };
 
         std.debug.print("  Auth tokens:\n", .{});
-        if (master) |token| {
-            std.debug.print("    Master: {s}\n", .{token});
-        }
-        if (view) |token| {
-            std.debug.print("    View:   {s}\n", .{token});
-        }
+        std.debug.print("    Master: {s}\n", .{parsed.master});
+        std.debug.print("    View:   {s}\n", .{parsed.view});
         std.debug.print("  Tokens file: {s}\n", .{tokens_path});
         if (args.tls_cert) |cert_path| {
-            printAuthUrlsFromCert(cert_path, args.ws_port, master, view);
+            printAuthUrlsFromCert(cert_path, args.ws_port, parsed.master, parsed.view);
         }
         return;
     }
@@ -258,23 +232,32 @@ fn certHostFromPath(cert_path: []const u8) []const u8 {
     return if (ext.len > 0) base[0 .. base.len - ext.len] else base;
 }
 
-fn printAuthUrlsFromCert(cert_path: []const u8, port: u16, master: ?[]const u8, view: ?[]const u8) void {
+fn parseTokensBuffer(buf: []const u8) ?struct { master: []const u8, view: []const u8 } {
+    var master: ?[]const u8 = null;
+    var view: ?[]const u8 = null;
+    var iter = std.mem.splitScalar(u8, buf, '\n');
+    while (iter.next()) |line| {
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "master=")) {
+            master = std.mem.trim(u8, line["master=".len..], " \t\r\n");
+        } else if (std.mem.startsWith(u8, line, "view=")) {
+            view = std.mem.trim(u8, line["view=".len..], " \t\r\n");
+        }
+    }
+    if (master == null or view == null) return null;
+    if (master.?.len == 0 or view.?.len == 0) return null;
+    return .{ .master = master.?, .view = view.? };
+}
+
+fn printAuthUrlsFromCert(cert_path: []const u8, port: u16, master: []const u8, view: []const u8) void {
     const host = certHostFromPath(cert_path);
     std.debug.print("  Auth URLs (cert host):\n", .{});
     if (port == 443) {
-        if (master) |token| {
-            std.debug.print("    Master: https://{s}/?token={s}\n", .{ host, token });
-        }
-        if (view) |token| {
-            std.debug.print("    View:   https://{s}/?token={s}\n", .{ host, token });
-        }
+        std.debug.print("    Master: https://{s}/?token={s}\n", .{ host, master });
+        std.debug.print("    View:   https://{s}/?token={s}\n", .{ host, view });
     } else {
-        if (master) |token| {
-            std.debug.print("    Master: https://{s}:{d}/?token={s}\n", .{ host, port, token });
-        }
-        if (view) |token| {
-            std.debug.print("    View:   https://{s}:{d}/?token={s}\n", .{ host, port, token });
-        }
+        std.debug.print("    Master: https://{s}:{d}/?token={s}\n", .{ host, port, master });
+        std.debug.print("    View:   https://{s}:{d}/?token={s}\n", .{ host, port, view });
     }
 }
 

@@ -71,6 +71,33 @@ fn writeTokensFile(path: []const u8, master_token: []const u8, view_token: []con
     try file.writeAll(contents);
 }
 
+fn readTokensFile(path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
+    const file = std.fs.openFileAbsolute(path, .{}) catch |e| switch (e) {
+        error.FileNotFound => return null,
+        else => return e,
+    };
+    defer file.close();
+
+    const n = try file.readAll(buf);
+    if (n == 0) return null;
+
+    var master: ?[]const u8 = null;
+    var view: ?[]const u8 = null;
+    var iter = std.mem.splitScalar(u8, buf[0..n], '\n');
+    while (iter.next()) |line| {
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "master=")) {
+            master = std.mem.trim(u8, line["master=".len..], " \t\r\n");
+        } else if (std.mem.startsWith(u8, line, "view=")) {
+            view = std.mem.trim(u8, line["view=".len..], " \t\r\n");
+        }
+    }
+
+    if (master == null or view == null) return null;
+    if (master.?.len == 0 or view.?.len == 0) return null;
+    return .{ .master = master.?, .view = view.? };
+}
+
 fn certHostFromPath(cert_path: []const u8) []const u8 {
     const base = std.fs.path.basename(cert_path);
     const ext = std.fs.path.extension(base);
@@ -110,17 +137,32 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Ensure temp directory exists for tokens/logs/sockets
     try paths.ensureTempDir();
 
-    // Generate auth tokens for this server instance
-    const master_token_buf = generateTokenHex();
-    const view_token_buf = generateTokenHex();
-    const master_token = master_token_buf[0..];
-    const view_token = view_token_buf[0..];
-
-    // Write tokens to temp file
     const tokens_path = paths.StaticPaths.tokens();
-    writeTokensFile(tokens_path, master_token, view_token) catch |e| {
-        log.warn("Failed to write tokens file {s}: {any}", .{ tokens_path, e });
+    var tokens_buf: [256]u8 = undefined;
+    var master_token: []const u8 = undefined;
+    var view_token: []const u8 = undefined;
+    var reused_tokens = false;
+
+    const tokens_opt = readTokensFile(tokens_path, &tokens_buf) catch |e| blk: {
+        log.warn("Failed to read tokens file {s}: {any}", .{ tokens_path, e });
+        break :blk null;
     };
+    if (tokens_opt) |tokens| {
+        master_token = tokens.master;
+        view_token = tokens.view;
+        reused_tokens = true;
+    } else {
+        // Generate auth tokens for this server instance
+        const master_token_buf = generateTokenHex();
+        const view_token_buf = generateTokenHex();
+        master_token = master_token_buf[0..];
+        view_token = view_token_buf[0..];
+
+        // Write tokens to temp file
+        writeTokensFile(tokens_path, master_token, view_token) catch |e| {
+            log.warn("Failed to write tokens file {s}: {any}", .{ tokens_path, e });
+        };
+    }
 
     // Create global pane registry
     var pane_registry = PaneRegistry.init(allocator, .{
@@ -241,6 +283,9 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         std.debug.print("  TLS enabled (certificate: {s})\n", .{config.tls_cert.?});
     }
     std.debug.print("  Auth tokens:\n", .{});
+    if (reused_tokens) {
+        std.debug.print("    (reused from existing tokens file)\n", .{});
+    }
     std.debug.print("    Master: {s}\n", .{master_token});
     std.debug.print("    View:   {s}\n", .{view_token});
     std.debug.print("  Tokens file: {s}\n", .{tokens_path});
