@@ -184,6 +184,15 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
 
     // Echo tokens even when running in background by reading the tokens file.
     const tokens_path = paths.StaticPaths.tokens();
+    var prev_buf: [256]u8 = undefined;
+    var prev_len: usize = 0;
+    var has_prev = false;
+    if (std.fs.openFileAbsolute(tokens_path, .{})) |prev_file| {
+        defer prev_file.close();
+        prev_len = prev_file.readAll(&prev_buf) catch 0;
+        has_prev = prev_len > 0;
+    } else |_| {}
+
     const max_attempts: u32 = 60;
     var attempt: u32 = 0;
     while (attempt < max_attempts) : (attempt += 1) {
@@ -205,6 +214,11 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
             return;
         };
         if (n == 0) {
+            std.Thread.sleep(50 * std.time.ns_per_ms);
+            continue;
+        }
+        if (has_prev and n == prev_len and std.mem.eql(u8, buf[0..n], prev_buf[0..n])) {
+            // File still contains old tokens; wait for server to write new ones.
             std.Thread.sleep(50 * std.time.ns_per_ms);
             continue;
         }
