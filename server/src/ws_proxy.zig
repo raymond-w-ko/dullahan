@@ -36,22 +36,34 @@ pub const AuthStore = struct {
         self.allocator.free(self.view_token);
     }
 
+    fn tokensEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+
+    fn extractPrefixedToken(input: []const u8, prefix: []const u8) ?[]const u8 {
+        const idx = std.mem.indexOf(u8, input, prefix) orelse return null;
+        var rest = input[idx + prefix.len ..];
+        rest = std.mem.trimLeft(u8, rest, " \t\r\n");
+        const end = std.mem.indexOfAny(u8, rest, " \t\r\n") orelse rest.len;
+        if (end == 0) return null;
+        return rest[0..end];
+    }
+
     pub fn roleForToken(self: *const AuthStore, token: ?[]const u8) AuthRole {
         if (token) |raw| {
-            var value = std.mem.trim(u8, raw, " \t\r\n");
+            const value = std.mem.trim(u8, raw, " \t\r\n");
             if (value.len == 0) return .none;
 
-            if (std.mem.startsWith(u8, value, "master=")) {
-                value = value["master=".len..];
-                return if (std.mem.eql(u8, value, self.master_token)) .master else .none;
+            if (extractPrefixedToken(value, "master=")) |candidate| {
+                return if (tokensEqual(candidate, self.master_token)) .master else .none;
             }
-            if (std.mem.startsWith(u8, value, "view=")) {
-                value = value["view=".len..];
-                return if (std.mem.eql(u8, value, self.view_token)) .view else .none;
+            if (extractPrefixedToken(value, "view=")) |candidate| {
+                return if (tokensEqual(candidate, self.view_token)) .view else .none;
             }
 
-            if (std.mem.eql(u8, value, self.master_token)) return .master;
-            if (std.mem.eql(u8, value, self.view_token)) return .view;
+            if (tokensEqual(value, self.master_token)) return .master;
+            if (tokensEqual(value, self.view_token)) return .view;
         }
         return .none;
     }
@@ -281,6 +293,9 @@ test "AuthStore roleForToken" {
     try std.testing.expectEqual(AuthRole.master, store.roleForToken("master=master-token"));
     try std.testing.expectEqual(AuthRole.view, store.roleForToken("view=view-token"));
     try std.testing.expectEqual(AuthRole.view, store.roleForToken("  view-token\n"));
+    try std.testing.expectEqual(AuthRole.master, store.roleForToken("master=master-token view=view-token"));
+    try std.testing.expectEqual(AuthRole.view, store.roleForToken("view=view-token master=master-token"));
+    try std.testing.expectEqual(AuthRole.master, store.roleForToken("MASTER-TOKEN"));
     try std.testing.expectEqual(AuthRole.none, store.roleForToken("nope"));
     try std.testing.expectEqual(AuthRole.none, store.roleForToken(null));
 }
