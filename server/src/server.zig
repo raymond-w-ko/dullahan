@@ -71,6 +71,24 @@ fn writeTokensFile(path: []const u8, master_token: []const u8, view_token: []con
     try file.writeAll(contents);
 }
 
+fn certHostFromPath(cert_path: []const u8) []const u8 {
+    const base = std.fs.path.basename(cert_path);
+    const ext = std.fs.path.extension(base);
+    return if (ext.len > 0) base[0 .. base.len - ext.len] else base;
+}
+
+fn printAuthUrlsFromCert(cert_path: []const u8, port: u16, master_token: []const u8, view_token: []const u8) void {
+    const host = certHostFromPath(cert_path);
+    std.debug.print("  Auth URLs (cert host):\n", .{});
+    if (port == 443) {
+        std.debug.print("    Master: https://{s}/?token={s}\n", .{ host, master_token });
+        std.debug.print("    View:   https://{s}/?token={s}\n", .{ host, view_token });
+    } else {
+        std.debug.print("    Master: https://{s}:{d}/?token={s}\n", .{ host, port, master_token });
+        std.debug.print("    View:   https://{s}:{d}/?token={s}\n", .{ host, port, view_token });
+    }
+}
+
 pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Detect Tailscale for remote access BEFORE signal handlers are installed.
     // This is important because the SIGCHLD handler auto-reaps children, which
@@ -226,6 +244,9 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     std.debug.print("    Master: {s}\n", .{master_token});
     std.debug.print("    View:   {s}\n", .{view_token});
     std.debug.print("  Tokens file: {s}\n", .{tokens_path});
+    if (config.isTlsEnabled()) {
+        printAuthUrlsFromCert(config.tls_cert.?, config.ws_port, master_token, view_token);
+    }
     std.debug.print("Press Ctrl+C to shutdown\n", .{});
 
     // Run the single-threaded event loop

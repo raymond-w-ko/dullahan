@@ -229,10 +229,39 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
             std.debug.print("    View:   {s}\n", .{token});
         }
         std.debug.print("  Tokens file: {s}\n", .{tokens_path});
+        if (args.tls_cert) |cert_path| {
+            printAuthUrlsFromCert(cert_path, args.ws_port, master, view);
+        }
         return;
     }
 
     std.debug.print("Warning: tokens file not ready: {s}\n", .{tokens_path});
+}
+
+fn certHostFromPath(cert_path: []const u8) []const u8 {
+    const base = std.fs.path.basename(cert_path);
+    const ext = std.fs.path.extension(base);
+    return if (ext.len > 0) base[0 .. base.len - ext.len] else base;
+}
+
+fn printAuthUrlsFromCert(cert_path: []const u8, port: u16, master: ?[]const u8, view: ?[]const u8) void {
+    const host = certHostFromPath(cert_path);
+    std.debug.print("  Auth URLs (cert host):\n", .{});
+    if (port == 443) {
+        if (master) |token| {
+            std.debug.print("    Master: https://{s}/?token={s}\n", .{ host, token });
+        }
+        if (view) |token| {
+            std.debug.print("    View:   https://{s}/?token={s}\n", .{ host, token });
+        }
+    } else {
+        if (master) |token| {
+            std.debug.print("    Master: https://{s}:{d}/?token={s}\n", .{ host, port, token });
+        }
+        if (view) |token| {
+            std.debug.print("    View:   https://{s}:{d}/?token={s}\n", .{ host, port, token });
+        }
+    }
 }
 
 // Tests specific to main (CLI, arg parsing, etc.)
