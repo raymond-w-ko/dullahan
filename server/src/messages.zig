@@ -78,7 +78,7 @@ pub const HelloMessage = struct {
     themeFg: ?[]const u8 = null,
     /// Theme background color (e.g., "#282c34") - fallback for custom themes
     themeBg: ?[]const u8 = null,
-    /// Optional auth token for future authentication support
+    /// Optional auth token for authentication
     token: ?[]const u8 = null,
 };
 

@@ -13,6 +13,7 @@ const layout_db = @import("layout_db.zig");
 const layout_helpers = @import("layout_helpers.zig");
 const websocket = @import("websocket.zig");
 const messages = @import("messages.zig");
+const ws_proxy = @import("ws_proxy.zig");
 const Session = @import("session.zig").Session;
 const Window = @import("window.zig").Window;
 const pane_mod = @import("pane.zig");
@@ -77,32 +78,39 @@ fn logClientError(comptime context: []const u8, err: anyerror) void {
 
 /// Handle a parsed message (works for both JSON and msgpack protocols).
 pub fn handleParsedMessage(el: *EventLoop, msg: ParsedMessage, client: *ClientState) !void {
+    const can_control = canControl(el, client);
     switch (msg) {
-        .key => |key_msg| try handleKey(el, key_msg),
-        .text => |text_msg| try handleText(el, text_msg),
-        .resize => |resize_msg| try handleResize(el, client, resize_msg),
-        .scroll => |scroll_msg| handleScroll(el, scroll_msg),
+        .key => |key_msg| if (can_control) try handleKey(el, key_msg),
+        .text => |text_msg| if (can_control) try handleText(el, text_msg),
+        .resize => |resize_msg| if (can_control) try handleResize(el, client, resize_msg),
+        .scroll => |scroll_msg| if (can_control) handleScroll(el, scroll_msg),
         .ping => |ping_msg| try handlePing(el, client, ping_msg),
         .sync => |sync_msg| try handleSync(el, client, sync_msg),
         .resync => |resync_msg| try handleResync(el, client, resync_msg),
-        .focus => |focus_msg| handleFocus(el, focus_msg),
-        .hello => |hello_msg| handleHello(el, client, hello_msg),
+        .focus => |focus_msg| if (can_control) handleFocus(el, focus_msg),
+        .hello => |hello_msg| try handleHello(el, client, hello_msg),
         .request_master => handleRequestMaster(el, client),
-        .new_window => |new_window_msg| handleNewWindow(el, client, new_window_msg),
-        .close_window => |close_window_msg| handleCloseWindow(el, client, close_window_msg),
-        .close_pane => |close_pane_msg| handleClosePane(el, client, close_pane_msg),
-        .set_layout => |set_layout_msg| handleSetLayout(el, client, set_layout_msg),
-        .swap_panes => |swap_msg| handleSwapPanes(el, client, swap_msg),
-        .resize_layout => |resize_msg| handleResizeLayout(el, client, resize_msg),
-        .mouse => |mouse_msg| handleMouse(el, mouse_msg),
-        .select_all => |select_msg| handleSelectAll(el, select_msg),
-        .clear_selection => |clear_msg| handleClearSelection(el, clear_msg),
-        .clipboard_response => |clip_msg| handleClipboardResponse(el, clip_msg),
-        .clipboard_set => |clip_msg| handleClipboardSet(el, clip_msg),
-        .copy => |copy_msg| handleCopy(el, copy_msg),
-        .clipboard_paste => |paste_msg| handleClipboardPaste(el, paste_msg),
+        .new_window => |new_window_msg| if (can_control) handleNewWindow(el, client, new_window_msg),
+        .close_window => |close_window_msg| if (can_control) handleCloseWindow(el, client, close_window_msg),
+        .close_pane => |close_pane_msg| if (can_control) handleClosePane(el, client, close_pane_msg),
+        .set_layout => |set_layout_msg| if (can_control) handleSetLayout(el, client, set_layout_msg),
+        .swap_panes => |swap_msg| if (can_control) handleSwapPanes(el, client, swap_msg),
+        .resize_layout => |resize_msg| if (can_control) handleResizeLayout(el, client, resize_msg),
+        .mouse => |mouse_msg| if (can_control) handleMouse(el, mouse_msg),
+        .select_all => |select_msg| if (can_control) handleSelectAll(el, select_msg),
+        .clear_selection => |clear_msg| if (can_control) handleClearSelection(el, clear_msg),
+        .clipboard_response => |clip_msg| if (can_control) handleClipboardResponse(el, clip_msg),
+        .clipboard_set => |clip_msg| if (can_control) handleClipboardSet(el, clip_msg),
+        .copy => |copy_msg| if (can_control) handleCopy(el, copy_msg),
+        .clipboard_paste => |paste_msg| if (can_control) handleClipboardPaste(el, paste_msg),
         .unknown => {},
     }
+}
+
+fn canControl(el: *EventLoop, client: *ClientState) bool {
+    if (!ws_proxy.AuthStore.canControl(client.auth_role)) return false;
+    const client_id = client.client_id orelse return false;
+    return el.isMaster(client_id);
 }
 
 // ============================================================================
@@ -295,21 +303,37 @@ fn handleFocus(el: *EventLoop, focus_msg: ParsedFocus) void {
 // Client/Master Management Handlers
 // ============================================================================
 
-fn handleHello(el: *EventLoop, client: *ClientState, hello_msg: ParsedHello) void {
+fn handleHello(el: *EventLoop, client: *ClientState, hello_msg: ParsedHello) !void {
+    const was_authenticated = client.authenticated;
+
     client.setClientId(hello_msg.clientId) catch |e| {
         logClientError("set client ID", e);
         return;
     };
 
-    // Mark client as authenticated (dev mode: auto-auth on valid hello)
-    // Future: validate hello_msg.token here before setting authenticated
+    const role = el.auth_store.roleForToken(hello_msg.token);
+    if (role == .none) {
+        log.warn("Rejecting client {s}: invalid or missing auth token", .{client.shortId()});
+        conn_log.warn("Rejecting client {s}: invalid or missing auth token", .{client.shortId()});
+        client.ws.sendClose() catch {};
+        return error.ConnectionClosed;
+    }
+
+    if (hello_msg.token) |token| {
+        client.setAuthToken(token) catch |e| {
+            logClientError("set auth token", e);
+            return;
+        };
+    }
+
     client.authenticated = true;
+    client.auth_role = role;
 
     log.info("Client identified: {s}", .{client.shortId()});
     conn_log.info("Client identified: {s}", .{client.shortId()});
 
     // Auto-assign as master if no master exists
-    if (el.master_id == null) {
+    if (!was_authenticated and el.master_id == null and role == .master) {
         if (client.client_id) |cid| {
             log.info("No master, auto-assigning {s} as master", .{client.shortId()});
             conn_log.info("No master, auto-assigning {s} as master", .{client.shortId()});
@@ -327,13 +351,27 @@ fn handleHello(el: *EventLoop, client: *ClientState, hello_msg: ParsedHello) voi
         }
     }
 
-    // Send current IPC clipboard state to the new client
-    el.sendIpcClipboardState(client) catch |e| {
-        logRecoverable("send IPC clipboard state", e);
-    };
+    if (!was_authenticated) {
+        // Send initial state now that the client is authenticated
+        el.sendInitialState(client) catch |e| {
+            logClientError("send initial state", e);
+            client.ws.sendClose() catch {};
+            return error.ConnectionClosed;
+        };
+
+        // Send current IPC clipboard state to the new client
+        el.sendIpcClipboardState(client) catch |e| {
+            logRecoverable("send IPC clipboard state", e);
+        };
+    }
 }
 
 fn handleRequestMaster(el: *EventLoop, client: *ClientState) void {
+    if (!ws_proxy.AuthStore.canRequestMaster(client.auth_role)) {
+        log.debug("Rejecting request_master from view-only client {s}", .{client.shortId()});
+        return;
+    }
+
     // Client is requesting to become master
     const client_id = client.client_id orelse {
         log.warn("Anonymous client tried to request master", .{});
@@ -1018,7 +1056,7 @@ fn handleCopy(el: *EventLoop, copy_msg: ParsedCopy) void {
             return;
         };
         defer el.allocator.free(clipboard_msg);
-        el.wsBroadcastAll(clipboard_msg);
+        el.wsBroadcast(clipboard_msg);
 
         log.debug("Copied selection from pane {d}: {d} chars", .{ copy_msg.paneId, text.len });
     } else {

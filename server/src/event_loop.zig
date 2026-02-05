@@ -64,6 +64,7 @@ pub const EventLoop = struct {
     session: *Session,
     clients: std.ArrayListUnmanaged(ClientState) = .{},
     running: bool = true,
+    auth_store: ws_proxy.AuthStore,
 
     // Server state for IPC commands
     start_time: i64,
@@ -98,6 +99,7 @@ pub const EventLoop = struct {
         http_server: *http.Server,
         session: *Session,
         no_delta: bool,
+        auth_store: ws_proxy.AuthStore,
     ) EventLoop {
         var layouts = layout_db.LayoutDb.init(allocator);
         layouts.load() catch |e| {
@@ -116,6 +118,7 @@ pub const EventLoop = struct {
             .start_time = std.time.timestamp(),
             .layouts = layouts,
             .no_delta = no_delta,
+            .auth_store = auth_store,
         };
     }
 
@@ -124,6 +127,7 @@ pub const EventLoop = struct {
             client.deinit();
         }
         self.clients.deinit(self.allocator);
+        self.auth_store.deinit();
         // Free master_id if allocated
         if (self.master_id) |id| {
             self.allocator.free(id);
@@ -148,7 +152,7 @@ pub const EventLoop = struct {
     }
 
     /// Broadcast binary message to all authenticated clients only.
-    fn wsBroadcast(self: *EventLoop, msg: []const u8) void {
+    pub fn wsBroadcast(self: *EventLoop, msg: []const u8) void {
         ws_proxy.WsProxy.broadcast(&self.clients, msg);
     }
 
@@ -442,7 +446,7 @@ pub const EventLoop = struct {
         // Handle broadcast if needed
         if (result.broadcast_data) |broadcast_msg| {
             defer alloc.free(broadcast_msg);
-            self.wsBroadcastAll(broadcast_msg);
+            self.wsBroadcast(broadcast_msg);
         }
 
         return result.response;
@@ -453,44 +457,6 @@ pub const EventLoop = struct {
         if (ws_conn == null) return;
 
         var client = ClientState.init(self.allocator, ws_conn.?);
-
-        // Send initial snapshots for all panes
-        var pane_it = self.session.pane_registry.iterator();
-        while (pane_it.next()) |pane_ptr| {
-            const pane = pane_ptr.*;
-            self.sendSnapshot(&client.ws, pane) catch |e| {
-                logClientError("send initial snapshot", e);
-                client.deinit();
-                return;
-            };
-            client.setGeneration(pane.id, pane.generation);
-        }
-
-        // Send layout message
-        const layout_msg = snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts) catch |e| {
-            logClientError("generate layout message", e);
-            client.deinit();
-            return;
-        };
-        defer self.allocator.free(layout_msg);
-        self.wsSendUnchecked(&client, layout_msg) catch |e| {
-            logClientError("send layout message", e);
-            client.deinit();
-            return;
-        };
-
-        // Send current master state
-        const master_msg = snapshot.generateMasterChangedMessage(self.allocator, self.master_id) catch |e| {
-            logClientError("generate master_changed message", e);
-            client.deinit();
-            return;
-        };
-        defer self.allocator.free(master_msg);
-        self.wsSendUnchecked(&client, master_msg) catch |e| {
-            logClientError("send master_changed message", e);
-            client.deinit();
-            return;
-        };
 
         client.ws.setTimeouts(0);
         try self.clients.append(self.allocator, client);
@@ -665,7 +631,7 @@ pub const EventLoop = struct {
     fn broadcastMasterChanged(self: *EventLoop) !void {
         const msg = try snapshot.generateMasterChangedMessage(self.allocator, self.master_id);
         defer self.allocator.free(msg);
-        self.wsBroadcastAll(msg);
+        self.wsBroadcast(msg);
     }
 
     /// Parse a hex color string like "#rrggbb" into [r, g, b] bytes.
@@ -747,7 +713,7 @@ pub const EventLoop = struct {
     pub fn broadcastLayout(self: *EventLoop) !void {
         const msg = try snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts);
         defer self.allocator.free(msg);
-        self.wsBroadcastAll(msg);
+        self.wsBroadcast(msg);
     }
 
     /// Broadcast pane update (snapshot/delta) to all connected clients.
@@ -775,6 +741,8 @@ pub const EventLoop = struct {
     }
 
     fn sendPaneUpdate(self: *EventLoop, client: *ClientState, pane: *Pane) !void {
+        if (!client.authenticated) return;
+
         // Skip congested clients - they'll get updates when socket becomes writable
         if (client.write_congested or client.ws.hasPendingWrite()) {
             client.write_congested = true;
@@ -894,6 +862,27 @@ pub const EventLoop = struct {
         try ws.sendBinary(snap);
     }
 
+    /// Send initial state (snapshots + layout + master) to a freshly authenticated client.
+    pub fn sendInitialState(self: *EventLoop, client: *ClientState) !void {
+        // Send initial snapshots for all panes
+        var pane_it = self.session.pane_registry.iterator();
+        while (pane_it.next()) |pane_ptr| {
+            const pane = pane_ptr.*;
+            try self.sendSnapshot(&client.ws, pane);
+            client.setGeneration(pane.id, pane.generation);
+        }
+
+        // Send layout message
+        const layout_msg = try snapshot.generateLayoutMessage(self.allocator, self.session, &self.layouts);
+        defer self.allocator.free(layout_msg);
+        try self.wsSendUnchecked(client, layout_msg);
+
+        // Send current master state
+        const master_msg = try snapshot.generateMasterChangedMessage(self.allocator, self.master_id);
+        defer self.allocator.free(master_msg);
+        try self.wsSendUnchecked(client, master_msg);
+    }
+
     /// Send current IPC clipboard state to a client.
     /// Called when a client first connects (after hello) to sync clipboard state.
     pub fn sendIpcClipboardState(self: *EventLoop, client: *ClientState) !void {
@@ -987,7 +976,7 @@ pub const EventLoop = struct {
                 return;
             };
             defer self.allocator.free(msg);
-            self.wsBroadcastAll(msg);
+            self.wsBroadcast(msg);
 
             log.debug("Updated primary clipboard from selection: {d} chars", .{text.len});
         }
@@ -1019,7 +1008,7 @@ pub const EventLoop = struct {
                     return;
                 };
                 defer pane.allocator.free(msg);
-                self.wsBroadcastAll(msg);
+                self.wsBroadcast(msg);
             }
             pane.clearClipboardSet();
         }
@@ -1088,7 +1077,7 @@ pub const EventLoop = struct {
             return;
         };
         defer self.allocator.free(msg);
-        self.wsBroadcastAll(msg);
+        self.wsBroadcast(msg);
 
         pane.clearShellEvent();
     }

@@ -10,6 +10,50 @@ const websocket = @import("websocket.zig");
 
 const log = std.log.scoped(.ws_proxy);
 
+/// Authentication roles derived from tokens.
+pub const AuthRole = enum {
+    none,
+    view,
+    master,
+};
+
+/// Centralized auth token store for connections.
+pub const AuthStore = struct {
+    allocator: std.mem.Allocator,
+    master_token: []const u8,
+    view_token: []const u8,
+
+    pub fn init(allocator: std.mem.Allocator, master_token: []const u8, view_token: []const u8) !AuthStore {
+        return .{
+            .allocator = allocator,
+            .master_token = try allocator.dupe(u8, master_token),
+            .view_token = try allocator.dupe(u8, view_token),
+        };
+    }
+
+    pub fn deinit(self: *AuthStore) void {
+        self.allocator.free(self.master_token);
+        self.allocator.free(self.view_token);
+    }
+
+    pub fn roleForToken(self: *const AuthStore, token: ?[]const u8) AuthRole {
+        if (token) |value| {
+            if (value.len == 0) return .none;
+            if (std.mem.eql(u8, value, self.master_token)) return .master;
+            if (std.mem.eql(u8, value, self.view_token)) return .view;
+        }
+        return .none;
+    }
+
+    pub fn canRequestMaster(role: AuthRole) bool {
+        return role == .master;
+    }
+
+    pub fn canControl(role: AuthRole) bool {
+        return role == .master;
+    }
+};
+
 /// Error types for proxy operations
 pub const ProxyError = error{
     NotAuthenticated,
@@ -215,4 +259,14 @@ test "WsProxy requireMaster" {
 
     // Should error when client is not master
     try std.testing.expectError(ProxyError.NotMaster, WsProxy.requireMaster(&client, "other-client"));
+}
+
+test "AuthStore roleForToken" {
+    var store = try AuthStore.init(std.testing.allocator, "master-token", "view-token");
+    defer store.deinit();
+
+    try std.testing.expectEqual(AuthRole.master, store.roleForToken("master-token"));
+    try std.testing.expectEqual(AuthRole.view, store.roleForToken("view-token"));
+    try std.testing.expectEqual(AuthRole.none, store.roleForToken("nope"));
+    try std.testing.expectEqual(AuthRole.none, store.roleForToken(null));
 }

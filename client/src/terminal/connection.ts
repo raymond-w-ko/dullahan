@@ -201,6 +201,43 @@ interface PaneState {
 
 /** Storage key for client ID */
 const CLIENT_ID_KEY = "dullahan_client_id";
+const AUTH_TOKEN_KEY = "dullahan.authToken";
+
+function readAuthTokenFromUrl(): string | null {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    return token && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function readAuthTokenFromStorage(): string | null {
+  try {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    return token && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthTokenToStorage(token: string): void {
+  try {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch {
+    // Ignore storage errors (private mode, etc.)
+  }
+}
+
+function getAuthToken(): string | null {
+  const urlToken = readAuthTokenFromUrl();
+  if (urlToken) {
+    writeAuthTokenToStorage(urlToken);
+    return urlToken;
+  }
+  return readAuthTokenFromStorage();
+}
 
 /** Get or generate client ID (persisted in sessionStorage) */
 function getClientId(): string {
@@ -221,6 +258,7 @@ export class TerminalConnection {
 
   // Client identification (persisted per session)
   private _clientId: string;
+  private _authToken: string | null = null;
 
   // Master/slave state - tracks if this client is the master
   private _masterId: string | null = null;
@@ -280,6 +318,7 @@ export class TerminalConnection {
   constructor(url?: string) {
     // Get or generate client ID
     this._clientId = getClientId();
+    this._authToken = getAuthToken();
 
     if (url) {
       this.url = url;
@@ -484,6 +523,9 @@ export class TerminalConnection {
       clientId: this._clientId,
       ...themeInfo,
     };
+    if (this._authToken) {
+      msg.token = this._authToken;
+    }
     this.send(msg);
     connLog.log(`Sent hello (${reason}) with client ID:`, this._clientId, "theme:", themeInfo);
   }

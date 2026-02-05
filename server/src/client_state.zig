@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const websocket = @import("websocket.zig");
+const ws_proxy = @import("ws_proxy.zig");
 
 const log = std.log.scoped(.client_state);
 
@@ -24,6 +25,9 @@ pub const ClientState = struct {
     /// In dev mode, clients are auto-authenticated on hello.
     /// Future: will require token validation.
     authenticated: bool = false,
+
+    /// Auth role based on token (none/view/master).
+    auth_role: ws_proxy.AuthRole = .none,
 
     /// Auth token from hello message (for future token validation)
     auth_token: ?[]const u8 = null,

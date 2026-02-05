@@ -14,6 +14,7 @@ const dlog = @import("dlog.zig");
 const pty_log = @import("pty_log.zig");
 const tailscale = @import("tailscale.zig");
 const tls_wrapper = @import("tls_wrapper.zig");
+const ws_proxy = @import("ws_proxy.zig");
 
 const log = std.log.scoped(.server);
 
@@ -42,6 +43,34 @@ pub const RunConfig = struct {
     }
 };
 
+fn hexDigit(n: u8) u8 {
+    return if (n < 10) @as(u8, '0') + n else @as(u8, 'a') + (n - 10);
+}
+
+fn generateTokenHex() [64]u8 {
+    var bytes: [32]u8 = undefined;
+    std.crypto.random.bytes(&bytes);
+
+    var out: [64]u8 = undefined;
+    for (bytes, 0..) |b, i| {
+        out[i * 2] = hexDigit(b >> 4);
+        out[i * 2 + 1] = hexDigit(b & 0x0F);
+    }
+    return out;
+}
+
+fn writeTokensFile(path: []const u8, master_token: []const u8, view_token: []const u8) !void {
+    var file = try std.fs.createFileAbsolute(path, .{
+        .truncate = true,
+        .mode = 0o600,
+    });
+    defer file.close();
+
+    var buf: [256]u8 = undefined;
+    const contents = try std.fmt.bufPrint(&buf, "master={s}\nview={s}\n", .{ master_token, view_token });
+    try file.writeAll(contents);
+}
+
 pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Detect Tailscale for remote access BEFORE signal handlers are installed.
     // This is important because the SIGCHLD handler auto-reaps children, which
@@ -59,6 +88,21 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     if (config.pty_log) {
         pty_log.setEnabled(true);
     }
+
+    // Ensure temp directory exists for tokens/logs/sockets
+    try paths.ensureTempDir();
+
+    // Generate auth tokens for this server instance
+    const master_token_buf = generateTokenHex();
+    const view_token_buf = generateTokenHex();
+    const master_token = master_token_buf[0..];
+    const view_token = view_token_buf[0..];
+
+    // Write tokens to temp file
+    const tokens_path = paths.StaticPaths.tokens();
+    writeTokensFile(tokens_path, master_token, view_token) catch |e| {
+        log.warn("Failed to write tokens file {s}: {any}", .{ tokens_path, e });
+    };
 
     // Create global pane registry
     var pane_registry = PaneRegistry.init(allocator, .{
@@ -154,7 +198,8 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     defer http_server.deinit();
 
     // Initialize event loop
-    var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session, config.no_delta);
+    const auth_store = try ws_proxy.AuthStore.init(allocator, master_token, view_token);
+    var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session, config.no_delta, auth_store);
     defer event_loop.deinit();
 
     // Assign layouts to windows created before event loop
@@ -177,6 +222,10 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     if (config.isTlsEnabled()) {
         std.debug.print("  TLS enabled (certificate: {s})\n", .{config.tls_cert.?});
     }
+    std.debug.print("  Auth tokens:\n", .{});
+    std.debug.print("    Master: {s}\n", .{master_token});
+    std.debug.print("    View:   {s}\n", .{view_token});
+    std.debug.print("  Tokens file: {s}\n", .{tokens_path});
     std.debug.print("Press Ctrl+C to shutdown\n", .{});
 
     // Run the single-threaded event loop
