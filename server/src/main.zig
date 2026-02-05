@@ -181,6 +181,58 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     try child.spawn();
 
     std.debug.print("Server started in background\n", .{});
+
+    // Echo tokens even when running in background by reading the tokens file.
+    const tokens_path = paths.StaticPaths.tokens();
+    const max_attempts: u32 = 60;
+    var attempt: u32 = 0;
+    while (attempt < max_attempts) : (attempt += 1) {
+        const file = std.fs.openFileAbsolute(tokens_path, .{}) catch |e| switch (e) {
+            error.FileNotFound => {
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            },
+            else => {
+                std.debug.print("Warning: failed to open tokens file {s}: {any}\n", .{ tokens_path, e });
+                return;
+            },
+        };
+        defer file.close();
+
+        var buf: [256]u8 = undefined;
+        const n = file.readAll(&buf) catch |e| {
+            std.debug.print("Warning: failed to read tokens file {s}: {any}\n", .{ tokens_path, e });
+            return;
+        };
+        if (n == 0) {
+            std.Thread.sleep(50 * std.time.ns_per_ms);
+            continue;
+        }
+
+        var master: ?[]const u8 = null;
+        var view: ?[]const u8 = null;
+        var iter = std.mem.splitScalar(u8, buf[0..n], '\n');
+        while (iter.next()) |line| {
+            if (line.len == 0) continue;
+            if (std.mem.startsWith(u8, line, "master=")) {
+                master = line["master=".len..];
+            } else if (std.mem.startsWith(u8, line, "view=")) {
+                view = line["view=".len..];
+            }
+        }
+
+        std.debug.print("  Auth tokens:\n", .{});
+        if (master) |token| {
+            std.debug.print("    Master: {s}\n", .{token});
+        }
+        if (view) |token| {
+            std.debug.print("    View:   {s}\n", .{token});
+        }
+        std.debug.print("  Tokens file: {s}\n", .{tokens_path});
+        return;
+    }
+
+    std.debug.print("Warning: tokens file not ready: {s}\n", .{tokens_path});
 }
 
 // Tests specific to main (CLI, arg parsing, etc.)
