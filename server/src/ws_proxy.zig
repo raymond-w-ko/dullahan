@@ -37,8 +37,19 @@ pub const AuthStore = struct {
     }
 
     pub fn roleForToken(self: *const AuthStore, token: ?[]const u8) AuthRole {
-        if (token) |value| {
+        if (token) |raw| {
+            var value = std.mem.trim(u8, raw, " \t\r\n");
             if (value.len == 0) return .none;
+
+            if (std.mem.startsWith(u8, value, "master=")) {
+                value = value["master=".len..];
+                return if (std.mem.eql(u8, value, self.master_token)) .master else .none;
+            }
+            if (std.mem.startsWith(u8, value, "view=")) {
+                value = value["view=".len..];
+                return if (std.mem.eql(u8, value, self.view_token)) .view else .none;
+            }
+
             if (std.mem.eql(u8, value, self.master_token)) return .master;
             if (std.mem.eql(u8, value, self.view_token)) return .view;
         }
@@ -267,6 +278,9 @@ test "AuthStore roleForToken" {
 
     try std.testing.expectEqual(AuthRole.master, store.roleForToken("master-token"));
     try std.testing.expectEqual(AuthRole.view, store.roleForToken("view-token"));
+    try std.testing.expectEqual(AuthRole.master, store.roleForToken("master=master-token"));
+    try std.testing.expectEqual(AuthRole.view, store.roleForToken("view=view-token"));
+    try std.testing.expectEqual(AuthRole.view, store.roleForToken("  view-token\n"));
     try std.testing.expectEqual(AuthRole.none, store.roleForToken("nope"));
     try std.testing.expectEqual(AuthRole.none, store.roleForToken(null));
 }
