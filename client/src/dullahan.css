@@ -108,16 +108,16 @@ html, body {
 }
 
 .bottombar-btn {
-  width: 2rem;
-  height: 2rem;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: none;
   border: none;
-  border-radius: 0.375rem;
+  border-radius: 3px;
   color: var(--term-fg);
-  font-size: 1rem;
+  font-size: 0.75rem;
   cursor: pointer;
   opacity: 0.6;
   transition: opacity 0.15s, background 0.15s;
@@ -263,17 +263,17 @@ html, body {
 }
 
 .window-tab {
-  min-width: 1.5rem;
-  height: 1.5rem;
-  padding: 0 0.5rem;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.25rem;
+  border-radius: 3px;
   color: var(--term-fg);
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   font-family: var(--term-font);
   cursor: pointer;
   opacity: 0.6;
