@@ -280,7 +280,6 @@ pub const Handler = struct {
                         continue;
                     }
                     if (!matched) {
-                        // TODO(du-3ss): Respond to additional XTGETTCAP keys when requested.
                         log.warn("XTGETTCAP request unhandled (hex): {s}", .{key});
                     }
                 }
@@ -296,7 +295,6 @@ pub const Handler = struct {
 
                 switch (decrqss) {
                     .none => {
-                        // TODO(du-3ss): Handle additional DECRQSS requests.
                         log.warn("DECRQSS request unhandled", .{});
                     },
                     .sgr => {
@@ -392,7 +390,7 @@ pub const Handler = struct {
 
     fn setMode(self: *Handler, mode: modes.Mode, enabled: bool) !void {
         if (mode == .synchronized_output and enabled and !self.pane.sync_output_allowed) {
-            // TODO(du-3ss): Make synchronized output opt-in configurable per pane.
+            // Synchronized output is currently disabled for this pane.
             self.terminal.modes.set(mode, false);
             self.pane.forceSyncDisable();
             log.warn("Synchronized output requested but disabled by config", .{});
@@ -488,10 +486,7 @@ pub const Handler = struct {
         switch (req) {
             .primary => self.pane.sendDA1Response(),
             .secondary => self.pane.sendDA2Response(),
-            .tertiary => {
-                // TODO(du-3ss): Implement DA3 (tertiary device attributes) response.
-                log.warn("DA3 (tertiary device attributes) requested but unimplemented", .{});
-            },
+            .tertiary => self.pane.sendDA3Response(),
         }
     }
 
@@ -578,6 +573,10 @@ pub const Handler = struct {
     }
 
     fn kittyColorOperation(self: *Handler, request: kitty_color.OSC) !void {
+        var report_stream: std.Io.Writer.Allocating = .init(self.pane.allocator);
+        defer report_stream.deinit();
+        const report_writer = &report_stream.writer;
+
         for (request.list.items) |item| {
             switch (item) {
                 .set => |v| switch (v.key) {
@@ -617,10 +616,40 @@ pub const Handler = struct {
                     },
                 },
                 .query => |key| {
-                    // TODO(du-3ss): Implement kitty color query responses.
-                    log.warn("Kitty color query unhandled: {f}", .{key});
+                    if (report_stream.written().len == 0) {
+                        try report_writer.writeAll("\x1b]21");
+                    }
+
+                    const color = switch (key) {
+                        .palette => |palette| self.terminal.colors.palette.current[palette],
+                        .special => |special| switch (special) {
+                            .foreground => self.terminal.colors.foreground.get(),
+                            .background => self.terminal.colors.background.get(),
+                            .cursor => self.terminal.colors.cursor.get(),
+                            else => {
+                                // Per kitty protocol, unknown keys should be reported as =?.
+                                try report_writer.print(";{f}=?", .{key});
+                                continue;
+                            },
+                        },
+                    } orelse {
+                        try report_writer.print(";{f}=", .{key});
+                        continue;
+                    };
+
+                    try report_writer.print(
+                        ";{f}=rgb:{x:0>2}/{x:0>2}/{x:0>2}",
+                        .{ key, color.r, color.g, color.b },
+                    );
                 },
             }
+        }
+
+        if (report_stream.written().len > 0) {
+            try report_writer.writeAll(request.terminator.string());
+            self.pane.writeResponse(report_stream.written()) catch |e| {
+                log.warn("Failed to send kitty color query response: {any}", .{e});
+            };
         }
     }
 

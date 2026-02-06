@@ -563,6 +563,16 @@ pub const Pane = struct {
         log.debug("Sent DA2 response", .{});
     }
 
+    /// Send Tertiary Device Attributes response (DECRPTUI).
+    /// Response: DCS ! | 00000000 ST
+    pub fn sendDA3Response(self: *Pane) void {
+        const response = "\x1bP!|00000000\x1b\\";
+        self.writeResponse(response) catch |e| {
+            log.warn("Failed to send DA3 response: {any}", .{e});
+        };
+        log.debug("Sent DA3 response", .{});
+    }
+
     /// Send DSR (Device Status Report) response for status query (CSI 5 n)
     /// Response: CSI 0 n (terminal OK)
     fn sendDSRStatusResponse(self: *Pane) void {
@@ -644,8 +654,26 @@ pub const Pane = struct {
             .csi_16_t => std.fmt.bufPrint(&buf, "\x1b[6;{d};{d}t", .{ cell_height, cell_width }),
             .csi_18_t => std.fmt.bufPrint(&buf, "\x1b[8;{d};{d}t", .{ rows, cols }),
             .csi_21_t => {
-                // TODO(du-3ss): Respond to XTWINOPS window title queries (CSI 21 t).
-                log.warn("XTWINOPS window title query (CSI 21 t) unhandled", .{});
+                var list: std.ArrayListUnmanaged(u8) = .{};
+                defer list.deinit(self.allocator);
+                list.appendSlice(self.allocator, "\x1b]l") catch {
+                    log.warn("Failed to allocate XTWINOPS title response prefix", .{});
+                    return;
+                };
+                if (self.getTitle()) |title| {
+                    list.appendSlice(self.allocator, title) catch {
+                        log.warn("Failed to allocate XTWINOPS title response payload", .{});
+                        return;
+                    };
+                }
+                list.appendSlice(self.allocator, "\x1b\\") catch {
+                    log.warn("Failed to allocate XTWINOPS title response terminator", .{});
+                    return;
+                };
+                self.writeResponse(list.items) catch |e| {
+                    log.warn("Failed to send XTWINOPS title response: {any}", .{e});
+                };
+                plog.debug("Pane {d}: Sent XTWINOPS title response", .{self.id});
                 return;
             },
         } catch {
@@ -767,9 +795,28 @@ pub const Pane = struct {
                     };
                     self.sendOscColorResponse(12, fg[0], fg[1], fg[2], use_st);
                 },
-                else => {
-                    // TODO(du-3ss): Respond to additional OSC dynamic color queries.
-                    log.warn("OSC dynamic color query unhandled: {s}", .{@tagName(d)});
+                .pointer_foreground,
+                .tektronix_foreground,
+                .tektronix_cursor,
+                .highlight_foreground,
+                => {
+                    const fg = self.theme_fg orelse .{
+                        constants.colors.fg_r,
+                        constants.colors.fg_g,
+                        constants.colors.fg_b,
+                    };
+                    self.sendOscColorResponse(@intFromEnum(d), fg[0], fg[1], fg[2], use_st);
+                },
+                .pointer_background,
+                .tektronix_background,
+                .highlight_background,
+                => {
+                    const bg = self.theme_bg orelse .{
+                        constants.colors.bg_r,
+                        constants.colors.bg_g,
+                        constants.colors.bg_b,
+                    };
+                    self.sendOscColorResponse(@intFromEnum(d), bg[0], bg[1], bg[2], use_st);
                 },
             },
             .palette => |idx| {
@@ -778,12 +825,17 @@ pub const Pane = struct {
                 // OSC 4 response format: OSC 4 ; idx ; rgb:RRRR/GGGG/BBBB ST
                 self.sendOsc4ColorResponse(idx, color.r, color.g, color.b, use_st);
             },
-            .special => {
-                // TODO(du-3ss): Respond to OSC special color queries.
-                log.warn("OSC special color query unhandled", .{});
+            .special => |special| {
+                // We don't maintain dedicated xterm special color state yet;
+                // use foreground as a stable fallback response.
+                const fg = self.theme_fg orelse .{
+                    constants.colors.fg_r,
+                    constants.colors.fg_g,
+                    constants.colors.fg_b,
+                };
+                self.sendOscSpecialColorResponse(op, special, fg[0], fg[1], fg[2], use_st);
             },
         }
-        _ = op; // op tells us which OSC triggered this (4, 10, 11, etc.)
     }
 
     /// Send OSC 4 palette color response
@@ -803,6 +855,37 @@ pub const Pane = struct {
             log.warn("Failed to send OSC 4 response: {any}", .{e});
         };
         log.debug("Sent OSC 4 response: idx={d} rgb:{x:0>4}/{x:0>4}/{x:0>4}", .{ idx, r16, g16, b16 });
+    }
+
+    fn sendOscSpecialColorResponse(
+        self: *Pane,
+        op: osc_color.Operation,
+        special: ghostty.color.Special,
+        r: u8,
+        g: u8,
+        b: u8,
+        use_st: bool,
+    ) void {
+        const cmd: u8 = switch (op) {
+            .osc_5, .osc_105 => 5,
+            else => 4,
+        };
+        const idx: u16 = if (cmd == 5) @intFromEnum(special) else special.osc4();
+
+        const r16: u16 = @as(u16, r) << 8 | r;
+        const g16: u16 = @as(u16, g) << 8 | g;
+        const b16: u16 = @as(u16, b) << 8 | b;
+
+        var buf: [48]u8 = undefined;
+        const response = if (use_st)
+            std.fmt.bufPrint(&buf, "\x1b]{d};{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x1b\\", .{ cmd, idx, r16, g16, b16 }) catch return
+        else
+            std.fmt.bufPrint(&buf, "\x1b]{d};{d};rgb:{x:0>4}/{x:0>4}/{x:0>4}\x07", .{ cmd, idx, r16, g16, b16 }) catch return;
+
+        self.writeResponse(response) catch |e| {
+            log.warn("Failed to send OSC {d} special color response: {any}", .{ cmd, e });
+        };
+        log.debug("Sent OSC {d} special color response: idx={d}", .{ cmd, idx });
     }
 
     /// Handle Device Status Report request from stream handler
