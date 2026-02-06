@@ -556,6 +556,20 @@ export class TerminalConnection {
         const rowIds = decodeRowIds(msg.rowIds);
         const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
         const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
+
+        // Validate snapshot style table integrity before mutating pane state.
+        const missingStyles = new Set<number>();
+        for (const cell of cells) {
+          if (cell.styleId !== 0 && !styles.has(cell.styleId)) {
+            missingStyles.add(cell.styleId);
+          }
+        }
+        if (missingStyles.size > 0) {
+          snapshotLog.warn(`Pane ${paneId}: snapshot missing ${missingStyles.size} styles, requesting resync`);
+          this.requestResync(paneId, "style_miss");
+          return; // Don't emit or cache corrupted snapshot
+        }
+
         const snapshot: TerminalSnapshot = {
           paneId,
           gen: msg.gen,
