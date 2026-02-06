@@ -147,7 +147,7 @@ export function App() {
           title={connected ? `Connected (${latency}ms latency)` : "Disconnected"}
         >
           {connected ? "\u25CF" : "\u25CB"}
-          {connected && latency > 0 && <span class="bottombar-latency">{latency}ms</span>}
+          {connected && <span class="bottombar-latency">{latency.toFixed(1)}ms</span>}
         </span>
         <button
           class="bottombar-btn"
