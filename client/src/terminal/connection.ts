@@ -199,6 +199,13 @@ interface PaneState {
   resyncCount: number;
 }
 
+type ResyncReason = "cache_miss" | "style_miss" | "corruption" | "manual";
+
+interface PendingResync {
+  reason: ResyncReason;
+  timer: number | null;
+}
+
 /** Storage key for client ID */
 const CLIENT_ID_KEY = "dullahan_client_id";
 const AUTH_TOKEN_KEY = "dullahan.authToken";
@@ -277,6 +284,7 @@ export class TerminalConnection {
 
   // Resync debouncing - prevent resync storms
   private _lastResyncTime: Map<number, number> = new Map();
+  private _pendingResync: Map<number, PendingResync> = new Map();
   private static readonly RESYNC_COOLDOWN_MS = 1000;
 
   // Latency tracking
@@ -794,6 +802,7 @@ export class TerminalConnection {
   disconnect(): void {
     this.stopPingTimer();
     this.clearSendQueue();
+    this.clearPendingResyncs();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -1156,14 +1165,40 @@ export class TerminalConnection {
    * @param paneId Target pane ID
    * @param reason Why resync is needed (for logging/metrics)
    */
-  requestResync(paneId: number, reason: "cache_miss" | "style_miss" | "corruption" | "manual"): void {
+  requestResync(paneId: number, reason: ResyncReason): void {
     const now = Date.now();
     const lastResync = this._lastResyncTime.get(paneId) ?? 0;
+    const elapsed = now - lastResync;
 
-    if (now - lastResync < TerminalConnection.RESYNC_COOLDOWN_MS) {
-      deltaLog.log(`Pane ${paneId}: resync throttled (${reason})`);
+    if (elapsed < TerminalConnection.RESYNC_COOLDOWN_MS) {
+      const delayMs = TerminalConnection.RESYNC_COOLDOWN_MS - elapsed;
+      const pending = this._pendingResync.get(paneId);
+      if (pending) {
+        if (this.resyncReasonPriority(reason) > this.resyncReasonPriority(pending.reason)) {
+          pending.reason = reason;
+        }
+        deltaLog.log(`Pane ${paneId}: resync throttled (${reason}), pending in ${delayMs}ms`);
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        const queued = this._pendingResync.get(paneId);
+        if (!queued) return;
+        queued.timer = null;
+        this._pendingResync.delete(paneId);
+        this.requestResync(paneId, queued.reason);
+      }, delayMs);
+      this._pendingResync.set(paneId, { reason, timer });
+      deltaLog.log(`Pane ${paneId}: resync throttled (${reason}), queued in ${delayMs}ms`);
       return;
     }
+
+    // Immediate dispatch clears stale queued resyncs for this pane.
+    const pending = this._pendingResync.get(paneId);
+    if (pending && pending.timer !== null) {
+      window.clearTimeout(pending.timer);
+    }
+    this._pendingResync.delete(paneId);
 
     this._lastResyncTime.set(paneId, now);
     deltaLog.warn(`Pane ${paneId}: requesting resync (${reason})`);
@@ -1174,6 +1209,28 @@ export class TerminalConnection {
     if (paneState) {
       paneState.resyncCount++;
     }
+  }
+
+  private resyncReasonPriority(reason: ResyncReason): number {
+    switch (reason) {
+      case "corruption":
+        return 3;
+      case "style_miss":
+        return 2;
+      case "cache_miss":
+        return 1;
+      case "manual":
+        return 0;
+    }
+  }
+
+  private clearPendingResyncs(): void {
+    for (const pending of this._pendingResync.values()) {
+      if (pending.timer !== null) {
+        window.clearTimeout(pending.timer);
+      }
+    }
+    this._pendingResync.clear();
   }
 
   /**
