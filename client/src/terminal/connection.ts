@@ -1457,17 +1457,20 @@ export class TerminalConnection {
       deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${Math.min(toEvict, scored.length)} oldest, minRowId=${newMinRowId})`);
     }
 
-    // Prune unused styles to prevent unbounded growth
-    // Collect style IDs actually used by current cells
+    // Prune unused styles to prevent unbounded growth.
+    // IMPORTANT: usage must be computed from the full row cache, not just viewport
+    // cells, otherwise we can drop styles still referenced by cached scrollback rows.
     const MAX_CACHED_STYLES = 256;
     if (paneState.lastStyles && paneState.lastStyles.size > MAX_CACHED_STYLES) {
       const usedStyleIds = new Set<number>();
-      for (const cell of cells) {
-        if (cell.styleId !== 0) {
-          usedStyleIds.add(cell.styleId);
+      for (const cached of paneState.rowCache.values()) {
+        for (const cell of cached.cells) {
+          if (cell.styleId !== 0) {
+            usedStyleIds.add(cell.styleId);
+          }
         }
       }
-      // Remove styles not used by current viewport
+      // Remove styles not used by any cached row.
       for (const styleId of paneState.lastStyles.keys()) {
         if (!usedStyleIds.has(styleId)) {
           paneState.lastStyles.delete(styleId);
