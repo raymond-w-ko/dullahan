@@ -1210,6 +1210,34 @@ pub const Pane = struct {
         }
     }
 
+    /// Count dirty rows that are no longer visible in the current viewport.
+    /// These cannot currently be encoded in delta payloads, so callers may
+    /// choose a full snapshot fallback for consistency.
+    fn countOffscreenDirtyRows(self: *Pane) usize {
+        if (self.dirty_rows.count() == 0) return 0;
+
+        const pages = &self.terminal.screens.active.pages;
+        var offscreen_count: usize = 0;
+        var dirty_it = self.dirty_rows.keyIterator();
+        while (dirty_it.next()) |row_id_ptr| {
+            const target_row_id = row_id_ptr.*;
+            var visible = false;
+
+            var y: usize = 0;
+            while (y < self.rows) : (y += 1) {
+                const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse continue;
+                if (snapshot.computeRowId(pin) == target_row_id) {
+                    visible = true;
+                    break;
+                }
+            }
+
+            if (!visible) offscreen_count += 1;
+        }
+
+        return offscreen_count;
+    }
+
     /// Force all clients to do a full resync.
     /// Used after resize because reflow invalidates row IDs.
     fn forceFullResync(self: *Pane) void {
@@ -1270,12 +1298,16 @@ pub const Pane = struct {
             return .{ .delta = copy, .from_gen = self.cached_delta_from_gen };
         }
 
-        // Need to generate new delta
-        const from_gen = self.last_broadcast_gen;
+        // Need to generate new delta.
+        // If we have offscreen dirty rows, we currently can't encode them reliably,
+        // so force snapshot fallback for all clients to maintain consistency.
+        const offscreen_dirty_count = self.countOffscreenDirtyRows();
+        const force_snapshot_fallback = offscreen_dirty_count > 0;
+        const from_gen = if (force_snapshot_fallback) self.generation else self.last_broadcast_gen;
         const dirty_count = self.dirty_rows.count();
 
-        // Generate delta
-        const delta = try snapshot.generateDelta(self.allocator, self, from_gen, false);
+        // Generate delta (empty when forcing snapshot fallback).
+        const delta = try snapshot.generateDelta(self.allocator, self, from_gen, force_snapshot_fallback);
 
         if (dirty_count > 0) {
             delta_log.debug("Pane {d}: getBroadcastDelta from_gen={d} to_gen={d} dirty_rows={d} delta_size={d}", .{
@@ -1285,6 +1317,12 @@ pub const Pane = struct {
                 dirty_count,
                 delta.len,
             });
+            if (force_snapshot_fallback) {
+                delta_log.warn("Pane {d}: forcing snapshot fallback for {d} offscreen dirty rows", .{
+                    self.id,
+                    offscreen_dirty_count,
+                });
+            }
         }
 
         // Free old cached delta
