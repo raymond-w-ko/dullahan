@@ -461,7 +461,14 @@ export function closeWindow(windowId: number) {
 }
 
 export function setLayout(layout: LayoutUpdate) {
-  store.activeWindowId = layout.activeWindowId;
+  // Only adopt the server's activeWindowId on initial layout or if our
+  // current window no longer exists.  Otherwise preserve the client's
+  // selection so a resize broadcast doesn't snap us back to window 0.
+  const hasWindows = store.windows.size > 0;
+  const currentStillExists = layout.windows.some(w => w.id === store.activeWindowId);
+  if (!hasWindows || !currentStillExists) {
+    store.activeWindowId = layout.activeWindowId;
+  }
 
   // Update templates if provided
   if (layout.templates) {
@@ -506,7 +513,7 @@ export function setLayout(layout: LayoutUpdate) {
   store.dimensionVersion++;
 
   // Clear resize cache for active window's panes to ensure fresh calculations
-  const activeWindow = store.windows.get(layout.activeWindowId);
+  const activeWindow = store.windows.get(store.activeWindowId);
   if (activeWindow && store.connection) {
     store.connection.clearResizeCache(activeWindow.paneIds);
   }
