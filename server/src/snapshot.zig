@@ -265,6 +265,38 @@ fn encodeStyle(style: anytype) [14]u8 {
     return bytes;
 }
 
+/// Original style identity in ghostty terminal memory.
+/// Style IDs are page-local in ghostty, so the same numeric ID may refer to
+/// different style definitions on different pages.
+const StyleOrigin = struct {
+    page_serial: u64,
+    style_id: u16,
+};
+
+/// Assign a payload-local style ID for a source (page_serial, style_id) pair.
+/// Returns the payload ID that should be written into encoded cell bytes.
+fn getOrAssignPayloadStyleId(
+    origin_map: *std.AutoHashMap(StyleOrigin, u16),
+    styles_map: *std.AutoHashMap(u16, [14]u8),
+    page_serial: u64,
+    source_style_id: u16,
+    encoded_style: [14]u8,
+) !u16 {
+    const origin = StyleOrigin{
+        .page_serial = page_serial,
+        .style_id = source_style_id,
+    };
+    if (origin_map.get(origin)) |existing_id| return existing_id;
+
+    const next_id_usize = styles_map.count() + 1;
+    if (next_id_usize > std.math.maxInt(u16)) return error.TooManyStyles;
+    const payload_style_id: u16 = @intCast(next_id_usize);
+
+    try origin_map.put(origin, payload_style_id);
+    try styles_map.put(payload_style_id, encoded_style);
+    return payload_style_id;
+}
+
 /// Result from getCellBytesAndStyles
 const CellsAndStyles = struct {
     cell_bytes: []u8,
@@ -296,10 +328,11 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     var row_ids = try allocator.alloc(u64, rows);
     errdefer allocator.free(row_ids);
 
-    // Track unique styles we encounter (keyed by style_id)
-    // We store the encoded style bytes directly to avoid cross-page lookup issues
+    // Payload style table keyed by payload-local style IDs.
     var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
     defer styles_map.deinit();
+    var style_origin_map = std.AutoHashMap(StyleOrigin, u16).init(allocator);
+    defer style_origin_map.deinit();
 
     // Collect grapheme data for cells with multi-codepoint characters
     // We use a dynamic list since graphemes are typically sparse
@@ -351,16 +384,23 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
         for (0..cells.len) |i| {
             const cell = &cells[i];
-            const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
+            var encoded_cell = cell.*;
+
+            if (cell.style_id > 0) {
+                const style = page.styles.get(page.memory, cell.style_id);
+                const payload_style_id = try getOrAssignPayloadStyleId(
+                    &style_origin_map,
+                    &styles_map,
+                    row_pin.node.serial,
+                    cell.style_id,
+                    encodeStyle(style),
+                );
+                encoded_cell.style_id = payload_style_id;
+            }
+
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&encoded_cell);
             @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
             byte_offset += 8;
-
-            // Collect non-zero styles (encode immediately from correct page)
-            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
-                const style = page.styles.get(page.memory, cell.style_id);
-                const encoded = encodeStyle(style);
-                try styles_map.put(cell.style_id, encoded);
-            }
 
             // Check for grapheme clusters (additional codepoints beyond the first)
             if (cell.hasGrapheme()) {
@@ -863,9 +903,11 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         }
     }
 
-    // Track styles used by dirty rows (store encoded bytes to avoid cross-page issues)
+    // Payload style table keyed by payload-local style IDs.
     var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
     defer styles_map.deinit();
+    var style_origin_map = std.AutoHashMap(StyleOrigin, u16).init(allocator);
+    defer style_origin_map.deinit();
 
     // Collect row payloads into a list first (since some may be skipped)
     var row_payloads: std.ArrayListUnmanaged(msgpack.Payload) = .{};
@@ -909,15 +951,22 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
         for (0..cells.len) |i| {
             const cell = &cells[i];
-            const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
-            @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
+            var encoded_cell = cell.*;
 
-            // Collect style (encode immediately from correct page)
-            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
+            if (cell.style_id > 0) {
                 const style = page.styles.get(page.memory, cell.style_id);
-                const encoded = encodeStyle(style);
-                try styles_map.put(cell.style_id, encoded);
+                const payload_style_id = try getOrAssignPayloadStyleId(
+                    &style_origin_map,
+                    &styles_map,
+                    pin.node.serial,
+                    cell.style_id,
+                    encodeStyle(style),
+                );
+                encoded_cell.style_id = payload_style_id;
             }
+
+            const cell_bytes_ptr: *const [8]u8 = @ptrCast(&encoded_cell);
+            @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
 
             // Collect graphemes (row-relative column index)
             if (cell.hasGrapheme()) {
@@ -1262,4 +1311,25 @@ test "row_id computation" {
     const node5 = MockNode{ .serial = 1000000 };
     const pin5 = MockPin{ .node = &node5, .y = 999 };
     try std.testing.expectEqual(@as(u64, 1000000999), computeRowId(pin5));
+}
+
+test "payload style IDs are namespaced by page serial" {
+    const allocator = std.testing.allocator;
+
+    var origin_map = std.AutoHashMap(StyleOrigin, u16).init(allocator);
+    defer origin_map.deinit();
+
+    var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
+    defer styles_map.deinit();
+
+    const encoded_a: [14]u8 = .{ 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    const encoded_b: [14]u8 = .{ 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    const id_a = try getOrAssignPayloadStyleId(&origin_map, &styles_map, 10, 7, encoded_a);
+    const id_b = try getOrAssignPayloadStyleId(&origin_map, &styles_map, 11, 7, encoded_b);
+    const id_a_again = try getOrAssignPayloadStyleId(&origin_map, &styles_map, 10, 7, encoded_a);
+
+    try std.testing.expect(id_a != id_b);
+    try std.testing.expectEqual(id_a, id_a_again);
+    try std.testing.expectEqual(@as(usize, 2), styles_map.count());
 }
