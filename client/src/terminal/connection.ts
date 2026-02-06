@@ -185,7 +185,7 @@ interface CachedRow {
 /** Per-pane state for delta sync tracking */
 interface PaneState {
   generation: number;
-  minRowId: bigint;
+  minRowId: bigint | null;
   rowCache: Map<bigint, CachedRow>;  // LRU-tracked row cache
   rowGraphemes: Map<bigint, GraphemeTable>; // Graphemes per row (row-relative indices)
   rowHyperlinks: Map<bigint, HyperlinkTable>; // Hyperlinks per row (row-relative indices)
@@ -360,7 +360,7 @@ export class TerminalConnection {
     if (!state) {
       state = {
         generation: 0,
-        minRowId: 0n,
+        minRowId: null,
         rowCache: new Map(),
         rowGraphemes: new Map(),
         rowHyperlinks: new Map(),
@@ -641,9 +641,7 @@ export class TerminalConnection {
             }
           }
         }
-        if (minSeen >= 0n) {
-          paneState.minRowId = minSeen;
-        }
+        paneState.minRowId = minSeen >= 0n ? minSeen : null;
 
         // Save for delta merging
         paneState.lastStyles = styles;
@@ -677,14 +675,14 @@ export class TerminalConnection {
           // We're behind - request full snapshot
           syncLog.log(`Pane ${paneId}: Delta fromGen ${msg.fromGen} > our gen ${paneState.generation}, requesting snapshot`);
           paneState.resyncCount++;
-          this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
+          this.sendSync(paneId, paneState.generation, Number(paneState.minRowId ?? 0n));
         } else {
           // We're ahead of fromGen - this delta is stale, ignore it
           // But if we're behind the target gen, request sync
           if (paneState.generation < msg.gen) {
             syncLog.log(`Pane ${paneId}: Stale delta (fromGen ${msg.fromGen} < our gen ${paneState.generation}), but behind target ${msg.gen}, requesting sync`);
             paneState.resyncCount++;
-            this.sendSync(paneId, paneState.generation, Number(paneState.minRowId));
+            this.sendSync(paneId, paneState.generation, Number(paneState.minRowId ?? 0n));
           } else {
             syncLog.log(`Pane ${paneId}: Stale delta ignored (fromGen ${msg.fromGen}, our gen ${paneState.generation})`);
           }
@@ -1183,7 +1181,7 @@ export class TerminalConnection {
    */
   requestSyncAll(): void {
     for (const [paneId, state] of this._panes) {
-      this.sendSync(paneId, state.generation, Number(state.minRowId));
+      this.sendSync(paneId, state.generation, Number(state.minRowId ?? 0n));
     }
   }
 
@@ -1251,7 +1249,7 @@ export class TerminalConnection {
       }
 
       // Update min row ID tracking
-      if (paneState.minRowId === 0n || rowId < paneState.minRowId) {
+      if (paneState.minRowId === null || rowId < paneState.minRowId) {
         paneState.minRowId = rowId;
       }
     }
@@ -1460,9 +1458,9 @@ export class TerminalConnection {
       }
 
       // Recalculate minRowId after pruning (we may have evicted the minimum)
-      let newMinRowId = 0n;
+      let newMinRowId: bigint | null = null;
       for (const rowId of paneState.rowCache.keys()) {
-        if (newMinRowId === 0n || rowId < newMinRowId) {
+        if (newMinRowId === null || rowId < newMinRowId) {
           newMinRowId = rowId;
         }
       }
