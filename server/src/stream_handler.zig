@@ -513,8 +513,14 @@ pub const Handler = struct {
                             self.terminal.colors.palette.set(i, set.color);
                         },
                         .dynamic => |dynamic| switch (dynamic) {
-                            .foreground => self.terminal.colors.foreground.set(set.color),
-                            .background => self.terminal.colors.background.set(set.color),
+                            .foreground => {
+                                self.terminal.flags.dirty.palette = true;
+                                self.terminal.colors.foreground.set(set.color);
+                            },
+                            .background => {
+                                self.terminal.flags.dirty.palette = true;
+                                self.terminal.colors.background.set(set.color);
+                            },
                             .cursor => self.terminal.colors.cursor.set(set.color),
                             .pointer_foreground,
                             .pointer_background,
@@ -536,8 +542,14 @@ pub const Handler = struct {
                             self.terminal.colors.palette.reset(i);
                         },
                         .dynamic => |dynamic| switch (dynamic) {
-                            .foreground => self.terminal.colors.foreground.reset(),
-                            .background => self.terminal.colors.background.reset(),
+                            .foreground => {
+                                self.terminal.flags.dirty.palette = true;
+                                self.terminal.colors.foreground.reset();
+                            },
+                            .background => {
+                                self.terminal.flags.dirty.palette = true;
+                                self.terminal.colors.background.reset();
+                            },
                             .cursor => self.terminal.colors.cursor.reset(),
                             .pointer_foreground,
                             .pointer_background,
@@ -574,8 +586,14 @@ pub const Handler = struct {
                         self.terminal.colors.palette.set(palette, v.color);
                     },
                     .special => |special| switch (special) {
-                        .foreground => self.terminal.colors.foreground.set(v.color),
-                        .background => self.terminal.colors.background.set(v.color),
+                        .foreground => {
+                            self.terminal.flags.dirty.palette = true;
+                            self.terminal.colors.foreground.set(v.color);
+                        },
+                        .background => {
+                            self.terminal.flags.dirty.palette = true;
+                            self.terminal.colors.background.set(v.color);
+                        },
                         .cursor => self.terminal.colors.cursor.set(v.color),
                         else => {},
                     },
@@ -586,8 +604,14 @@ pub const Handler = struct {
                         self.terminal.colors.palette.reset(palette);
                     },
                     .special => |special| switch (special) {
-                        .foreground => self.terminal.colors.foreground.reset(),
-                        .background => self.terminal.colors.background.reset(),
+                        .foreground => {
+                            self.terminal.flags.dirty.palette = true;
+                            self.terminal.colors.foreground.reset();
+                        },
+                        .background => {
+                            self.terminal.flags.dirty.palette = true;
+                            self.terminal.colors.background.reset();
+                        },
                         .cursor => self.terminal.colors.cursor.reset(),
                         else => {},
                     },

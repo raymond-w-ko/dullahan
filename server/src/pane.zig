@@ -450,6 +450,12 @@ pub const Pane = struct {
         if (full_clear) {
             self.terminal.flags.dirty.clear = false;
         }
+        // Palette/default color changes can re-style existing cells without mutating text.
+        // Force viewport rows dirty so clients repaint with updated style table data.
+        const palette_dirty = self.terminal.flags.dirty.palette;
+        if (palette_dirty) {
+            self.terminal.flags.dirty.palette = false;
+        }
 
         // Count how many rows ghostty marked dirty (for debug logging)
         var ghostty_dirty_count: usize = 0;
@@ -464,8 +470,8 @@ pub const Pane = struct {
                 ghostty_dirty_count += 1;
             }
 
-            // Mark row dirty if: screen-level clear occurred OR row is individually dirty
-            if (full_clear or is_ghostty_dirty) {
+            // Mark row dirty if: screen-level clear OR palette/color change OR row dirty.
+            if (full_clear or palette_dirty or is_ghostty_dirty) {
                 const row_id = snapshot.computeRowId(pin);
                 self.dirty_rows.put(row_id, {}) catch {
                     log.warn("Failed to track dirty row {d}", .{row_id});
@@ -473,10 +479,11 @@ pub const Pane = struct {
             }
         }
 
-        if (full_clear or ghostty_dirty_count > 0) {
-            delta_log.debug("Pane {d}: collectDirtyRows full_clear={} ghostty_dirty={d} total_dirty={d}", .{
+        if (full_clear or palette_dirty or ghostty_dirty_count > 0) {
+            delta_log.debug("Pane {d}: collectDirtyRows full_clear={} palette_dirty={} ghostty_dirty={d} total_dirty={d}", .{
                 self.id,
                 full_clear,
+                palette_dirty,
                 ghostty_dirty_count,
                 self.dirty_rows.count(),
             });
@@ -1653,6 +1660,20 @@ test "dirty row tracking" {
     // Client with old generation needs resync
     try std.testing.expect(pane.needsFullResync(0));
     try std.testing.expect(!pane.needsFullResync(gen_before_clear));
+}
+
+test "palette-only changes invalidate viewport rows" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 5 });
+    defer pane.deinit();
+
+    // Start from a clean dirty set.
+    try pane.feed("color test\r\n");
+    pane.clearDirtyRows();
+    try std.testing.expectEqual(@as(usize, 0), pane.getDirtyRowCount());
+
+    // Palette mutation should mark rows dirty even without text mutation.
+    try pane.feed("\x1b]4;1;rgb:00/ff/00\x07");
+    try std.testing.expect(pane.getDirtyRowCount() > 0);
 }
 
 test "OSC title parsing" {
