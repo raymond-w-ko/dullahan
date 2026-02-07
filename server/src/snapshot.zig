@@ -25,7 +25,7 @@ const log = std.log.scoped(.snapshot);
 // ============================================================================
 // Buffer Stream for msgpack encoding
 // ============================================================================
-// 
+//
 // The zig-msgpack compat layer uses std.io.FixedBufferStream for Zig < 0.16,
 // which can return PARTIAL writes when buffer fills. msgpack expects all-or-nothing
 // writes and returns LengthWriting error on partial writes.
@@ -71,6 +71,7 @@ const BufferStream = struct {
 /// row_id = (page_serial * PAGE_SIZE) + row_index_in_page
 /// See docs/delta-sync-design.md for details.
 pub const PAGE_SIZE: u64 = constants.snapshot.page_size;
+pub const INVALID_ROW_ID: u64 = std.math.maxInt(u64);
 
 /// Compute stable row_id from a pin's page serial and row index.
 /// Returns a unique, monotonic ID that persists until the row is pruned.
@@ -149,8 +150,8 @@ const CursorInfo = struct {
 
 /// Scrollback info for client-side scrolling
 const ScrollbackInfo = struct {
-    totalRows: usize,      // Total rows including scrollback
-    viewportTop: usize,    // Current viewport offset from top
+    totalRows: usize, // Total rows including scrollback
+    viewportTop: usize, // Current viewport offset from top
 };
 
 /// Snapshot data payload
@@ -325,13 +326,15 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     // Iterate over each row in the visible screen
     var byte_offset: usize = 0;
     var cell_index: u32 = 0;
+    var missing_viewport_rows: usize = 0;
     var y: usize = 0;
     while (y < rows) : (y += 1) {
         // Get a pin at the start of this row (viewport-relative coordinates)
         const row_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } }) orelse {
             // Row doesn't exist, fill with zeros
             @memset(cell_bytes[byte_offset .. byte_offset + cols * 8], 0);
-            row_ids[y] = 0; // Invalid row_id for non-existent rows
+            row_ids[y] = INVALID_ROW_ID;
+            missing_viewport_rows += 1;
             byte_offset += cols * 8;
             cell_index += @intCast(cols);
             continue;
@@ -425,6 +428,13 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
             byte_offset += padding;
             cell_index += @intCast(cols - cells_copied);
         }
+    }
+    if (missing_viewport_rows > 0) {
+        log.warn("Pane {d}: snapshot had {d}/{d} missing viewport rows", .{
+            pane.id,
+            missing_viewport_rows,
+            rows,
+        });
     }
 
     // Fill in the grapheme count at the start (little-endian u32)
@@ -1028,13 +1038,22 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     var row_ids = try allocator.alloc(u64, pane.rows);
     defer allocator.free(row_ids);
 
+    var missing_viewport_rows: usize = 0;
     for (0..pane.rows) |y| {
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(y) } });
         if (pin) |p| {
             row_ids[y] = computeRowId(p);
         } else {
-            row_ids[y] = 0;
+            row_ids[y] = INVALID_ROW_ID;
+            missing_viewport_rows += 1;
         }
+    }
+    if (missing_viewport_rows > 0) {
+        log.warn("Pane {d}: delta had {d}/{d} missing viewport rows", .{
+            pane.id,
+            missing_viewport_rows,
+            pane.rows,
+        });
     }
 
     const row_ids_bytes = std.mem.sliceAsBytes(row_ids);

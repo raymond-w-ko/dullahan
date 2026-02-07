@@ -63,6 +63,8 @@ import type {
   ShellIntegrationMessage,
 } from "../../../protocol/schema/messages";
 
+const INVALID_ROW_ID = 0xffffffffffffffffn;
+
 export type {
   BinarySnapshot,
   BinaryDelta,
@@ -612,9 +614,8 @@ export class TerminalConnection {
         paneState.rows = msg.rows;
         paneState.resyncCount++;
 
-        // Rebuild row cache, graphemes, and hyperlinks from snapshot
-        // NOTE: rowId=0 IS valid (page serial 0, row index 0)
-        // Only undefined means the row wasn't sent
+        // Rebuild row cache, graphemes, and hyperlinks from snapshot.
+        // INVALID_ROW_ID is an explicit "no row available" sentinel from server.
         paneState.rowCache.clear();
         paneState.rowGraphemes.clear();
         paneState.rowHyperlinks.clear();
@@ -622,7 +623,7 @@ export class TerminalConnection {
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
-          if (rowId !== undefined) {
+          if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
             paneState.rowCache.set(rowId, { cells: rowCells, lastAccess: now });
             // Track minimum row ID
@@ -1394,9 +1395,11 @@ export class TerminalConnection {
     }
     paneState.lastRowIds = rowIds;
 
-    // Check which rowIds are in cache
-    // NOTE: rowId=0 IS valid (page serial 0, row index 0)
+    // Check which rowIds are in cache (excluding explicit invalid-row sentinels).
     const notInCache = rowIds.filter(id => {
+      if (id === INVALID_ROW_ID) {
+        return false;
+      }
       const cached = paneState.rowCache.get(id);
       if (cached) {
         // Update access time for rows we're checking in the viewport
@@ -1411,9 +1414,9 @@ export class TerminalConnection {
       return; // Don't emit corrupted snapshot
     }
 
-    // Build cells array, grapheme table, and hyperlink table from cache for current viewport
+    // Build cells array, grapheme table, and hyperlink table from cache for current viewport.
     // This requires knowing which row IDs are in the viewport
-    // NOTE: rowId=0 IS valid, only undefined means "no row"
+    // INVALID_ROW_ID rows are rendered as empty rows without cache lookup.
     const cells: Cell[] = [];
     const graphemes: GraphemeTable = new Map();
     const hyperlinks: HyperlinkTable = new Map();
@@ -1422,7 +1425,7 @@ export class TerminalConnection {
     let cacheCorrupt = false;
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
-      if (rowId !== undefined) {
+      if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
         const cached = paneState.rowCache.get(rowId);
         if (cached) {
           // Update LRU access time when row is used in viewport
