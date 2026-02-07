@@ -191,6 +191,9 @@ interface PaneState {
   rowHyperlinks: Map<bigint, HyperlinkTable>; // Hyperlinks per row (row-relative indices)
   cols: number;
   rows: number;
+  followTail: boolean; // Keep viewport pinned to bottom unless user scrolls up
+  autoFollowInFlight: boolean; // Prevent repeated auto-follow scroll sends
+  lastViewportTop: number | null;
   lastStyles: StyleTable | null;
   lastRowIds: bigint[] | null;
   lastGraphemes: GraphemeTable | null; // Last snapshot's graphemes (global indices)
@@ -374,6 +377,9 @@ export class TerminalConnection {
         rowHyperlinks: new Map(),
         cols: 80,
         rows: 24,
+        followTail: true,
+        autoFollowInFlight: false,
+        lastViewportTop: null,
         lastStyles: null,
         lastRowIds: null,
         lastGraphemes: null,
@@ -656,6 +662,7 @@ export class TerminalConnection {
         paneState.lastRowIds = rowIds;
         paneState.lastGraphemes = graphemes;
         paneState.lastHyperlinks = hyperlinks;
+        this.maybeFollowViewportTail(paneId, paneState, msg.scrollback, msg.rows);
 
         snapshotLog.log(`Pane ${paneId}: stored ${paneState.rowCache.size} rows, ${graphemes.size} graphemes, ${hyperlinks.size} hyperlinks`);
 
@@ -967,7 +974,55 @@ export class TerminalConnection {
    * Only master can scroll.
    */
   sendScroll(paneId: number, delta: number): void {
-    if (!this.isMaster) return;
+    if (!this.isMaster || delta === 0) return;
+    const paneState = this.getPaneState(paneId);
+    if (delta < 0) {
+      // User intentionally scrolled up into history: stop tail-following until
+      // we naturally reach bottom again.
+      paneState.followTail = false;
+      paneState.autoFollowInFlight = false;
+    }
+    this.send({ type: "scroll", paneId, delta });
+  }
+
+  /**
+   * Keep viewport anchored to bottom when tail-following is enabled.
+   * This corrects rare viewport drift during rapid TUI redraw/delete-line bursts.
+   */
+  private maybeFollowViewportTail(
+    paneId: number,
+    paneState: PaneState,
+    scrollback: ScrollbackInfo,
+    rows: number
+  ): void {
+    const viewportTop = Math.max(0, scrollback.viewportTop);
+    const bottomTop = Math.max(0, scrollback.totalRows - rows);
+    const atBottom = viewportTop >= bottomTop;
+
+    const viewportMoved =
+      paneState.lastViewportTop === null || paneState.lastViewportTop !== viewportTop;
+    paneState.lastViewportTop = viewportTop;
+    if (viewportMoved) {
+      paneState.autoFollowInFlight = false;
+    }
+
+    if (atBottom) {
+      paneState.followTail = true;
+      paneState.autoFollowInFlight = false;
+      return;
+    }
+
+    if (!paneState.followTail || paneState.autoFollowInFlight || !this.isMaster) {
+      return;
+    }
+
+    const delta = bottomTop - viewportTop;
+    if (delta <= 0) {
+      return;
+    }
+
+    paneState.autoFollowInFlight = true;
+    deltaLog.log(`Pane ${paneId}: auto-following tail by ${delta} rows`);
     this.send({ type: "scroll", paneId, delta });
   }
 
@@ -1465,6 +1520,7 @@ export class TerminalConnection {
       hyperlinks,
       selection: delta.selection,
     };
+    this.maybeFollowViewportTail(paneId, paneState, snapshot.scrollback, delta.rows);
 
     // Notify via onSnapshot (unified handler)
     this.emit("snapshot", snapshot);
