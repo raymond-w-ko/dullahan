@@ -399,9 +399,9 @@ pub const EventLoop = struct {
                         };
                     }
 
-                    if (revents & (posix.POLL.HUP | posix.POLL.ERR) != 0) {
+                    if (revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
                         log.info("PTY hangup/error for pane {d}", .{pane.id});
-                        _ = pane.isAlive();
+                        self.respawnPaneShellIfExited(pane, "poll hangup/error");
                     }
                 }
                 pty_idx += 1;
@@ -528,16 +528,33 @@ pub const EventLoop = struct {
         }
     }
 
+    fn respawnPaneShellIfExited(self: *EventLoop, pane: *Pane, comptime reason: []const u8) void {
+        _ = self;
+        const restarted = pane.respawnShellIfExited() catch |e| {
+            log.err("Failed to respawn pane {d} shell after {s}: {any}", .{ pane.id, reason, e });
+            return;
+        };
+        if (restarted) {
+            log.info("Respawned pane {d} shell after {s}", .{ pane.id, reason });
+        }
+    }
+
     fn handlePtyData(self: *EventLoop, pane: *Pane) !void {
         var buf: [constants.buffer.general]u8 = undefined;
         const pty = &(pane.pty orelse return);
 
         const n = pty.read(&buf) catch |e| {
             if (e == error.WouldBlock) return;
-            if (e == error.InputOutput or e == error.BrokenPipe) _ = pane.isAlive();
+            if (e == error.InputOutput or e == error.BrokenPipe) {
+                self.respawnPaneShellIfExited(pane, "pty read error");
+                return;
+            }
             return e;
         };
-        if (n == 0) return;
+        if (n == 0) {
+            self.respawnPaneShellIfExited(pane, "pty EOF");
+            return;
+        }
 
         self.session.logPtyRecv(pane.id, buf[0..n]);
         try pane.feed(buf[0..n]);

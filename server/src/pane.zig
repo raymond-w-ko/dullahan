@@ -102,10 +102,17 @@ pub const Pane = struct {
     /// Child process ID (null if no shell spawned)
     child_pid: ?posix.pid_t = null,
 
+    /// Path to shell executable used for this pane.
+    /// Persisted so shell respawns use the same command as initial launch.
+    shell_path: ?[]u8 = null,
+
+    /// Whether this pane should auto-respawn its shell process when it exits.
+    auto_respawn_shell: bool = false,
+
     /// Debug capture file for recording PTY output as hex
     /// Set via startCapture(), cleared via stopCapture()
     capture_file: ?std.fs.File = null,
-    
+
     /// VT stream parser - persists between feed() calls to handle split escape sequences
     /// Uses our custom stream handler that routes query events (DA1, DSR, OSC 10/11)
     /// and notification events (bell, title, clipboard) to the pane while delegating
@@ -249,6 +256,10 @@ pub const Pane = struct {
             log.debug("Child process cleanup complete", .{});
         }
 
+        if (self.shell_path) |path| {
+            self.allocator.free(path);
+        }
+
         if (self.vt_stream) |*stream| {
             stream.deinit();
         }
@@ -289,25 +300,51 @@ pub const Pane = struct {
         }) catch return error.PtyOpenFailed;
         errdefer pty.deinit();
 
-        // Detect user's shell
-        const shell_info = shell.detectShell();
+        // Resolve shell path once and reuse it for respawns.
+        if (self.shell_path == null) {
+            const shell_info = shell.detectShell();
+            self.shell_path = try self.allocator.dupe(u8, shell_info.path);
+            log.info("Selected shell '{s}' for pane {d} (source: {s})", .{
+                shell_info.path,
+                self.id,
+                shell_info.sourceDescription(),
+            });
+        }
+        const shell_path = self.shell_path.?;
 
         // Create null-terminated shell path
-        var shell_buf: [256:0]u8 = undefined;
-        const shell_z = std.fmt.bufPrintZ(&shell_buf, "{s}", .{shell_info.path}) catch "/bin/sh";
+        var shell_z = try self.allocator.allocSentinel(u8, shell_path.len, 0);
+        defer self.allocator.free(shell_z);
+        @memcpy(shell_z[0..shell_path.len], shell_path);
 
         // Spawn shell
         const pid = pty.spawn(&.{shell_z}, null) catch return error.SpawnFailed;
 
         self.pty = pty;
         self.child_pid = pid;
+        self.auto_respawn_shell = true;
 
-        log.info("Spawned shell '{s}' (pid={d}) in pane {d} (source: {s})", .{
-            shell_info.path,
+        log.info("Spawned shell '{s}' (pid={d}) in pane {d}", .{
+            shell_path,
             pid,
             self.id,
-            shell_info.sourceDescription(),
         });
+    }
+
+    /// Restart shell process if this pane manages one and it has exited.
+    /// Returns true when a new shell was spawned.
+    pub fn respawnShellIfExited(self: *Pane) !bool {
+        if (!self.auto_respawn_shell) return false;
+        if (self.isAlive()) return false;
+
+        // Child is gone; close stale PTY before opening a new one.
+        if (self.pty) |*pty| {
+            pty.deinit();
+            self.pty = null;
+        }
+
+        try self.spawnShell();
+        return true;
     }
 
     /// Write input to the PTY (stdin to child process)
@@ -548,7 +585,7 @@ pub const Pane = struct {
         };
         log.debug("Sent DA1 response", .{});
     }
-    
+
     /// Send Secondary Device Attributes response
     /// Response format: CSI > <params> c
     pub fn sendDA2Response(self: *Pane) void {
@@ -682,7 +719,7 @@ pub const Pane = struct {
         };
 
         self.writeResponse(response) catch |e| {
-            log.warn("Failed to send size report {s}: {any}", .{@tagName(style), e});
+            log.warn("Failed to send size report {s}: {any}", .{ @tagName(style), e });
         };
         plog.debug("Pane {d}: Sent size report {s}", .{ self.id, @tagName(style) });
     }
@@ -1670,17 +1707,17 @@ pub const Pane = struct {
         if (self.capture_file != null) {
             return error.AlreadyCapturing;
         }
-        
+
         const file = try std.fs.cwd().createFile(path, .{});
         self.capture_file = file;
-        
+
         // Write header
         file.writeAll("# Dullahan PTY capture - hex dump\n") catch {};
         file.writeAll("# Format: [timestamp_ms] offset: hex bytes | ascii\n\n") catch {};
-        
+
         log.info("Started capture to {s}", .{path});
     }
-    
+
     /// Stop capturing PTY output
     pub fn stopCapture(self: *Pane) void {
         if (self.capture_file) |file| {
@@ -1690,37 +1727,37 @@ pub const Pane = struct {
             log.info("Stopped capture", .{});
         }
     }
-    
+
     /// Write data to capture file as hex dump
     fn writeCaptureHex(self: *Pane, file: std.fs.File, data: []const u8) void {
         _ = self;
         const timestamp = std.time.milliTimestamp();
-        
+
         // Write in 16-byte rows using a buffer
         var buf: [256]u8 = undefined;
         var offset: usize = 0;
         while (offset < data.len) {
             const end = @min(offset + 16, data.len);
             const row = data[offset..end];
-            
+
             // Format the line into buffer
             var fbs = std.io.fixedBufferStream(&buf);
             const w = fbs.writer();
-            
+
             // Timestamp and offset
             std.fmt.format(w, "[{d}] {x:0>4}: ", .{ timestamp, offset }) catch return;
-            
+
             // Hex bytes
             for (row) |byte| {
                 std.fmt.format(w, "{x:0>2} ", .{byte}) catch return;
             }
-            
+
             // Padding for short rows
             var pad: usize = 16 - row.len;
             while (pad > 0) : (pad -= 1) {
                 w.writeAll("   ") catch return;
             }
-            
+
             // ASCII representation
             w.writeAll("| ") catch return;
             for (row) |byte| {
@@ -1728,10 +1765,10 @@ pub const Pane = struct {
                 std.fmt.format(w, "{c}", .{c}) catch return;
             }
             w.writeAll("\n") catch return;
-            
+
             // Write to file
             file.writeAll(fbs.getWritten()) catch return;
-            
+
             offset = end;
         }
     }
@@ -2060,4 +2097,30 @@ test "OSC 133 shell integration command_end with exit code" {
     try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d_no_code.kind);
     try std.testing.expect(event_d_no_code.exit_code == null);
     pane.clearShellEvent();
+}
+
+test "shell pane respawns with same shell after child exits" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    try pane.spawnShell();
+    const first_pid = pane.child_pid orelse return error.TestUnexpectedResult;
+    const first_shell = pane.shell_path orelse return error.TestUnexpectedResult;
+
+    // Force shell exit and wait for waitpid() observation.
+    _ = posix.kill(first_pid, posix.SIG.KILL) catch {};
+    var waited_ms: usize = 0;
+    while (pane.isAlive() and waited_ms < 2000) : (waited_ms += 10) {
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
+    try std.testing.expect(!pane.isAlive());
+
+    const restarted = try pane.respawnShellIfExited();
+    try std.testing.expect(restarted);
+    const second_pid = pane.child_pid orelse return error.TestUnexpectedResult;
+    const second_shell = pane.shell_path orelse return error.TestUnexpectedResult;
+
+    try std.testing.expect(second_pid != first_pid);
+    try std.testing.expect(std.mem.eql(u8, first_shell, second_shell));
+    try std.testing.expect(pane.isAlive());
 }
