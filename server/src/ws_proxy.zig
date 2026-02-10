@@ -41,29 +41,30 @@ pub const AuthStore = struct {
         return std.ascii.eqlIgnoreCase(a, b);
     }
 
-    fn extractPrefixedToken(input: []const u8, prefix: []const u8) ?[]const u8 {
-        const idx = std.mem.indexOf(u8, input, prefix) orelse return null;
-        var rest = input[idx + prefix.len ..];
-        rest = std.mem.trimLeft(u8, rest, " \t\r\n");
-        const end = std.mem.indexOfAny(u8, rest, " \t\r\n") orelse rest.len;
-        if (end == 0) return null;
-        return rest[0..end];
-    }
-
     pub fn roleForToken(self: *const AuthStore, token: ?[]const u8) AuthRole {
         if (token) |raw| {
             const value = std.mem.trim(u8, raw, " \t\r\n");
             if (value.len == 0) return .none;
 
-            if (extractPrefixedToken(value, "master=")) |candidate| {
-                return if (tokensEqual(candidate, self.master_token)) .master else .none;
-            }
-            if (extractPrefixedToken(value, "view=")) |candidate| {
-                return if (tokensEqual(candidate, self.view_token)) .view else .none;
-            }
+            // Parse left-to-right so mixed tokens respect the sender's ordering.
+            var parts = std.mem.tokenizeAny(u8, value, " \t\r\n");
+            while (parts.next()) |part| {
+                if (std.mem.startsWith(u8, part, "master=")) {
+                    const candidate = part["master=".len..];
+                    if (candidate.len == 0) continue;
+                    if (tokensEqual(candidate, self.master_token)) return .master;
+                    continue;
+                }
+                if (std.mem.startsWith(u8, part, "view=")) {
+                    const candidate = part["view=".len..];
+                    if (candidate.len == 0) continue;
+                    if (tokensEqual(candidate, self.view_token)) return .view;
+                    continue;
+                }
 
-            if (tokensEqual(value, self.master_token)) return .master;
-            if (tokensEqual(value, self.view_token)) return .view;
+                if (tokensEqual(part, self.master_token)) return .master;
+                if (tokensEqual(part, self.view_token)) return .view;
+            }
         }
         return .none;
     }
