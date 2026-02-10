@@ -326,10 +326,17 @@ pub const EventLoop = struct {
                 // Socket is writable - flush pending writes and resume updates
                 if (client_idx < self.clients.items.len) {
                     const client = &self.clients.items[client_idx];
+                    var removed = false;
                     const drained = client.ws.flushWriteBuffer() catch |e| blk: {
-                        _ = handleWriteError(client, "flush write buffer", e);
+                        if (!handleWriteError(client, "flush write buffer", e)) {
+                            log.info("Disconnecting client {s} after write failure", .{client.shortId()});
+                            self.removeClient(client_idx);
+                            removed = true;
+                        }
                         break :blk false;
                     };
+                    if (removed) continue;
+
                     if (drained) {
                         if (client.write_congested) {
                             log.debug("Client {s} write cleared, resuming updates", .{client.shortId()});
@@ -337,7 +344,10 @@ pub const EventLoop = struct {
                         client.write_congested = false;
                         // Send updates for all panes to catch up
                         self.sendClientUpdates(client) catch |e| {
-                            _ = handleWriteError(client, "resume updates", e);
+                            if (!handleWriteError(client, "resume updates", e)) {
+                                log.info("Disconnecting client {s} after resume failure", .{client.shortId()});
+                                self.removeClient(client_idx);
+                            }
                         };
                     } else {
                         client.write_congested = true;

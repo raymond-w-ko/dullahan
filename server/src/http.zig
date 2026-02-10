@@ -702,7 +702,8 @@ pub const Server = struct {
             }
 
             if (self.pending.items[idx].write_state.hasRemaining()) {
-                if (revents & posix.POLL.OUT != 0) {
+                // TLS writes may need either readability (WANT_READ) or writability (WANT_WRITE).
+                if (revents & (posix.POLL.OUT | posix.POLL.IN) != 0) {
                     self.flushPendingWrite(idx) catch |e| {
                         log.debug("Pending write failed: {any}", .{e});
                         self.closeAndRemovePending(idx);
