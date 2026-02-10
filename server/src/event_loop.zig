@@ -56,6 +56,8 @@ fn handleWriteError(client: *ClientState, comptime context: []const u8, err: any
 }
 
 const ParsedMessage = messages.ParsedMessage;
+const WS_IDLE_PING_INTERVAL_MS: i64 = 15_000;
+const WS_IDLE_PONG_TIMEOUT_MS: i64 = 10_000;
 
 pub const EventLoop = struct {
     allocator: std.mem.Allocator,
@@ -223,6 +225,7 @@ pub const EventLoop = struct {
             // This handles apps that enable sync mode but forget to disable it
             self.checkSyncTimeouts();
             self.http_server.expirePendingConnections();
+            self.checkClientIdleTimeouts();
         }
 
         log.info("Event loop stopped", .{});
@@ -509,6 +512,7 @@ pub const EventLoop = struct {
         var client = &self.clients.items[client_idx];
         const frame = try client.ws.readFrame();
         defer self.allocator.free(frame.payload);
+        client.markRx(std.time.milliTimestamp());
 
         switch (frame.opcode) {
             .text => {
@@ -528,8 +532,8 @@ pub const EventLoop = struct {
                     try self.sendClientUpdates(client);
                 }
             },
-            .ping => client.ws.sendPong(frame.payload) catch {},
-            .pong => {},
+            .ping => try client.ws.sendPong(frame.payload),
+            .pong => client.awaiting_pong = false,
             .close => {
                 client.ws.sendClose() catch {};
                 return error.ConnectionClosed;
@@ -611,6 +615,44 @@ pub const EventLoop = struct {
                     }
                 }
             }
+        }
+    }
+
+    fn checkClientIdleTimeouts(self: *EventLoop) void {
+        const now = std.time.milliTimestamp();
+        var client_idx = self.clients.items.len;
+        while (client_idx > 0) {
+            client_idx -= 1;
+            if (client_idx >= self.clients.items.len) continue;
+
+            const client = &self.clients.items[client_idx];
+            if (client.awaiting_pong) {
+                if (now - client.last_ping_sent_ms > WS_IDLE_PONG_TIMEOUT_MS) {
+                    conn_log.info("Client {s} idle timeout waiting for pong", .{client.shortId()});
+                    self.removeClient(client_idx);
+                    continue;
+                }
+                continue;
+            }
+
+            const idle_ms = now - client.last_rx_ms;
+            if (idle_ms < WS_IDLE_PING_INTERVAL_MS) continue;
+            if (client.write_congested or client.ws.hasPendingWrite()) continue;
+
+            client.ws.sendPing(&.{}) catch |e| {
+                if (!handleWriteError(client, "idle ping", e)) {
+                    conn_log.info("Client {s} disconnected during idle ping: {any}", .{ client.shortId(), e });
+                    self.removeClient(client_idx);
+                }
+                continue;
+            };
+
+            if (client.ws.hasPendingWrite()) {
+                client.write_congested = true;
+                continue;
+            }
+            client.awaiting_pong = true;
+            client.last_ping_sent_ms = now;
         }
     }
 

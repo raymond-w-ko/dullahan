@@ -228,6 +228,11 @@ pub const Connection = struct {
         try self.sendFrame(.close, &.{});
     }
 
+    /// Send a ping frame (used for keepalive/idle detection)
+    pub fn sendPing(self: *Connection, payload: []const u8) !void {
+        try self.sendFrame(.ping, payload);
+    }
+
     /// Send a pong frame (response to ping)
     pub fn sendPong(self: *Connection, payload: []const u8) !void {
         try self.sendFrame(.pong, payload);

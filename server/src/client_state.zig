@@ -36,11 +36,22 @@ pub const ClientState = struct {
     /// When true, skip sending to this client until socket becomes writable.
     write_congested: bool = false,
 
+    /// Last time (ms since epoch) we received any frame from this client.
+    last_rx_ms: i64 = 0,
+
+    /// Whether server has sent an idle ping and is waiting for a pong.
+    awaiting_pong: bool = false,
+
+    /// Timestamp when last idle ping was sent.
+    last_ping_sent_ms: i64 = 0,
+
     pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
+        const now = std.time.milliTimestamp();
         return .{
             .ws = ws,
             .pane_generations = std.AutoHashMap(u16, u64).init(allocator),
             .allocator = allocator,
+            .last_rx_ms = now,
         };
     }
 
@@ -94,5 +105,11 @@ pub const ClientState = struct {
         self.pane_generations.put(pane_id, gen) catch |e| {
             log.info("[recoverable] pane generation tracking: {any}", .{e});
         };
+    }
+
+    /// Record inbound traffic/activity from client.
+    pub fn markRx(self: *ClientState, now_ms: i64) void {
+        self.last_rx_ms = now_ms;
+        self.awaiting_pong = false;
     }
 };
