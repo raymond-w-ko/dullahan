@@ -673,17 +673,19 @@ pub const Handler = struct {
             },
 
             .end_prompt_start_input => {
-                self.terminal.markSemanticPrompt(.input);
+                self.terminal.screens.active.cursorSetSemanticContent(.{
+                    .input = .clear_explicit,
+                });
                 self.pane.onShellIntegration(.prompt_end, null);
             },
 
             .end_input_start_output => {
-                self.terminal.markSemanticPrompt(.command);
+                self.terminal.screens.active.cursorSetSemanticContent(.output);
                 self.pane.onShellIntegration(.output_start, null);
             },
 
             .end_command => {
-                self.terminal.screens.active.cursor.page_row.semantic_prompt = .input;
+                self.terminal.screens.active.cursorSetSemanticContent(.output);
                 // Parse exit code from options if available
                 const exit_code = cmd.readOption(.exit_code);
                 self.pane.onShellIntegration(.command_end, exit_code);
