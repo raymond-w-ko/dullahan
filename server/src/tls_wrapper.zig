@@ -176,6 +176,101 @@ pub const TlsContext = struct {
             .tcp_stream = tcp_stream,
         };
     }
+
+    /// Begin a non-blocking TLS handshake.
+    /// Call `TlsHandshake.advance()` until it returns true.
+    pub fn beginHandshake(self: *TlsContext, tcp_stream: std.net.Stream) !TlsHandshake {
+        log.debug("Starting TLS handshake (non-blocking)", .{});
+
+        // Disable Nagle's algorithm for TLS connections.
+        const nodelay: c_int = 1;
+        posix.setsockopt(
+            tcp_stream.handle,
+            posix.IPPROTO.TCP,
+            std.posix.TCP.NODELAY,
+            std.mem.asBytes(&nodelay),
+        ) catch |e| {
+            log.warn("Failed to set TCP_NODELAY: {}", .{e});
+        };
+
+        const ssl = c.SSL_new(self.ctx) orelse {
+            logOpenSslErrors("SSL_new");
+            return error.TlsInitFailed;
+        };
+
+        const mode_flags: c_ulong = c.SSL_MODE_ENABLE_PARTIAL_WRITE | c.SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
+        _ = c.SSL_set_mode(ssl, mode_flags);
+
+        if (c.SSL_set_fd(ssl, @intCast(tcp_stream.handle)) != 1) {
+            logOpenSslErrors("SSL_set_fd");
+            c.SSL_free(ssl);
+            return error.TlsInitFailed;
+        }
+
+        return .{
+            .ssl = ssl,
+            .tcp_stream = tcp_stream,
+            .completed = false,
+        };
+    }
+};
+
+/// Incremental TLS handshake state for poll/event-loop driven servers.
+pub const TlsHandshake = struct {
+    ssl: *c.SSL,
+    tcp_stream: std.net.Stream,
+    completed: bool = false,
+
+    /// Progress one step of TLS handshake.
+    /// Returns true once handshake is complete.
+    pub fn advance(self: *TlsHandshake) !bool {
+        if (self.completed) return true;
+
+        const accept_rc = c.SSL_accept(self.ssl);
+        if (accept_rc == 1) {
+            self.completed = true;
+            log.debug("TLS handshake completed successfully", .{});
+            return true;
+        }
+
+        const accept_err = c.SSL_get_error(self.ssl, accept_rc);
+        switch (accept_err) {
+            c.SSL_ERROR_WANT_READ, c.SSL_ERROR_WANT_WRITE => return error.WouldBlock,
+            c.SSL_ERROR_ZERO_RETURN => return error.ConnectionClosed,
+            c.SSL_ERROR_SYSCALL => {
+                if (accept_rc == 0) return error.ConnectionClosed;
+                logSslFailure("SSL_accept", accept_rc, accept_err);
+                logOpenSslErrors("SSL_accept");
+                return error.TlsSyscall;
+            },
+            else => {
+                logSslFailure("SSL_accept", accept_rc, accept_err);
+                logOpenSslErrors("SSL_accept");
+                return error.TlsHandshakeFailed;
+            },
+        }
+    }
+
+    /// Convert a completed handshake into a TLS connection.
+    pub fn intoConnection(self: *TlsHandshake) TlsConnection {
+        std.debug.assert(self.completed);
+        return .{
+            .ssl = self.ssl,
+            .tcp_stream = self.tcp_stream,
+        };
+    }
+
+    /// Underlying socket fd for poll().
+    pub fn handle(self: *const TlsHandshake) posix.fd_t {
+        return self.tcp_stream.handle;
+    }
+
+    /// Cleanup an in-progress handshake.
+    pub fn deinit(self: *TlsHandshake) void {
+        if (self.completed) return;
+        c.SSL_free(self.ssl);
+        self.tcp_stream.close();
+    }
 };
 
 /// TLS connection - wraps an OpenSSL SSL* connection
@@ -220,7 +315,7 @@ pub const TlsConnection = struct {
     /// This is important for event loops: poll() checks the TCP socket,
     /// but the TLS library may have already read and decrypted more data
     /// than we consumed. We need to check this before going back to poll().
-    pub fn hasPendingData(self: *TlsConnection) bool {
+    pub fn hasPendingData(self: *const TlsConnection) bool {
         return c.SSL_pending(self.ssl) > 0;
     }
 };

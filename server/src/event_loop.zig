@@ -89,6 +89,11 @@ pub const EventLoop = struct {
     // Debug: disable delta updates (always send full snapshots)
     no_delta: bool = false,
 
+    // Snapshot of counts used when building current poll set.
+    // These are needed because lists can mutate during dispatch.
+    last_poll_pending_count: usize = 0,
+    last_poll_client_count: usize = 0,
+
     const IPC_FD_INDEX = 0;
     const HTTP_FD_INDEX = 1;
     const FIXED_FD_COUNT = 2;
@@ -217,6 +222,7 @@ pub const EventLoop = struct {
             // Check for synchronized output timeouts on every iteration
             // This handles apps that enable sync mode but forget to disable it
             self.checkSyncTimeouts();
+            self.http_server.expirePendingConnections();
         }
 
         log.info("Event loop stopped", .{});
@@ -236,13 +242,18 @@ pub const EventLoop = struct {
             }
         }
 
-        const total = FIXED_FD_COUNT + self.clients.items.len + pty_count;
+        const pending_count = self.http_server.pendingCount();
+        const client_count = self.clients.items.len;
+        const total = FIXED_FD_COUNT + pending_count + client_count + pty_count;
         var fds = try self.allocator.alloc(posix.pollfd, total);
 
         fds[IPC_FD_INDEX] = .{ .fd = self.ipc_server.socket, .events = posix.POLL.IN, .revents = 0 };
         fds[HTTP_FD_INDEX] = .{ .fd = self.http_server.getFd(), .events = posix.POLL.IN, .revents = 0 };
 
         var idx: usize = FIXED_FD_COUNT;
+        self.http_server.fillPendingPollSet(fds, idx);
+        idx += pending_count;
+
         for (self.clients.items) |client| {
             // Add POLLOUT for congested clients so we know when socket is writable
             const events: i16 = if (client.write_congested or client.ws.hasPendingWrite())
@@ -262,6 +273,8 @@ pub const EventLoop = struct {
             }
         }
 
+        self.last_poll_pending_count = pending_count;
+        self.last_poll_client_count = client_count;
         return fds;
     }
 
@@ -269,7 +282,8 @@ pub const EventLoop = struct {
         // IMPORTANT: Save the client count that was used when building the poll set.
         // This count must be used for PTY index calculation even if clients are
         // removed during dispatch, because fds indices are fixed at poll time.
-        const poll_client_count = self.clients.items.len;
+        const poll_pending_count = self.last_poll_pending_count;
+        const poll_client_count = self.last_poll_client_count;
 
         // Check IPC
         if (fds[IPC_FD_INDEX].revents & posix.POLL.IN != 0) {
@@ -285,11 +299,24 @@ pub const EventLoop = struct {
             };
         }
 
+        // Process pending TLS/HTTP upgrade sockets.
+        const pending_start_idx = FIXED_FD_COUNT;
+        const pending_end_idx = @min(fds.len, pending_start_idx + poll_pending_count);
+        if (pending_start_idx < pending_end_idx) {
+            self.http_server.processPendingPollEvents(fds[pending_start_idx..pending_end_idx]) catch |e| {
+                log.err("HTTP pending processing error: {any}", .{e});
+            };
+        }
+        self.drainReadyWebSockets() catch |e| {
+            log.err("HTTP promote error: {any}", .{e});
+        };
+
         // Check clients (iterate backwards to allow removal)
+        const client_start_idx = FIXED_FD_COUNT + poll_pending_count;
         var client_idx: usize = poll_client_count;
         while (client_idx > 0) {
             client_idx -= 1;
-            const fd_idx = FIXED_FD_COUNT + client_idx;
+            const fd_idx = client_start_idx + client_idx;
             const revents = fds[fd_idx].revents;
 
             if (revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
@@ -356,7 +383,7 @@ pub const EventLoop = struct {
 
         // Check PTYs - use poll_client_count (not current clients.items.len)
         // because fds array was built with that count
-        const pty_start_idx = FIXED_FD_COUNT + poll_client_count;
+        const pty_start_idx = client_start_idx + poll_client_count;
         var pty_idx: usize = 0;
         var pane_it = self.session.pane_registry.iterator();
         while (pane_it.next()) |pane_ptr| {
@@ -453,14 +480,19 @@ pub const EventLoop = struct {
     }
 
     fn handleHttpAccept(self: *EventLoop) !void {
-        const ws_conn = try self.http_server.acceptWebSocket();
-        if (ws_conn == null) return;
+        try self.http_server.enqueueAcceptedConnections();
+    }
 
-        var client = ClientState.init(self.allocator, ws_conn.?);
+    fn drainReadyWebSockets(self: *EventLoop) !void {
+        while (self.http_server.takeReadyWebSocket()) |ws_conn| {
+            var owned_ws = ws_conn;
+            errdefer owned_ws.deinit();
 
-        client.ws.setTimeouts(0);
-        try self.clients.append(self.allocator, client);
-        conn_log.info("Client connected, total: {d}", .{self.clients.items.len});
+            var client = ClientState.init(self.allocator, owned_ws);
+            client.ws.setTimeouts(0);
+            try self.clients.append(self.allocator, client);
+            conn_log.info("Client connected, total: {d}", .{self.clients.items.len});
+        }
     }
 
     fn handleWsClient(self: *EventLoop, client_idx: usize) !void {
@@ -666,8 +698,12 @@ pub const EventLoop = struct {
                 self.master_theme = theme;
                 theme_log.info("Theme from name lookup: '{s}' fg=#{x:0>2}{x:0>2}{x:0>2} bg=#{x:0>2}{x:0>2}{x:0>2}", .{
                     name,
-                    theme.fg[0], theme.fg[1], theme.fg[2],
-                    theme.bg[0], theme.bg[1], theme.bg[2],
+                    theme.fg[0],
+                    theme.fg[1],
+                    theme.fg[2],
+                    theme.bg[0],
+                    theme.bg[1],
+                    theme.bg[2],
                 });
                 self.updatePaneThemeColors();
                 return;

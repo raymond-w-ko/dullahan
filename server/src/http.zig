@@ -15,6 +15,37 @@ const log = std.log.scoped(.http);
 
 pub const DEFAULT_PORT: u16 = 7681;
 
+const HANDSHAKE_TIMEOUT_MS: i64 = 5_000;
+const FIRST_BYTE_TIMEOUT_MS: i64 = 250;
+const HEADER_COMPLETE_TIMEOUT_MS: i64 = 2_000;
+const MAX_HEADER_BYTES: usize = 16 * 1024;
+
+fn setNonBlocking(fd: posix.fd_t, enabled: bool) void {
+    const fl_flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return;
+    const O_NONBLOCK: usize = if (@import("builtin").os.tag == .macos) 0x4 else 0x800;
+    const new_flags = if (enabled) (fl_flags | O_NONBLOCK) else (fl_flags & ~O_NONBLOCK);
+    _ = std.posix.fcntl(fd, std.posix.F.SETFL, new_flags) catch {};
+}
+
+fn setSocketTimeoutMs(fd: posix.fd_t, timeout_ms: u32) void {
+    const timeout = std.posix.timeval{
+        .sec = @intCast(timeout_ms / 1000),
+        .usec = @intCast((timeout_ms % 1000) * 1000),
+    };
+    std.posix.setsockopt(
+        fd,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.RCVTIMEO,
+        std.mem.asBytes(&timeout),
+    ) catch {};
+    std.posix.setsockopt(
+        fd,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.SNDTIMEO,
+        std.mem.asBytes(&timeout),
+    ) catch {};
+}
+
 /// HTTP request parsed from raw data
 pub const Request = struct {
     allocator: std.mem.Allocator,
@@ -184,6 +215,100 @@ fn getMimeType(path: []const u8) []const u8 {
     return "application/octet-stream";
 }
 
+const PendingStream = union(enum) {
+    plain: std.net.Stream,
+    tls_handshake: tls_wrapper.TlsHandshake,
+    tls: tls_wrapper.TlsConnection,
+
+    fn handle(self: *const PendingStream) posix.fd_t {
+        return switch (self.*) {
+            .plain => |s| s.handle,
+            .tls_handshake => |*hs| hs.handle(),
+            .tls => |*t| t.handle(),
+        };
+    }
+
+    fn isTls(self: *const PendingStream) bool {
+        return switch (self.*) {
+            .plain => false,
+            .tls_handshake, .tls => true,
+        };
+    }
+
+    fn hasPendingData(self: *const PendingStream) bool {
+        return switch (self.*) {
+            .tls => |*t| t.hasPendingData(),
+            else => false,
+        };
+    }
+
+    fn close(self: *PendingStream) void {
+        switch (self.*) {
+            .plain => |s| s.close(),
+            .tls_handshake => |*hs| hs.deinit(),
+            .tls => |*t| t.close(),
+        }
+    }
+};
+
+const PendingConn = struct {
+    stream: PendingStream,
+    peer_addr: std.net.Address,
+    accepted_ms: i64,
+    handshake_done_ms: ?i64 = null,
+    first_byte_ms: ?i64 = null,
+    deadline_ms: i64,
+    req_buf: std.ArrayListUnmanaged(u8) = .{},
+
+    fn init(tls_context: ?*tls_wrapper.TlsContext, conn: std.net.Server.Connection) !PendingConn {
+        // Keep accepted sockets non-blocking so event loop never stalls.
+        setNonBlocking(conn.stream.handle, true);
+
+        // Disable Nagle's algorithm for low-latency interactive traffic.
+        const nodelay: c_int = 1;
+        std.posix.setsockopt(
+            conn.stream.handle,
+            std.posix.IPPROTO.TCP,
+            std.posix.TCP.NODELAY,
+            std.mem.asBytes(&nodelay),
+        ) catch {};
+
+        const accepted_ms = std.time.milliTimestamp();
+        if (tls_context) |tls_ctx| {
+            const handshake = try tls_ctx.beginHandshake(conn.stream);
+            return .{
+                .stream = .{ .tls_handshake = handshake },
+                .peer_addr = conn.address,
+                .accepted_ms = accepted_ms,
+                .deadline_ms = accepted_ms + HANDSHAKE_TIMEOUT_MS,
+            };
+        }
+
+        return .{
+            .stream = .{ .plain = conn.stream },
+            .peer_addr = conn.address,
+            .accepted_ms = accepted_ms,
+            .deadline_ms = accepted_ms + FIRST_BYTE_TIMEOUT_MS,
+        };
+    }
+
+    fn deinit(self: *PendingConn, allocator: std.mem.Allocator) void {
+        self.req_buf.deinit(allocator);
+        self.stream.close();
+    }
+
+    fn getFd(self: *const PendingConn) posix.fd_t {
+        return self.stream.handle();
+    }
+
+    fn pollEvents(self: *const PendingConn) i16 {
+        return switch (self.stream) {
+            .tls_handshake => posix.POLL.IN | posix.POLL.OUT,
+            else => posix.POLL.IN,
+        };
+    }
+};
+
 /// HTTP/WebSocket server
 pub const Server = struct {
     listener: std.net.Server,
@@ -191,6 +316,8 @@ pub const Server = struct {
     port: u16,
     static_dir: ?[]const u8,
     tls_context: ?*tls_wrapper.TlsContext,
+    pending: std.ArrayListUnmanaged(PendingConn) = .{},
+    ready_ws: std.ArrayListUnmanaged(websocket.Connection) = .{},
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -209,6 +336,7 @@ pub const Server = struct {
             .reuse_address = true,
             .kernel_backlog = 128, // Handle burst of connections on refresh
         });
+        setNonBlocking(listener.stream.handle, true);
 
         const bind_addr = if (bind_all) "0.0.0.0" else "127.0.0.1";
         const protocol = if (tls_context != null) "HTTPS" else "HTTP";
@@ -228,6 +356,16 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Server) void {
+        for (self.pending.items) |*pending| {
+            pending.deinit(self.allocator);
+        }
+        self.pending.deinit(self.allocator);
+
+        for (self.ready_ws.items) |*ws| {
+            ws.deinit();
+        }
+        self.ready_ws.deinit(self.allocator);
+
         self.listener.deinit();
     }
 
@@ -402,189 +540,311 @@ pub const Server = struct {
         return self.listener.stream.handle;
     }
 
-    /// Accept a connection with timeout (non-blocking with poll)
-    /// Returns null if timeout expires, error on failure, or WebSocket connection on success
-    /// timeout_ms: timeout in milliseconds (-1 for infinite)
-    pub fn acceptWebSocketTimeout(self: *Server, timeout_ms: i32) !?websocket.Connection {
-        // Poll the listener socket with timeout
-        var poll_fds = [_]posix.pollfd{
-            .{ .fd = self.listener.stream.handle, .events = posix.POLL.IN, .revents = 0 },
-        };
-
-        const ready = posix.poll(&poll_fds, timeout_ms) catch |e| {
-            return e;
-        };
-
-        // Timeout - no connection available
-        if (ready == 0) {
-            return null;
-        }
-
-        // Check for errors
-        if (poll_fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
-            return error.SocketError;
-        }
-
-        // Connection available - delegate to regular accept
-        if (poll_fds[0].revents & posix.POLL.IN != 0) {
-            return self.acceptWebSocket();
-        }
-
-        return null;
+    /// Number of pending accepted sockets still in TLS/HTTP upgrade phase.
+    pub fn pendingCount(self: *const Server) usize {
+        return self.pending.items.len;
     }
 
-    /// Accept a connection and handle HTTP/WebSocket upgrade
-    /// Returns a WebSocket connection if upgrade succeeded, null otherwise
-    pub fn acceptWebSocket(self: *Server) !?websocket.Connection {
-        log.debug("Waiting for connection...", .{});
-        const accept_start_ms = std.time.milliTimestamp();
-        const conn = try self.listener.accept();
-        const accepted_ms = std.time.milliTimestamp();
-        const peer_addr = conn.address;
-        log.debug("Accepted connection, reading request...", .{});
-
-        // Disable Nagle's algorithm for real-time terminal updates
-        // This ensures small writes (like delta updates) are sent immediately
-        const nodelay: c_int = 1;
-        std.posix.setsockopt(
-            conn.stream.handle,
-            std.posix.IPPROTO.TCP,
-            std.posix.TCP.NODELAY,
-            std.mem.asBytes(&nodelay),
-        ) catch {};
-
-        // Set read/write timeouts on the TCP socket BEFORE TLS handshake
-        // This ensures TLS handshake won't block forever if client is slow/malicious
-        // tls.zig uses the underlying socket for I/O, so these timeouts apply to TLS too
-        const timeout = std.posix.timeval{
-            .sec = 5, // 5 second timeout for initial connection/handshake
-            .usec = 0,
-        };
-        std.posix.setsockopt(
-            conn.stream.handle,
-            std.posix.SOL.SOCKET,
-            std.posix.SO.RCVTIMEO,
-            std.mem.asBytes(&timeout),
-        ) catch {};
-        std.posix.setsockopt(
-            conn.stream.handle,
-            std.posix.SOL.SOCKET,
-            std.posix.SO.SNDTIMEO,
-            std.mem.asBytes(&timeout),
-        ) catch {};
-
-        // Create stream - either wrap with TLS or use plain TCP
-        var handshake_done_ms: ?i64 = null;
-        var stream: tls_wrapper.Stream = if (self.tls_context) |tls_ctx| blk: {
-            log.debug("Performing TLS handshake...", .{});
-            const tls_conn = tls_ctx.upgrade(conn.stream) catch |e| {
-                log.err("TLS handshake failed: {}", .{e});
-                conn.stream.close();
-                return null;
+    /// Fill pollfds for pending sockets starting at `start_idx`.
+    pub fn fillPendingPollSet(self: *const Server, fds: []posix.pollfd, start_idx: usize) void {
+        var idx = start_idx;
+        for (self.pending.items) |pending| {
+            if (idx >= fds.len) break;
+            fds[idx] = .{
+                .fd = pending.getFd(),
+                .events = pending.pollEvents(),
+                .revents = 0,
             };
-            const handshake_ms = std.time.milliTimestamp();
-            handshake_done_ms = handshake_ms;
-            log.debug(
-                "TLS handshake done in {d}ms (accept to handshake {d}ms)",
-                .{ handshake_ms - accepted_ms, handshake_ms - accept_start_ms },
-            );
-            log.debug("TLS handshake completed", .{});
-            break :blk .{ .tls = tls_conn };
-        } else .{ .plain = conn.stream };
-
-        // After TLS handshake, shorten the initial HTTP request read timeout
-        // to avoid long stalls from speculative TLS connections.
-        if (self.tls_context != null) {
-            const post_handshake_timeout = std.posix.timeval{
-                .sec = 0,
-                .usec = 250 * 1000,
-            };
-            std.posix.setsockopt(
-                stream.handle(),
-                std.posix.SOL.SOCKET,
-                std.posix.SO.RCVTIMEO,
-                std.mem.asBytes(&post_handshake_timeout),
-            ) catch {};
+            idx += 1;
         }
+    }
 
-        // Read HTTP request (may arrive in multiple packets)
-        const max_header_bytes: usize = 16 * 1024;
-        var req_buf: std.ArrayListUnmanaged(u8) = .{};
-        defer req_buf.deinit(self.allocator);
-        while (std.mem.indexOf(u8, req_buf.items, "\r\n\r\n") == null) {
-            if (req_buf.items.len >= max_header_bytes) {
-                log.warn("HTTP headers exceeded {d} bytes", .{max_header_bytes});
-                sendResponse(&stream, "431 Request Header Fields Too Large", &.{}, "Headers too large") catch {};
-                stream.close();
-                return null;
+    /// Drain all immediately-acceptible sockets into pending state.
+    pub fn enqueueAcceptedConnections(self: *Server) !void {
+        while (true) {
+            const conn = self.listener.accept() catch |e| switch (e) {
+                error.WouldBlock => break,
+                else => return e,
+            };
+
+            const pending = PendingConn.init(self.tls_context, conn) catch |e| {
+                log.warn("Failed to initialize pending connection: {any}", .{e});
+                conn.stream.close();
+                continue;
+            };
+            try self.pending.append(self.allocator, pending);
+        }
+    }
+
+    /// Process poll() revents for pending sockets (TLS handshake and HTTP parsing).
+    pub fn processPendingPollEvents(self: *Server, pending_fds: []const posix.pollfd) !void {
+        const count = @min(pending_fds.len, self.pending.items.len);
+        var idx = count;
+        while (idx > 0) {
+            idx -= 1;
+            if (idx >= self.pending.items.len) continue;
+
+            const revents = pending_fds[idx].revents;
+            if (revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
+                self.closeAndRemovePending(idx);
+                continue;
+            }
+
+            switch (self.pending.items[idx].stream) {
+                .tls_handshake => try self.processPendingHandshake(idx, revents),
+                else => {
+                    if (revents & posix.POLL.IN != 0 or self.pending.items[idx].stream.hasPendingData()) {
+                        try self.readPendingRequest(idx);
+                    }
+                },
+            }
+        }
+    }
+
+    /// Expire pending sockets that exceeded their stage deadline.
+    pub fn expirePendingConnections(self: *Server) void {
+        const now = std.time.milliTimestamp();
+        var idx = self.pending.items.len;
+        while (idx > 0) {
+            idx -= 1;
+            if (idx >= self.pending.items.len) continue;
+            const pending = &self.pending.items[idx];
+            if (now <= pending.deadline_ms) continue;
+
+            const accept_elapsed = now - pending.accepted_ms;
+            const handshake_elapsed = if (pending.handshake_done_ms) |ms| ms - pending.accepted_ms else -1;
+            switch (pending.stream) {
+                .tls_handshake => log.debug("TLS handshake timeout after {d}ms (peer={any})", .{ accept_elapsed, pending.peer_addr }),
+                else => log.debug(
+                    "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
+                    .{ accept_elapsed, handshake_elapsed, pending.stream.isTls(), pending.peer_addr },
+                ),
+            }
+            self.closeAndRemovePending(idx);
+        }
+    }
+
+    /// Pop one newly-upgraded WebSocket connection, if available.
+    pub fn takeReadyWebSocket(self: *Server) ?websocket.Connection {
+        if (self.ready_ws.items.len == 0) return null;
+        const last = self.ready_ws.items.len - 1;
+        return self.ready_ws.orderedRemove(last);
+    }
+
+    fn closeAndRemovePending(self: *Server, idx: usize) void {
+        if (idx >= self.pending.items.len) return;
+        var pending = self.pending.orderedRemove(idx);
+        pending.deinit(self.allocator);
+    }
+
+    fn processPendingHandshake(self: *Server, idx: usize, revents: i16) !void {
+        if (idx >= self.pending.items.len) return;
+        if (revents & (posix.POLL.IN | posix.POLL.OUT) == 0) return;
+
+        const pending = &self.pending.items[idx];
+        switch (pending.stream) {
+            .tls_handshake => |*handshake| {
+                const done = handshake.advance() catch |e| switch (e) {
+                    error.WouldBlock => return,
+                    error.ConnectionClosed => {
+                        self.closeAndRemovePending(idx);
+                        return;
+                    },
+                    else => {
+                        log.warn("TLS handshake failed: {any}", .{e});
+                        self.closeAndRemovePending(idx);
+                        return;
+                    },
+                };
+                if (!done) return;
+
+                const now = std.time.milliTimestamp();
+                pending.handshake_done_ms = now;
+                pending.deadline_ms = now + FIRST_BYTE_TIMEOUT_MS;
+                log.debug(
+                    "TLS handshake done in {d}ms",
+                    .{now - pending.accepted_ms},
+                );
+
+                const tls_conn = handshake.intoConnection();
+                pending.stream = .{ .tls = tls_conn };
+
+                if (pending.stream.hasPendingData()) {
+                    try self.readPendingRequest(idx);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn readPendingRequest(self: *Server, idx: usize) !void {
+        while (idx < self.pending.items.len) {
+            var pending = &self.pending.items[idx];
+
+            if (pending.req_buf.items.len >= MAX_HEADER_BYTES) {
+                log.warn("HTTP headers exceeded {d} bytes", .{MAX_HEADER_BYTES});
+                self.respondAndClose(idx, "431 Request Header Fields Too Large", "Headers too large");
+                return;
             }
 
             var buf: [constants.buffer.general]u8 = undefined;
-            const n = stream.read(&buf) catch |e| {
-                if (e == error.WouldBlock) {
-                    const now_ms = std.time.milliTimestamp();
-                    const accept_elapsed = now_ms - accept_start_ms;
-                    const handshake_elapsed = if (handshake_done_ms) |ms| ms - accepted_ms else -1;
-                    log.debug(
-                        "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
-                        .{ accept_elapsed, handshake_elapsed, self.tls_context != null, peer_addr },
-                    );
-                    stream.close();
-                    return null;
-                }
-                log.debug("Read error: {}", .{e});
-                stream.close();
-                return null;
+            const n = switch (pending.stream) {
+                .plain => |*plain| plain.read(&buf),
+                .tls => |*tls_conn| tls_conn.read(&buf),
+                .tls_handshake => return,
+            } catch |e| switch (e) {
+                error.WouldBlock => return,
+                else => {
+                    log.debug("Read error: {any}", .{e});
+                    self.closeAndRemovePending(idx);
+                    return;
+                },
             };
+
             if (n == 0) {
                 log.debug("Empty request, closing", .{});
-                stream.close();
-                return null;
+                self.closeAndRemovePending(idx);
+                return;
             }
-            try req_buf.appendSlice(self.allocator, buf[0..n]);
-        }
-        log.debug("Read {d} bytes", .{req_buf.items.len});
-        const headers_ms = std.time.milliTimestamp();
-        log.debug(
-            "HTTP headers read in {d}ms (accept to headers {d}ms)",
-            .{ headers_ms - accepted_ms, headers_ms - accept_start_ms },
-        );
 
-        // Parse request
-        var request = parseRequest(self.allocator, req_buf.items) catch |e| {
+            try pending.req_buf.appendSlice(self.allocator, buf[0..n]);
+
+            if (pending.first_byte_ms == null) {
+                const now = std.time.milliTimestamp();
+                pending.first_byte_ms = now;
+                pending.deadline_ms = now + HEADER_COMPLETE_TIMEOUT_MS;
+            }
+
+            if (std.mem.indexOf(u8, pending.req_buf.items, "\r\n\r\n") != null) {
+                const now = std.time.milliTimestamp();
+                const start_ms = pending.handshake_done_ms orelse pending.accepted_ms;
+                log.debug(
+                    "HTTP headers read in {d}ms (accept to headers {d}ms)",
+                    .{ now - start_ms, now - pending.accepted_ms },
+                );
+                try self.finishPendingRequest(idx);
+                return;
+            }
+        }
+    }
+
+    fn finishPendingRequest(self: *Server, idx: usize) !void {
+        if (idx >= self.pending.items.len) return;
+        const pending = &self.pending.items[idx];
+
+        var request = parseRequest(self.allocator, pending.req_buf.items) catch |e| {
             log.err("Failed to parse HTTP request: {any}", .{e});
-            sendResponse(&stream, "400 Bad Request", &.{}, "Bad Request") catch {};
-            stream.close();
-            return null;
+            self.respondAndClose(idx, "400 Bad Request", "Bad Request");
+            return;
         };
         defer request.deinit();
 
         log.debug("HTTP {s} {s} (upgrade={any})", .{ request.method, request.path, request.isWebSocketUpgrade() });
 
-        // Check for WebSocket upgrade
         if (!request.isWebSocketUpgrade()) {
-            // Serve static file
-            self.serveFile(&stream, request.path, &request);
-            stream.close();
-            return null;
+            self.serveRequestAndClose(idx, &request);
+            return;
         }
 
-        // WebSocket upgrade
         const client_key = request.getWebSocketKey() orelse {
-            sendResponse(&stream, "400 Bad Request", &.{}, "Missing Sec-WebSocket-Key") catch {};
-            stream.close();
-            return null;
+            self.respondAndClose(idx, "400 Bad Request", "Missing Sec-WebSocket-Key");
+            return;
         };
 
-        sendWebSocketUpgrade(&stream, client_key) catch |e| {
-            log.err("Failed to send WebSocket upgrade: {any}", .{e});
-            stream.close();
-            return null;
+        try self.sendUpgradeAndPromote(idx, client_key);
+    }
+
+    fn respondAndClose(self: *Server, idx: usize, status: []const u8, body: []const u8) void {
+        if (idx >= self.pending.items.len) return;
+        var pending = &self.pending.items[idx];
+
+        setNonBlocking(pending.getFd(), false);
+        setSocketTimeoutMs(pending.getFd(), 1000);
+
+        switch (pending.stream) {
+            .plain => |*plain| {
+                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
+                sendResponse(&stream, status, &.{}, body) catch {};
+            },
+            .tls => |*tls_conn| {
+                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
+                sendResponse(&stream, status, &.{}, body) catch {};
+            },
+            .tls_handshake => {},
+        }
+
+        self.closeAndRemovePending(idx);
+    }
+
+    fn serveRequestAndClose(self: *Server, idx: usize, request: *const Request) void {
+        if (idx >= self.pending.items.len) return;
+        var pending = &self.pending.items[idx];
+
+        setNonBlocking(pending.getFd(), false);
+        setSocketTimeoutMs(pending.getFd(), 5000);
+
+        switch (pending.stream) {
+            .plain => |*plain| {
+                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
+                self.serveFile(&stream, request.path, request);
+            },
+            .tls => |*tls_conn| {
+                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
+                self.serveFile(&stream, request.path, request);
+            },
+            .tls_handshake => {},
+        }
+
+        self.closeAndRemovePending(idx);
+    }
+
+    fn sendUpgradeAndPromote(self: *Server, idx: usize, client_key: []const u8) !void {
+        if (idx >= self.pending.items.len) return;
+        var pending = &self.pending.items[idx];
+        const peer_addr = pending.peer_addr;
+
+        setNonBlocking(pending.getFd(), false);
+        setSocketTimeoutMs(pending.getFd(), 1000);
+
+        switch (pending.stream) {
+            .plain => |*plain| {
+                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
+                sendWebSocketUpgrade(&stream, client_key) catch |e| {
+                    log.err("Failed to send WebSocket upgrade: {any}", .{e});
+                    self.closeAndRemovePending(idx);
+                    return;
+                };
+            },
+            .tls => |*tls_conn| {
+                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
+                sendWebSocketUpgrade(&stream, client_key) catch |e| {
+                    log.err("Failed to send WebSocket upgrade: {any}", .{e});
+                    self.closeAndRemovePending(idx);
+                    return;
+                };
+            },
+            .tls_handshake => {
+                self.closeAndRemovePending(idx);
+                return;
+            },
+        }
+
+        // Promote to non-blocking websocket transport.
+        setNonBlocking(pending.getFd(), true);
+        var promoted = self.pending.orderedRemove(idx);
+        defer promoted.req_buf.deinit(self.allocator);
+
+        const ws_stream: tls_wrapper.Stream = switch (promoted.stream) {
+            .plain => |plain| .{ .plain = plain },
+            .tls => |tls_conn| .{ .tls = tls_conn },
+            .tls_handshake => unreachable,
         };
 
-        log.info("WebSocket connection established from {any}", .{conn.address});
+        var ws_conn = websocket.Connection.init(ws_stream, self.allocator);
+        errdefer ws_conn.deinit();
+        try self.ready_ws.append(self.allocator, ws_conn);
 
-        return websocket.Connection.init(stream, self.allocator);
+        log.info("WebSocket connection established from {any}", .{peer_addr});
     }
 };
 
