@@ -16,8 +16,10 @@ const log = std.log.scoped(.http);
 pub const DEFAULT_PORT: u16 = 7681;
 
 const HANDSHAKE_TIMEOUT_MS: i64 = 5_000;
-const FIRST_BYTE_TIMEOUT_MS: i64 = 250;
-const HEADER_COMPLETE_TIMEOUT_MS: i64 = 2_000;
+// Browsers may open multiple TLS connections before dispatching requests.
+// Keep this comfortably above typical preconnect/request scheduling jitter.
+const FIRST_BYTE_TIMEOUT_MS: i64 = 5_000;
+const HEADER_COMPLETE_TIMEOUT_MS: i64 = 10_000;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 fn setNonBlocking(fd: posix.fd_t, enabled: bool) void {
