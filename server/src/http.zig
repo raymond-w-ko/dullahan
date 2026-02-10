@@ -15,11 +15,10 @@ const log = std.log.scoped(.http);
 
 pub const DEFAULT_PORT: u16 = 7681;
 
-const HANDSHAKE_TIMEOUT_MS: i64 = 5_000;
-// Browsers may open multiple TLS connections before dispatching requests.
-// Keep this comfortably above typical preconnect/request scheduling jitter.
-const FIRST_BYTE_TIMEOUT_MS: i64 = 5_000;
-const HEADER_COMPLETE_TIMEOUT_MS: i64 = 10_000;
+const HANDSHAKE_TIMEOUT_MS: i64 = 10_000;
+const FIRST_BYTE_TIMEOUT_MS: i64 = 15_000;
+const HEADER_COMPLETE_TIMEOUT_MS: i64 = 15_000;
+const WRITE_TIMEOUT_MS: i64 = 30_000;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 fn setNonBlocking(fd: posix.fd_t, enabled: bool) void {
@@ -198,6 +197,23 @@ pub fn sendWebSocketUpgrade(stream: *tls_wrapper.Stream, client_key: []const u8)
     try stream.writeAll(fbs.getWritten());
 }
 
+fn buildWebSocketUpgradeResponse(allocator: std.mem.Allocator, client_key: []const u8) !PendingBuffer {
+    const accept_key = websocket.computeAcceptKey(client_key);
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    errdefer out.deinit(allocator);
+    const writer = out.writer(allocator);
+
+    try writer.writeAll("HTTP/1.1 101 Switching Protocols\r\n");
+    try writer.writeAll("Upgrade: websocket\r\n");
+    try writer.writeAll("Connection: Upgrade\r\n");
+    try writer.print("Sec-WebSocket-Accept: {s}\r\n", .{accept_key});
+    try writer.writeAll("\r\n");
+
+    return .{
+        .data = try out.toOwnedSlice(allocator),
+    };
+}
+
 /// Get MIME type for file extension
 fn getMimeType(path: []const u8) []const u8 {
     const ext = std.fs.path.extension(path);
@@ -253,6 +269,87 @@ const PendingStream = union(enum) {
     }
 };
 
+const PendingBuffer = struct {
+    data: []u8,
+    sent: usize = 0,
+
+    fn deinit(self: *PendingBuffer, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+    }
+
+    fn hasRemaining(self: *const PendingBuffer) bool {
+        return self.sent < self.data.len;
+    }
+};
+
+const PendingBody = union(enum) {
+    none,
+    bytes: struct {
+        data: []const u8,
+        sent: usize = 0,
+    },
+    file: struct {
+        file: std.fs.File,
+        remaining: u64,
+        chunk: [16 * 1024]u8 = undefined,
+        chunk_len: usize = 0,
+        chunk_sent: usize = 0,
+    },
+
+    fn deinit(self: *PendingBody) void {
+        switch (self.*) {
+            .file => |*f| f.file.close(),
+            else => {},
+        }
+        self.* = .none;
+    }
+
+    fn hasRemaining(self: *const PendingBody) bool {
+        return switch (self.*) {
+            .none => false,
+            .bytes => |b| b.sent < b.data.len,
+            .file => |f| f.remaining > 0 or f.chunk_sent < f.chunk_len,
+        };
+    }
+};
+
+const PendingResponse = struct {
+    header: PendingBuffer,
+    body: PendingBody = .none,
+
+    fn deinit(self: *PendingResponse, allocator: std.mem.Allocator) void {
+        self.header.deinit(allocator);
+        self.body.deinit();
+    }
+
+    fn hasRemaining(self: *const PendingResponse) bool {
+        return self.header.hasRemaining() or self.body.hasRemaining();
+    }
+};
+
+const PendingWriteState = union(enum) {
+    none,
+    http: PendingResponse,
+    ws_upgrade: PendingBuffer,
+
+    fn deinit(self: *PendingWriteState, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .http => |*response| response.deinit(allocator),
+            .ws_upgrade => |*upgrade| upgrade.deinit(allocator),
+            .none => {},
+        }
+        self.* = .none;
+    }
+
+    fn hasRemaining(self: *const PendingWriteState) bool {
+        return switch (self.*) {
+            .none => false,
+            .http => |response| response.hasRemaining(),
+            .ws_upgrade => |upgrade| upgrade.hasRemaining(),
+        };
+    }
+};
+
 const PendingConn = struct {
     stream: PendingStream,
     peer_addr: std.net.Address,
@@ -261,6 +358,7 @@ const PendingConn = struct {
     first_byte_ms: ?i64 = null,
     deadline_ms: i64,
     req_buf: std.ArrayListUnmanaged(u8) = .{},
+    write_state: PendingWriteState = .none,
 
     fn init(tls_context: ?*tls_wrapper.TlsContext, conn: std.net.Server.Connection) !PendingConn {
         // Keep accepted sockets non-blocking so event loop never stalls.
@@ -295,6 +393,7 @@ const PendingConn = struct {
     }
 
     fn deinit(self: *PendingConn, allocator: std.mem.Allocator) void {
+        self.write_state.deinit(allocator);
         self.req_buf.deinit(allocator);
         self.stream.close();
     }
@@ -306,7 +405,10 @@ const PendingConn = struct {
     fn pollEvents(self: *const PendingConn) i16 {
         return switch (self.stream) {
             .tls_handshake => posix.POLL.IN | posix.POLL.OUT,
-            else => posix.POLL.IN,
+            else => if (self.write_state.hasRemaining())
+                posix.POLL.IN | posix.POLL.OUT
+            else
+                posix.POLL.IN,
         };
     }
 };
@@ -376,111 +478,70 @@ pub const Server = struct {
         return self.tls_context != null;
     }
 
-    /// Serve a static file (from embedded assets or filesystem)
-    fn serveFile(self: *Server, stream: *tls_wrapper.Stream, url_path: []const u8, request: *const Request) void {
-        // Strip query string if present (e.g., "/?debug" -> "/")
-        const query_idx = std.mem.indexOf(u8, url_path, "?");
-        const path_only = if (query_idx) |idx| url_path[0..idx] else url_path;
-
-        // Try embedded assets first (for single-binary distribution)
-        if (self.serveEmbeddedFile(stream, path_only, request)) {
-            return;
+    fn buildResponseHeader(
+        self: *Server,
+        status: []const u8,
+        headers: []const [2][]const u8,
+        content_length: u64,
+    ) !PendingBuffer {
+        var out: std.ArrayListUnmanaged(u8) = .{};
+        errdefer out.deinit(self.allocator);
+        const writer = out.writer(self.allocator);
+        try writer.print("HTTP/1.1 {s}\r\n", .{status});
+        for (headers) |header| {
+            try writer.print("{s}: {s}\r\n", .{ header[0], header[1] });
         }
+        try writer.print("Content-Length: {d}\r\n", .{content_length});
+        try writer.writeAll("\r\n");
 
-        const static_dir = self.static_dir orelse {
-            self.serveNotFound(stream);
-            return;
+        return .{
+            .data = try out.toOwnedSlice(self.allocator),
         };
-
-        // Sanitize path - remove leading slash, handle directory traversal
-        var clean_path = path_only;
-        if (clean_path.len > 0 and clean_path[0] == '/') {
-            clean_path = clean_path[1..];
-        }
-
-        // Block directory traversal
-        if (std.mem.indexOf(u8, clean_path, "..") != null) {
-            self.serveForbidden(stream);
-            return;
-        }
-
-        // Default to index.html for root
-        if (clean_path.len == 0) {
-            clean_path = "index.html";
-        }
-
-        // Build full path
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const full_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ static_dir, clean_path }) catch {
-            self.serveError(stream);
-            return;
-        };
-
-        // Open and read file
-        const file = std.fs.cwd().openFile(full_path, .{}) catch {
-            log.debug("File not found: {s}", .{full_path});
-            self.serveNotFound(stream);
-            return;
-        };
-        defer file.close();
-
-        const stat = file.stat() catch {
-            self.serveError(stream);
-            return;
-        };
-
-        const file_size = stat.size;
-        const mime_type = getMimeType(clean_path);
-
-        // Generate ETag from mtime and size
-        var etag_buf: [64]u8 = undefined;
-        const mtime_sec: i64 = @intCast(@divFloor(stat.mtime, std.time.ns_per_s));
-        const etag = std.fmt.bufPrint(&etag_buf, "\"{x}-{x}\"", .{ @as(u64, @bitCast(mtime_sec)), file_size }) catch "\"0\"";
-
-        // Check If-None-Match for 304 response
-        if (request.getHeader("if-none-match")) |client_etag| {
-            if (std.mem.eql(u8, client_etag, etag)) {
-                sendResponse(stream, "304 Not Modified", &.{
-                    .{ "ETag", etag },
-                    .{ "Cache-Control", "no-cache" },
-                    .{ "Pragma", "no-cache" },
-                }, "") catch {};
-                return;
-            }
-        }
-
-        log.debug("Serving {s} ({d} bytes, {s})", .{ clean_path, file_size, mime_type });
-
-        // Send headers with ETag
-        sendResponseHeaders(stream, "200 OK", &.{
-            .{ "Content-Type", mime_type },
-            .{ "Cache-Control", "no-cache" },
-            .{ "Pragma", "no-cache" },
-            .{ "ETag", etag },
-        }, file_size) catch {
-            return;
-        };
-
-        // Stream file content
-        var buf: [8192]u8 = undefined;
-        while (true) {
-            const n = file.read(&buf) catch return;
-            if (n == 0) break;
-            stream.writeAll(buf[0..n]) catch return;
-        }
     }
 
-    /// Serve a file from embedded assets, returns true if served
-    fn serveEmbeddedFile(self: *Server, stream: *tls_wrapper.Stream, url_path: []const u8, request: *const Request) bool {
-        _ = self;
+    fn buildSimpleResponse(
+        self: *Server,
+        status: []const u8,
+        headers: []const [2][]const u8,
+        body: []const u8,
+    ) !PendingResponse {
+        return .{
+            .header = try self.buildResponseHeader(status, headers, body.len),
+            .body = .{
+                .bytes = .{
+                    .data = body,
+                },
+            },
+        };
+    }
 
-        // Normalize path for lookup
+    fn buildNotFoundResponse(self: *Server) !PendingResponse {
+        const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
+        return self.buildSimpleResponse("404 Not Found", &.{
+            .{ "Content-Type", "text/html" },
+        }, body);
+    }
+
+    fn buildForbiddenResponse(self: *Server) !PendingResponse {
+        const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
+        return self.buildSimpleResponse("403 Forbidden", &.{
+            .{ "Content-Type", "text/html" },
+        }, body);
+    }
+
+    fn buildErrorResponse(self: *Server) !PendingResponse {
+        const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
+        return self.buildSimpleResponse("500 Internal Server Error", &.{
+            .{ "Content-Type", "text/html" },
+        }, body);
+    }
+
+    fn buildEmbeddedResponse(self: *Server, url_path: []const u8, request: *const Request) !?PendingResponse {
         const lookup_path = if (url_path.len == 0 or std.mem.eql(u8, url_path, "/"))
             "/"
         else
             url_path;
-
-        const asset = embedded_assets.get(lookup_path) orelse return false;
+        const asset = embedded_assets.get(lookup_path) orelse return null;
 
         log.debug("Serving embedded asset: {s} ({d} bytes, {s}, etag={s})", .{
             lookup_path,
@@ -489,52 +550,95 @@ pub const Server = struct {
             asset.etag,
         });
 
-        // Check If-None-Match for 304 response
         if (request.getHeader("if-none-match")) |client_etag| {
             if (std.mem.eql(u8, client_etag, asset.etag)) {
-                sendResponse(stream, "304 Not Modified", &.{
+                const not_modified = try self.buildSimpleResponse("304 Not Modified", &.{
                     .{ "ETag", asset.etag },
                     .{ "Cache-Control", "no-cache" },
-                }, "") catch {};
-                return true;
+                }, "");
+                return not_modified;
             }
         }
 
-        // Send headers first, then stream body (files can be large)
-        sendResponseHeaders(stream, "200 OK", &.{
-            .{ "Content-Type", asset.mime_type },
-            .{ "Cache-Control", "no-cache" },
-            .{ "ETag", asset.etag },
-        }, asset.content.len) catch return true;
-
-        // Stream body
-        stream.writeAll(asset.content) catch {};
-
-        return true;
+        return .{
+            .header = try self.buildResponseHeader("200 OK", &.{
+                .{ "Content-Type", asset.mime_type },
+                .{ "Cache-Control", "no-cache" },
+                .{ "ETag", asset.etag },
+            }, asset.content.len),
+            .body = .{
+                .bytes = .{
+                    .data = asset.content,
+                },
+            },
+        };
     }
 
-    fn serveNotFound(self: *Server, stream: *tls_wrapper.Stream) void {
-        _ = self;
-        const body = "<!DOCTYPE html><html><body><h1>404 Not Found</h1></body></html>";
-        sendResponse(stream, "404 Not Found", &.{
-            .{ "Content-Type", "text/html" },
-        }, body) catch {};
-    }
+    fn buildStaticFileResponse(self: *Server, url_path: []const u8, request: *const Request) !PendingResponse {
+        const query_idx = std.mem.indexOf(u8, url_path, "?");
+        const path_only = if (query_idx) |idx| url_path[0..idx] else url_path;
 
-    fn serveForbidden(self: *Server, stream: *tls_wrapper.Stream) void {
-        _ = self;
-        const body = "<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>";
-        sendResponse(stream, "403 Forbidden", &.{
-            .{ "Content-Type", "text/html" },
-        }, body) catch {};
-    }
+        if (try self.buildEmbeddedResponse(path_only, request)) |embedded| {
+            return embedded;
+        }
 
-    fn serveError(self: *Server, stream: *tls_wrapper.Stream) void {
-        _ = self;
-        const body = "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1></body></html>";
-        sendResponse(stream, "500 Internal Server Error", &.{
-            .{ "Content-Type", "text/html" },
-        }, body) catch {};
+        const static_dir = self.static_dir orelse return self.buildNotFoundResponse();
+
+        var clean_path = path_only;
+        if (clean_path.len > 0 and clean_path[0] == '/') {
+            clean_path = clean_path[1..];
+        }
+        if (std.mem.indexOf(u8, clean_path, "..") != null) {
+            return self.buildForbiddenResponse();
+        }
+        if (clean_path.len == 0) {
+            clean_path = "index.html";
+        }
+
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const full_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ static_dir, clean_path }) catch {
+            return self.buildErrorResponse();
+        };
+
+        const file = std.fs.cwd().openFile(full_path, .{}) catch {
+            log.debug("File not found: {s}", .{full_path});
+            return self.buildNotFoundResponse();
+        };
+        errdefer file.close();
+
+        const stat = file.stat() catch return self.buildErrorResponse();
+        const file_size = stat.size;
+        const mime_type = getMimeType(clean_path);
+
+        var etag_buf: [64]u8 = undefined;
+        const mtime_sec: i64 = @intCast(@divFloor(stat.mtime, std.time.ns_per_s));
+        const etag = std.fmt.bufPrint(&etag_buf, "\"{x}-{x}\"", .{ @as(u64, @bitCast(mtime_sec)), file_size }) catch "\"0\"";
+
+        if (request.getHeader("if-none-match")) |client_etag| {
+            if (std.mem.eql(u8, client_etag, etag)) {
+                return self.buildSimpleResponse("304 Not Modified", &.{
+                    .{ "ETag", etag },
+                    .{ "Cache-Control", "no-cache" },
+                    .{ "Pragma", "no-cache" },
+                }, "");
+            }
+        }
+
+        log.debug("Serving {s} ({d} bytes, {s})", .{ clean_path, file_size, mime_type });
+        return .{
+            .header = try self.buildResponseHeader("200 OK", &.{
+                .{ "Content-Type", mime_type },
+                .{ "Cache-Control", "no-cache" },
+                .{ "Pragma", "no-cache" },
+                .{ "ETag", etag },
+            }, file_size),
+            .body = .{
+                .file = .{
+                    .file = file,
+                    .remaining = file_size,
+                },
+            },
+        };
     }
 
     /// Get the underlying socket fd for polling
@@ -592,13 +696,23 @@ pub const Server = struct {
                 continue;
             }
 
-            switch (self.pending.items[idx].stream) {
-                .tls_handshake => try self.processPendingHandshake(idx, revents),
-                else => {
-                    if (revents & posix.POLL.IN != 0 or self.pending.items[idx].stream.hasPendingData()) {
-                        try self.readPendingRequest(idx);
-                    }
-                },
+            if (self.pending.items[idx].stream == .tls_handshake) {
+                try self.processPendingHandshake(idx, revents);
+                continue;
+            }
+
+            if (self.pending.items[idx].write_state.hasRemaining()) {
+                if (revents & posix.POLL.OUT != 0) {
+                    self.flushPendingWrite(idx) catch |e| {
+                        log.debug("Pending write failed: {any}", .{e});
+                        self.closeAndRemovePending(idx);
+                    };
+                }
+                continue;
+            }
+
+            if (revents & posix.POLL.IN != 0 or self.pending.items[idx].stream.hasPendingData()) {
+                try self.readPendingRequest(idx);
             }
         }
     }
@@ -615,7 +729,12 @@ pub const Server = struct {
 
             const accept_elapsed = now - pending.accepted_ms;
             const handshake_elapsed = if (pending.handshake_done_ms) |ms| ms - pending.accepted_ms else -1;
-            switch (pending.stream) {
+            if (pending.write_state.hasRemaining()) {
+                log.debug(
+                    "Write timeout sending HTTP response (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
+                    .{ accept_elapsed, handshake_elapsed, pending.stream.isTls(), pending.peer_addr },
+                );
+            } else switch (pending.stream) {
                 .tls_handshake => log.debug("TLS handshake timeout after {d}ms (peer={any})", .{ accept_elapsed, pending.peer_addr }),
                 else => log.debug(
                     "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
@@ -757,84 +876,162 @@ pub const Server = struct {
     }
 
     fn respondAndClose(self: *Server, idx: usize, status: []const u8, body: []const u8) void {
-        if (idx >= self.pending.items.len) return;
-        var pending = &self.pending.items[idx];
-
-        setNonBlocking(pending.getFd(), false);
-        setSocketTimeoutMs(pending.getFd(), 1000);
-
-        switch (pending.stream) {
-            .plain => |*plain| {
-                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
-                sendResponse(&stream, status, &.{}, body) catch {};
-            },
-            .tls => |*tls_conn| {
-                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
-                sendResponse(&stream, status, &.{}, body) catch {};
-            },
-            .tls_handshake => {},
-        }
-
-        self.closeAndRemovePending(idx);
+        const response = self.buildSimpleResponse(status, &.{
+            .{ "Content-Type", "text/plain; charset=utf-8" },
+        }, body) catch {
+            self.closeAndRemovePending(idx);
+            return;
+        };
+        self.queuePendingHttpResponse(idx, response);
     }
 
     fn serveRequestAndClose(self: *Server, idx: usize, request: *const Request) void {
-        if (idx >= self.pending.items.len) return;
-        var pending = &self.pending.items[idx];
-
-        setNonBlocking(pending.getFd(), false);
-        setSocketTimeoutMs(pending.getFd(), 5000);
-
-        switch (pending.stream) {
-            .plain => |*plain| {
-                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
-                self.serveFile(&stream, request.path, request);
-            },
-            .tls => |*tls_conn| {
-                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
-                self.serveFile(&stream, request.path, request);
-            },
-            .tls_handshake => {},
-        }
-
-        self.closeAndRemovePending(idx);
+        const response = self.buildStaticFileResponse(request.path, request) catch {
+            const fallback = self.buildErrorResponse() catch {
+                self.closeAndRemovePending(idx);
+                return;
+            };
+            self.queuePendingHttpResponse(idx, fallback);
+            return;
+        };
+        self.queuePendingHttpResponse(idx, response);
     }
 
     fn sendUpgradeAndPromote(self: *Server, idx: usize, client_key: []const u8) !void {
         if (idx >= self.pending.items.len) return;
+        const upgrade = try buildWebSocketUpgradeResponse(self.allocator, client_key);
+        self.queuePendingWsUpgrade(idx, upgrade);
+    }
+
+    fn queuePendingHttpResponse(self: *Server, idx: usize, response: PendingResponse) void {
+        if (idx >= self.pending.items.len) {
+            var tmp = response;
+            tmp.deinit(self.allocator);
+            return;
+        }
         var pending = &self.pending.items[idx];
-        const peer_addr = pending.peer_addr;
+        pending.write_state.deinit(self.allocator);
+        pending.write_state = .{ .http = response };
+        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
 
-        setNonBlocking(pending.getFd(), false);
-        setSocketTimeoutMs(pending.getFd(), 1000);
+        self.flushPendingWrite(idx) catch |e| {
+            log.debug("Failed to flush queued HTTP response: {any}", .{e});
+            self.closeAndRemovePending(idx);
+        };
+    }
 
-        switch (pending.stream) {
-            .plain => |*plain| {
-                var stream: tls_wrapper.Stream = .{ .plain = plain.* };
-                sendWebSocketUpgrade(&stream, client_key) catch |e| {
-                    log.err("Failed to send WebSocket upgrade: {any}", .{e});
-                    self.closeAndRemovePending(idx);
-                    return;
-                };
-            },
-            .tls => |*tls_conn| {
-                var stream: tls_wrapper.Stream = .{ .tls = tls_conn.* };
-                sendWebSocketUpgrade(&stream, client_key) catch |e| {
-                    log.err("Failed to send WebSocket upgrade: {any}", .{e});
-                    self.closeAndRemovePending(idx);
-                    return;
-                };
-            },
-            .tls_handshake => {
-                self.closeAndRemovePending(idx);
-                return;
-            },
+    fn queuePendingWsUpgrade(self: *Server, idx: usize, upgrade: PendingBuffer) void {
+        if (idx >= self.pending.items.len) {
+            var tmp = upgrade;
+            tmp.deinit(self.allocator);
+            return;
+        }
+        var pending = &self.pending.items[idx];
+        pending.write_state.deinit(self.allocator);
+        pending.write_state = .{ .ws_upgrade = upgrade };
+        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+
+        self.flushPendingWrite(idx) catch |e| {
+            log.debug("Failed to flush queued WS upgrade: {any}", .{e});
+            self.closeAndRemovePending(idx);
+        };
+    }
+
+    fn writeToPendingStream(self: *Server, pending: *PendingConn, data: []const u8) !usize {
+        _ = self;
+        return switch (pending.stream) {
+            .plain => |*plain| plain.write(data),
+            .tls => |*tls_conn| tls_conn.write(data),
+            .tls_handshake => error.InvalidState,
+        };
+    }
+
+    fn flushPendingBuffer(self: *Server, pending: *PendingConn, buffer: *PendingBuffer) !bool {
+        while (buffer.hasRemaining()) {
+            const n = self.writeToPendingStream(pending, buffer.data[buffer.sent..]) catch |e| switch (e) {
+                error.WouldBlock => return false,
+                else => return e,
+            };
+            if (n == 0) return error.ConnectionClosed;
+            buffer.sent += n;
+            pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+        }
+        return true;
+    }
+
+    fn flushPendingResponse(self: *Server, pending: *PendingConn, response: *PendingResponse) !bool {
+        if (try self.flushPendingBuffer(pending, &response.header) == false) {
+            return false;
         }
 
-        // Promote to non-blocking websocket transport.
-        setNonBlocking(pending.getFd(), true);
+        switch (response.body) {
+            .none => return true,
+            .bytes => |*body| {
+                while (body.sent < body.data.len) {
+                    const n = self.writeToPendingStream(pending, body.data[body.sent..]) catch |e| switch (e) {
+                        error.WouldBlock => return false,
+                        else => return e,
+                    };
+                    if (n == 0) return error.ConnectionClosed;
+                    body.sent += n;
+                    pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                }
+                return true;
+            },
+            .file => |*file_body| {
+                while (true) {
+                    if (file_body.chunk_sent < file_body.chunk_len) {
+                        const n = self.writeToPendingStream(pending, file_body.chunk[file_body.chunk_sent..file_body.chunk_len]) catch |e| switch (e) {
+                            error.WouldBlock => return false,
+                            else => return e,
+                        };
+                        if (n == 0) return error.ConnectionClosed;
+                        file_body.chunk_sent += n;
+                        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                        continue;
+                    }
+
+                    if (file_body.remaining == 0) return true;
+
+                    const chunk_cap_u64: u64 = @intCast(file_body.chunk.len);
+                    const to_read: usize = @intCast(@min(chunk_cap_u64, file_body.remaining));
+                    const n_read = file_body.file.read(file_body.chunk[0..to_read]) catch return error.ReadFailed;
+                    if (n_read == 0) {
+                        file_body.remaining = 0;
+                        return true;
+                    }
+                    file_body.remaining -= @as(u64, @intCast(n_read));
+                    file_body.chunk_len = n_read;
+                    file_body.chunk_sent = 0;
+                }
+            },
+        }
+    }
+
+    fn flushPendingWrite(self: *Server, idx: usize) !void {
+        if (idx >= self.pending.items.len) return;
+        var pending = &self.pending.items[idx];
+
+        switch (pending.write_state) {
+            .none => return,
+            .http => |*response| {
+                if (!try self.flushPendingResponse(pending, response)) return;
+                self.closeAndRemovePending(idx);
+            },
+            .ws_upgrade => |*upgrade| {
+                if (!try self.flushPendingBuffer(pending, upgrade)) return;
+                try self.promotePendingWebSocket(idx);
+            },
+        }
+    }
+
+    fn promotePendingWebSocket(self: *Server, idx: usize) !void {
+        if (idx >= self.pending.items.len) return;
+
+        const peer_addr = self.pending.items[idx].peer_addr;
         var promoted = self.pending.orderedRemove(idx);
         defer promoted.req_buf.deinit(self.allocator);
+        defer promoted.write_state.deinit(self.allocator);
 
         const ws_stream: tls_wrapper.Stream = switch (promoted.stream) {
             .plain => |plain| .{ .plain = plain },
