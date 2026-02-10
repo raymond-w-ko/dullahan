@@ -134,8 +134,11 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         pty_log.setEnabled(true);
     }
 
-    // Ensure temp directory exists for tokens/logs/sockets
+    // Ensure runtime directories exist for logs/sockets (temp) and persistent config.
     try paths.ensureTempDir();
+    paths.ensureConfigDir() catch |e| {
+        log.warn("Failed to ensure config dir {s}: {any}", .{ paths.getConfigDir(), e });
+    };
 
     const tokens_path = paths.StaticPaths.tokens();
     var tokens_buf: [256]u8 = undefined;

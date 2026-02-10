@@ -172,7 +172,7 @@ pub const StaticPaths = struct {
     var pty_traffic_len: usize = 0;
     var pty_traffic_initialized: bool = false;
 
-    var tokens_buf: [80]u8 = undefined;
+    var tokens_buf: [280]u8 = undefined;
     var tokens_len: usize = 0;
     var tokens_initialized: bool = false;
 
@@ -225,12 +225,12 @@ pub const StaticPaths = struct {
         return dlog_buf[0..dlog_len];
     }
 
-    /// Tokens file path: /tmp/dullahan-<uid>/tokens.<port>
+    /// Tokens file path: ~/.config/dullahan/tokens.<port>
     pub fn tokens() []const u8 {
         if (!tokens_initialized) {
-            const dir = getTempDir();
+            const dir = getConfigDir();
             tokens_len = (std.fmt.bufPrint(&tokens_buf, "{s}/tokens.{d}", .{ dir, getPort() }) catch
-                return "/tmp/dullahan-tokens.7681").len;
+                return "/tmp/dullahan-config/tokens.7681").len;
             tokens_initialized = true;
         }
         return tokens_buf[0..tokens_len];
