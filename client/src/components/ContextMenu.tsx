@@ -1,5 +1,5 @@
 // Context menu component - handles window, pane, and hidden panes picker menus
-// Window menu: right-click on window tabs, shows layout options
+// Window menu: right-click on window tabs, shows close/layout options
 // Pane menu: right-click on pane titlebar, shows swap/hide options
 // Hidden picker: click on +N indicator, shows hidden panes to bring into view
 
@@ -10,6 +10,7 @@ import {
   getStore,
   getPane,
   closeContextMenu,
+  closeWindow,
   setWindowLayout,
   swapPanes,
 } from "../store";
@@ -117,10 +118,10 @@ function LayoutSubmenu({ templates, windowId, parentRect }: LayoutSubmenuProps) 
   );
 }
 
-/** Window context menu content - shows layout options */
+/** Window context menu content - shows close/layout options */
 function WindowMenuContent({ menu }: { menu: WindowContextMenuState }) {
   const store = getStore();
-  const { layoutTemplates, isMaster } = store;
+  const { layoutTemplates, isMaster, windows } = store;
 
   const layoutItemRef = useRef<HTMLDivElement>(null);
   const [showLayoutSubmenu, setShowLayoutSubmenu] = useState(false);
@@ -144,9 +145,29 @@ function WindowMenuContent({ menu }: { menu: WindowContextMenuState }) {
   }, []);
 
   const canChangeLayout = isMaster && layoutTemplates.length > 0;
+  const canCloseWindow = isMaster && windows.size > 1;
+
+  const handleCloseWindow = useCallback(() => {
+    if (!canCloseWindow) return;
+    closeWindow(menu.windowId);
+    closeContextMenu();
+  }, [canCloseWindow, menu.windowId]);
 
   return (
     <>
+      {canCloseWindow && (
+        <button class="context-menu-item" onClick={handleCloseWindow}>
+          <span class="context-menu-item-label">Close window</span>
+        </button>
+      )}
+      {!canCloseWindow && (
+        <div class="context-menu-item context-menu-item--disabled">
+          <span class="context-menu-item-label">
+            {isMaster ? "Can't close last window" : "Close window (master only)"}
+          </span>
+        </div>
+      )}
+      <div class="context-menu-divider" />
       {canChangeLayout && (
         <div
           ref={layoutItemRef}
