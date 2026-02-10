@@ -37,12 +37,20 @@ function readSnappyLength(data: Uint8Array): number {
 }
 import { cellToChar, ContentTag, Wide, decodeGraphemes, decodeHyperlinks, decodeCellsFromBytes, decodeRowIds } from "../../../protocol/schema/cell";
 import type { Cell, GraphemeTable, HyperlinkTable } from "../../../protocol/schema/cell";
-import { ColorTag, decodeStyleTableFromBytes } from "../../../protocol/schema/style";
+import { decodeStyleTableFromBytes } from "../../../protocol/schema/style";
 import { calculateTerminalSize } from "./dimensions";
-import type { StyleTable, Style, Color } from "../../../protocol/schema/style";
+import type { StyleTable } from "../../../protocol/schema/style";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "./ime";
 import type { MouseMessage } from "./mouse";
+import {
+  canonicalizePayloadStyles,
+  cloneStyleIdentityState,
+  createStyleIdentityState,
+  pruneUnusedStyles,
+  remapCellsToCanonicalStyles,
+  type StyleIdentityState,
+} from "./styleIdentity";
 import type {
   BinarySnapshot,
   BinaryDelta,
@@ -196,6 +204,7 @@ interface PaneState {
   followTail: boolean; // Keep viewport pinned to bottom unless user scrolls up
   autoFollowInFlight: boolean; // Prevent repeated auto-follow scroll sends
   lastViewportTop: number | null;
+  styleIdentity: StyleIdentityState;
   lastStyles: StyleTable | null;
   lastRowIds: bigint[] | null;
   lastGraphemes: GraphemeTable | null; // Last snapshot's graphemes (global indices)
@@ -382,6 +391,7 @@ export class TerminalConnection {
         followTail: true,
         autoFollowInFlight: false,
         lastViewportTop: null,
+        styleIdentity: createStyleIdentityState(),
         lastStyles: null,
         lastRowIds: null,
         lastGraphemes: null,
@@ -568,7 +578,7 @@ export class TerminalConnection {
 
         // Decode cells, styles, row IDs, graphemes, and hyperlinks from raw bytes
         const cells = decodeCellsFromBytes(msg.cells);
-        const styles = decodeStyleTableFromBytes(msg.styles);
+        const payloadStyles = decodeStyleTableFromBytes(msg.styles);
         const rowIds = decodeRowIds(msg.rowIds);
         const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
         const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
@@ -576,7 +586,7 @@ export class TerminalConnection {
         // Validate snapshot style table integrity before mutating pane state.
         const missingStyles = new Set<number>();
         for (const cell of cells) {
-          if (cell.styleId !== 0 && !styles.has(cell.styleId)) {
+          if (cell.styleId !== 0 && !payloadStyles.has(cell.styleId)) {
             missingStyles.add(cell.styleId);
           }
         }
@@ -584,6 +594,18 @@ export class TerminalConnection {
           snapshotLog.warn(`Pane ${paneId}: snapshot missing ${missingStyles.size} styles, requesting resync`);
           this.requestResync(paneId, "style_miss");
           return; // Don't emit or cache corrupted snapshot
+        }
+
+        // Canonicalize payload-local style IDs by style bytes so style semantics
+        // remain stable even when server-side numeric IDs alias across pages.
+        const styles: StyleTable = new Map();
+        const styleIdentity = createStyleIdentityState();
+        const payloadToCanonical = canonicalizePayloadStyles(payloadStyles, styles, styleIdentity);
+        const remapMisses = remapCellsToCanonicalStyles(cells, payloadToCanonical);
+        if (remapMisses > 0) {
+          snapshotLog.warn(`Pane ${paneId}: snapshot had ${remapMisses} unmapped styles after canonicalization, requesting resync`);
+          this.requestResync(paneId, "style_miss");
+          return;
         }
 
         const snapshot: TerminalSnapshot = {
@@ -659,6 +681,7 @@ export class TerminalConnection {
         paneState.minRowId = minSeen >= 0n ? minSeen : null;
 
         // Save for delta merging
+        paneState.styleIdentity = styleIdentity;
         paneState.lastStyles = styles;
         paneState.lastRowIds = rowIds;
         paneState.lastGraphemes = graphemes;
@@ -1225,8 +1248,9 @@ export class TerminalConnection {
     const now = Date.now();
     const lastResync = this._lastResyncTime.get(paneId) ?? 0;
     const elapsed = now - lastResync;
+    const bypassCooldown = reason === "corruption" || reason === "style_miss";
 
-    if (elapsed < TerminalConnection.RESYNC_COOLDOWN_MS) {
+    if (!bypassCooldown && elapsed < TerminalConnection.RESYNC_COOLDOWN_MS) {
       const delayMs = TerminalConnection.RESYNC_COOLDOWN_MS - elapsed;
       const pending = this._pendingResync.get(paneId);
       if (pending) {
@@ -1327,59 +1351,38 @@ export class TerminalConnection {
     paneState.cols = delta.cols;
     paneState.rows = delta.rows;
 
-    // Apply each dirty row to cache (including graphemes)
+    type PendingRow = {
+      cells: Cell[];
+      graphemes: GraphemeTable | null;
+      hyperlinks: HyperlinkTable | null;
+    };
+
     const now = Date.now();
+    const pendingRows = new Map<bigint, PendingRow>();
+
+    // Canonicalize payload-local style IDs by style bytes using staged maps.
+    const payloadStyles = decodeStyleTableFromBytes(delta.styles);
+    const styles: StyleTable = paneState.lastStyles ? new Map(paneState.lastStyles) : new Map();
+    const styleIdentity = cloneStyleIdentityState(paneState.styleIdentity);
+    const payloadToCanonical = canonicalizePayloadStyles(payloadStyles, styles, styleIdentity);
+
+    // Stage dirty row decode without mutating pane caches until validation passes.
     for (const row of delta.dirtyRows) {
       const rowId = BigInt(row.id);
-      const cells = decodeCellsFromBytes(row.cells);
-
-      paneState.rowCache.set(rowId, { cells, lastAccess: now });
-
-      // Decode and cache graphemes for this row (row-relative indices)
-      if (row.graphemes) {
-        const rowGraphemes = decodeGraphemes(row.graphemes);
-        if (rowGraphemes.size > 0) {
-          paneState.rowGraphemes.set(rowId, rowGraphemes);
-        } else {
-          paneState.rowGraphemes.delete(rowId);
-        }
-      } else {
-        // No graphemes in this row, clear any cached graphemes
-        paneState.rowGraphemes.delete(rowId);
+      const rowCells = decodeCellsFromBytes(row.cells);
+      const remapMisses = remapCellsToCanonicalStyles(rowCells, payloadToCanonical);
+      if (remapMisses > 0) {
+        deltaLog.warn(`Pane ${paneId}: row ${rowId} had ${remapMisses} unmapped styles, requesting resync`);
+        this.requestResync(paneId, "style_miss");
+        return;
       }
 
-      // Decode and cache hyperlinks for this row (row-relative indices)
-      if (row.hyperlinks) {
-        const rowHyperlinks = decodeHyperlinks(row.hyperlinks);
-        if (rowHyperlinks.size > 0) {
-          paneState.rowHyperlinks.set(rowId, rowHyperlinks);
-        } else {
-          paneState.rowHyperlinks.delete(rowId);
-        }
-      } else {
-        // No hyperlinks in this row, clear any cached hyperlinks
-        paneState.rowHyperlinks.delete(rowId);
-      }
-
-      // Update min row ID tracking
-      if (paneState.minRowId === null || rowId < paneState.minRowId) {
-        paneState.minRowId = rowId;
-      }
+      pendingRows.set(rowId, {
+        cells: rowCells,
+        graphemes: row.graphemes ? decodeGraphemes(row.graphemes) : null,
+        hyperlinks: row.hyperlinks ? decodeHyperlinks(row.hyperlinks) : null,
+      });
     }
-
-    // Decode styles from delta
-    const styles = decodeStyleTableFromBytes(delta.styles);
-
-    // Merge with existing styles from last snapshot
-    // Delta styles take precedence (they're the current ones)
-    if (paneState.lastStyles) {
-      for (const [id, style] of paneState.lastStyles) {
-        if (!styles.has(id)) {
-          styles.set(id, style);
-        }
-      }
-    }
-    paneState.lastStyles = styles;
 
     // Decode row IDs from delta (tells us which rows are in viewport)
     if (!delta.rowIds || delta.rowIds.length === 0) {
@@ -1393,19 +1396,16 @@ export class TerminalConnection {
       this.requestResync(paneId, "corruption");
       return;
     }
-    paneState.lastRowIds = rowIds;
-
     // Check which rowIds are in cache (excluding explicit invalid-row sentinels).
+    // Rows staged in this delta are treated as cache hits.
     const notInCache = rowIds.filter(id => {
       if (id === INVALID_ROW_ID) {
         return false;
       }
-      const cached = paneState.rowCache.get(id);
-      if (cached) {
-        // Update access time for rows we're checking in the viewport
-        cached.lastAccess = now;
+      if (pendingRows.has(id)) {
+        return false;
       }
-      return !cached;
+      return !paneState.rowCache.has(id);
     });
 
     if (notInCache.length > 0) {
@@ -1420,17 +1420,20 @@ export class TerminalConnection {
     const cells: Cell[] = [];
     const graphemes: GraphemeTable = new Map();
     const hyperlinks: HyperlinkTable = new Map();
+    const viewportTouched = new Set<bigint>();
     let fromCache = 0;
+    let fromDelta = 0;
     let filled = 0;
     let cacheCorrupt = false;
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
       if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
-        const cached = paneState.rowCache.get(rowId);
-        if (cached) {
-          // Update LRU access time when row is used in viewport
-          cached.lastAccess = now;
-          const rowCells = cached.cells;
+        viewportTouched.add(rowId);
+
+        const pending = pendingRows.get(rowId);
+        const cached = pending ? null : paneState.rowCache.get(rowId);
+        const rowCells = pending?.cells ?? cached?.cells;
+        if (rowCells) {
           if (rowCells.length !== delta.cols) {
             deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
             cacheCorrupt = true;
@@ -1441,7 +1444,7 @@ export class TerminalConnection {
           const rowStart = y * delta.cols;
 
           // Convert row-relative grapheme indices to global cell indices
-          const rowGraphemes = paneState.rowGraphemes.get(rowId);
+          const rowGraphemes = pending?.graphemes ?? paneState.rowGraphemes.get(rowId);
           if (rowGraphemes) {
             for (const [colIndex, cps] of rowGraphemes) {
               graphemes.set(rowStart + colIndex, cps);
@@ -1449,14 +1452,18 @@ export class TerminalConnection {
           }
 
           // Convert row-relative hyperlink indices to global cell indices
-          const rowHyperlinks = paneState.rowHyperlinks.get(rowId);
+          const rowHyperlinks = pending?.hyperlinks ?? paneState.rowHyperlinks.get(rowId);
           if (rowHyperlinks) {
             for (const [colIndex, url] of rowHyperlinks) {
               hyperlinks.set(rowStart + colIndex, url);
             }
           }
 
-          fromCache++;
+          if (pending) {
+            fromDelta++;
+          } else {
+            fromCache++;
+          }
           continue;
         }
       }
@@ -1476,7 +1483,7 @@ export class TerminalConnection {
       this.requestResync(paneId, "corruption");
       return; // Don't emit corrupted snapshot
     }
-    deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${filled} empty rows, ${graphemes.size} graphemes`);
+    deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${fromDelta} dirty + ${filled} empty rows, ${graphemes.size} graphemes`);
 
     // Check if any cells reference styles we don't have
     const missingStyles = new Set<number>();
@@ -1490,6 +1497,39 @@ export class TerminalConnection {
       this.requestResync(paneId, "style_miss");
       return; // Don't emit corrupted snapshot
     }
+
+    // Validation passed. Commit staged dirty rows and style identity state.
+    for (const [rowId, pending] of pendingRows) {
+      paneState.rowCache.set(rowId, { cells: pending.cells, lastAccess: now });
+
+      if (pending.graphemes && pending.graphemes.size > 0) {
+        paneState.rowGraphemes.set(rowId, pending.graphemes);
+      } else {
+        paneState.rowGraphemes.delete(rowId);
+      }
+
+      if (pending.hyperlinks && pending.hyperlinks.size > 0) {
+        paneState.rowHyperlinks.set(rowId, pending.hyperlinks);
+      } else {
+        paneState.rowHyperlinks.delete(rowId);
+      }
+
+      if (paneState.minRowId === null || rowId < paneState.minRowId) {
+        paneState.minRowId = rowId;
+      }
+    }
+
+    for (const rowId of viewportTouched) {
+      if (pendingRows.has(rowId)) continue;
+      const cached = paneState.rowCache.get(rowId);
+      if (cached) {
+        cached.lastAccess = now;
+      }
+    }
+
+    paneState.styleIdentity = styleIdentity;
+    paneState.lastStyles = styles;
+    paneState.lastRowIds = rowIds;
 
     // Update generation only after validation to avoid desync on resync request
     paneState.generation = delta.gen;
@@ -1599,11 +1639,7 @@ export class TerminalConnection {
         }
       }
       // Remove styles not used by any cached row.
-      for (const styleId of paneState.lastStyles.keys()) {
-        if (!usedStyleIds.has(styleId)) {
-          paneState.lastStyles.delete(styleId);
-        }
-      }
+      pruneUnusedStyles(paneState.lastStyles, paneState.styleIdentity, usedStyleIds);
       deltaLog.log(`Pane ${paneId}: Pruned styles to ${paneState.lastStyles.size}`);
     }
   }

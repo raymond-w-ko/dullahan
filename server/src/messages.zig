@@ -38,6 +38,7 @@ pub const PingMessage = struct {
 
 pub const SyncMessage = struct {
     type: []const u8,
+    paneId: u16,
     gen: u64,
     minRowId: u64,
 };
@@ -215,6 +216,7 @@ pub const ParsedPing = struct {
 };
 
 pub const ParsedSync = struct {
+    paneId: u16,
     gen: u64,
     minRowId: u64 = 0,
 };

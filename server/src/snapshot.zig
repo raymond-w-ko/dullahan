@@ -266,6 +266,90 @@ fn encodeStyle(style: anytype) [14]u8 {
     return bytes;
 }
 
+const CanonicalStyleTable = struct {
+    key_to_id: std.AutoHashMap([14]u8, u16),
+    ordered_styles: std.ArrayListUnmanaged([14]u8),
+
+    fn init(allocator: std.mem.Allocator) CanonicalStyleTable {
+        return .{
+            .key_to_id = std.AutoHashMap([14]u8, u16).init(allocator),
+            .ordered_styles = .{},
+        };
+    }
+
+    fn deinit(self: *CanonicalStyleTable, allocator: std.mem.Allocator) void {
+        self.key_to_id.deinit();
+        self.ordered_styles.deinit(allocator);
+    }
+
+    fn intern(self: *CanonicalStyleTable, allocator: std.mem.Allocator, encoded: [14]u8) !u16 {
+        if (self.key_to_id.get(encoded)) |id| {
+            return id;
+        }
+        if (self.ordered_styles.items.len >= std.math.maxInt(u16)) {
+            return error.StyleTableOverflow;
+        }
+
+        const next_id: u16 = @intCast(self.ordered_styles.items.len + 1);
+        try self.key_to_id.put(encoded, next_id);
+        try self.ordered_styles.append(allocator, encoded);
+        return next_id;
+    }
+
+    fn toBytes(self: *const CanonicalStyleTable, allocator: std.mem.Allocator) ![]u8 {
+        const style_count = self.ordered_styles.items.len;
+        const style_table_size = 2 + style_count * (2 + 14);
+        var style_bytes = try allocator.alloc(u8, style_table_size);
+
+        // Write count (little-endian)
+        style_bytes[0] = @truncate(style_count & 0xFF);
+        style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
+
+        var style_offset: usize = 2;
+        for (self.ordered_styles.items, 0..) |encoded, i| {
+            const style_id: u16 = @intCast(i + 1);
+
+            // Write style_id (little-endian)
+            style_bytes[style_offset] = @truncate(style_id & 0xFF);
+            style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
+            style_offset += 2;
+
+            // Write style bytes
+            @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
+            style_offset += 14;
+        }
+
+        return style_bytes;
+    }
+};
+
+/// Rewrite style_id bits in an encoded 8-byte terminal cell.
+/// Layout matches protocol/schema/cell.ts:
+/// - style_id low 6 bits: bits 26..31 of low u32
+/// - style_id high 10 bits: bits 0..9 of high u32
+fn setCellStyleId(cell_bytes: []u8, style_id: u16) void {
+    std.debug.assert(cell_bytes.len == 8);
+
+    var lo = std.mem.readInt(u32, cell_bytes[0..4], .little);
+    var hi = std.mem.readInt(u32, cell_bytes[4..8], .little);
+
+    lo = (lo & ~(@as(u32, 0x3F) << 26)) | (@as(u32, style_id & 0x3F) << 26);
+    hi = (hi & ~@as(u32, 0x3FF)) | @as(u32, style_id >> 6);
+
+    std.mem.writeInt(u32, cell_bytes[0..4], lo, .little);
+    std.mem.writeInt(u32, cell_bytes[4..8], hi, .little);
+}
+
+fn getCellStyleId(cell_bytes: []const u8) u16 {
+    std.debug.assert(cell_bytes.len == 8);
+    const lo = std.mem.readInt(u32, cell_bytes[0..4], .little);
+    const hi = std.mem.readInt(u32, cell_bytes[4..8], .little);
+
+    const low_bits: u16 = @intCast((lo >> 26) & 0x3F);
+    const high_bits: u16 = @intCast(hi & 0x3FF);
+    return low_bits | (high_bits << 6);
+}
+
 /// Result from getCellBytesAndStyles
 const CellsAndStyles = struct {
     cell_bytes: []u8,
@@ -297,10 +381,10 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     var row_ids = try allocator.alloc(u64, rows);
     errdefer allocator.free(row_ids);
 
-    // Track unique styles we encounter (keyed by style_id)
-    // We store the encoded style bytes directly to avoid cross-page lookup issues
-    var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
-    defer styles_map.deinit();
+    // Track unique styles by encoded bytes so style identity remains stable even
+    // when ghostty style IDs alias across pages.
+    var styles = CanonicalStyleTable.init(allocator);
+    defer styles.deinit(allocator);
 
     // Collect grapheme data for cells with multi-codepoint characters
     // We use a dynamic list since graphemes are typically sparse
@@ -349,20 +433,33 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
         // Get page for style and grapheme lookups (must use THIS row's page)
         const page = &row_pin.node.data;
 
+        // Per-row cache because style_id lookups are page-local.
+        var row_style_ids = std.AutoHashMap(u16, u16).init(allocator);
+        defer row_style_ids.deinit();
+
         // Copy each cell as raw bytes and collect styles and graphemes
         // NOTE: Must use index-based iteration to get actual cell pointers from page memory.
         // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
         for (0..cells.len) |i| {
             const cell = &cells[i];
+            const cell_start = byte_offset;
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
-            @memcpy(cell_bytes[byte_offset .. byte_offset + 8], cell_bytes_ptr);
+            @memcpy(cell_bytes[cell_start .. cell_start + 8], cell_bytes_ptr);
             byte_offset += 8;
 
-            // Collect non-zero styles (encode immediately from correct page)
-            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
-                const style = page.styles.get(page.memory, cell.style_id);
-                const encoded = encodeStyle(style);
-                try styles_map.put(cell.style_id, encoded);
+            // Canonicalize style IDs by encoded style bytes.
+            if (cell.style_id > 0) {
+                const canonical_style_id = blk: {
+                    if (row_style_ids.get(cell.style_id)) |cached_id| {
+                        break :blk cached_id;
+                    }
+                    const style = page.styles.get(page.memory, cell.style_id);
+                    const encoded = encodeStyle(style);
+                    const interned = try styles.intern(allocator, encoded);
+                    try row_style_ids.put(cell.style_id, interned);
+                    break :blk interned;
+                };
+                setCellStyleId(cell_bytes[cell_start .. cell_start + 8], canonical_style_id);
             }
 
             // Check for grapheme clusters (additional codepoints beyond the first)
@@ -449,32 +546,9 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
     hyperlink_list.items[2] = @truncate((hyperlink_count >> 16) & 0xFF);
     hyperlink_list.items[3] = @truncate((hyperlink_count >> 24) & 0xFF);
 
-    // Now build the style table from collected styles
-    // Format: [count: u16] [id: u16, style: 14 bytes] ...
-    const style_count = styles_map.count();
-    const style_table_size = 2 + style_count * (2 + 14);
-    var style_bytes = try allocator.alloc(u8, style_table_size);
+    // Build canonical style table.
+    const style_bytes = try styles.toBytes(allocator);
     errdefer allocator.free(style_bytes);
-
-    // Write count (little-endian)
-    style_bytes[0] = @truncate(style_count & 0xFF);
-    style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
-
-    var style_offset: usize = 2;
-    var it = styles_map.iterator();
-    while (it.next()) |entry| {
-        const style_id = entry.key_ptr.*;
-        const encoded = entry.value_ptr.*;
-
-        // Write style_id (little-endian)
-        style_bytes[style_offset] = @truncate(style_id & 0xFF);
-        style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
-        style_offset += 2;
-
-        // Write pre-encoded style
-        @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
-        style_offset += 14;
-    }
 
     // Convert grapheme list to owned slice
     const grapheme_bytes = try grapheme_list.toOwnedSlice(allocator);
@@ -873,9 +947,9 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         }
     }
 
-    // Track styles used by dirty rows (store encoded bytes to avoid cross-page issues)
-    var styles_map = std.AutoHashMap(u16, [14]u8).init(allocator);
-    defer styles_map.deinit();
+    // Track styles used by dirty rows by encoded bytes, not raw style IDs.
+    var styles = CanonicalStyleTable.init(allocator);
+    defer styles.deinit(allocator);
 
     // Collect row payloads into a list first (since some may be skipped)
     var row_payloads: std.ArrayListUnmanaged(msgpack.Payload) = .{};
@@ -887,6 +961,8 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
 
         // Get page for style and grapheme lookups (must use THIS row's page)
         const page = &pin.node.data;
+        var row_style_ids = std.AutoHashMap(u16, u16).init(allocator);
+        defer row_style_ids.deinit();
 
         // Encode the row
         var row_map = msgpack.Payload.mapPayload(allocator);
@@ -919,14 +995,22 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         // Using `for (cells) |cell|` creates stack copies, and &cell won't work for lookupGrapheme.
         for (0..cells.len) |i| {
             const cell = &cells[i];
+            const cell_start = i * 8;
             const cell_bytes_ptr: *const [8]u8 = @ptrCast(cell);
-            @memcpy(cell_bytes[i * 8 .. (i + 1) * 8], cell_bytes_ptr);
+            @memcpy(cell_bytes[cell_start .. cell_start + 8], cell_bytes_ptr);
 
-            // Collect style (encode immediately from correct page)
-            if (cell.style_id > 0 and !styles_map.contains(cell.style_id)) {
-                const style = page.styles.get(page.memory, cell.style_id);
-                const encoded = encodeStyle(style);
-                try styles_map.put(cell.style_id, encoded);
+            if (cell.style_id > 0) {
+                const canonical_style_id = blk: {
+                    if (row_style_ids.get(cell.style_id)) |cached_id| {
+                        break :blk cached_id;
+                    }
+                    const style = page.styles.get(page.memory, cell.style_id);
+                    const encoded = encodeStyle(style);
+                    const interned = try styles.intern(allocator, encoded);
+                    try row_style_ids.put(cell.style_id, interned);
+                    break :blk interned;
+                };
+                setCellStyleId(cell_bytes[cell_start .. cell_start + 8], canonical_style_id);
             }
 
             // Collect graphemes (row-relative column index)
@@ -1066,32 +1150,8 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         if (pane.rows > 0) row_ids[0] else 0,
     });
 
-    // Build style table for dirty rows from collected styles
-    // Format: [count: u16] [id: u16, style: 14 bytes] ...
-    const style_count = styles_map.count();
-    const style_table_size = 2 + style_count * (2 + 14);
-    var style_bytes = try allocator.alloc(u8, style_table_size);
+    const style_bytes = try styles.toBytes(allocator);
     defer allocator.free(style_bytes);
-
-    // Write count (little-endian)
-    style_bytes[0] = @truncate(style_count & 0xFF);
-    style_bytes[1] = @truncate((style_count >> 8) & 0xFF);
-
-    var style_offset: usize = 2;
-    var style_it = styles_map.iterator();
-    while (style_it.next()) |entry| {
-        const style_id = entry.key_ptr.*;
-        const encoded = entry.value_ptr.*;
-
-        // Write style_id (little-endian)
-        style_bytes[style_offset] = @truncate(style_id & 0xFF);
-        style_bytes[style_offset + 1] = @truncate((style_id >> 8) & 0xFF);
-        style_offset += 2;
-
-        // Write pre-encoded style
-        @memcpy(style_bytes[style_offset .. style_offset + 14], &encoded);
-        style_offset += 14;
-    }
 
     try payload.mapPut("styles", try msgpack.Payload.binToPayload(style_bytes, allocator));
 
@@ -1281,4 +1341,52 @@ test "row_id computation" {
     const node5 = MockNode{ .serial = 1000000 };
     const pin5 = MockPin{ .node = &node5, .y = 999 };
     try std.testing.expectEqual(@as(u64, 1000000999), computeRowId(pin5));
+}
+
+test "canonical style table deduplicates by encoded bytes" {
+    const allocator = std.testing.allocator;
+
+    var table = CanonicalStyleTable.init(allocator);
+    defer table.deinit(allocator);
+
+    const style_a: [14]u8 = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
+    const style_b: [14]u8 = .{ 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1 };
+
+    const id_a1 = try table.intern(allocator, style_a);
+    const id_a2 = try table.intern(allocator, style_a);
+    const id_b = try table.intern(allocator, style_b);
+
+    try std.testing.expectEqual(@as(u16, 1), id_a1);
+    try std.testing.expectEqual(id_a1, id_a2);
+    try std.testing.expectEqual(@as(u16, 2), id_b);
+
+    const style_bytes = try table.toBytes(allocator);
+    defer allocator.free(style_bytes);
+
+    // count=2 (u16 LE), id=1 then id=2
+    try std.testing.expectEqual(@as(u8, 2), style_bytes[0]);
+    try std.testing.expectEqual(@as(u8, 0), style_bytes[1]);
+    try std.testing.expectEqual(@as(u8, 1), style_bytes[2]);
+    try std.testing.expectEqual(@as(u8, 0), style_bytes[3]);
+    try std.testing.expectEqual(@as(u8, 2), style_bytes[18]);
+    try std.testing.expectEqual(@as(u8, 0), style_bytes[19]);
+}
+
+test "setCellStyleId rewrites only style bits" {
+    var cell_bytes: [8]u8 = undefined;
+
+    const initial_style_id: u16 = 777;
+    const initial_lo: u32 = (@as(u32, 0x2A) << 2) | (@as(u32, initial_style_id & 0x3F) << 26);
+    const initial_hi: u32 = @as(u32, initial_style_id >> 6) | (@as(u32, 0x2) << 10) | (@as(u32, 1) << 12);
+    std.mem.writeInt(u32, cell_bytes[0..4], initial_lo, .little);
+    std.mem.writeInt(u32, cell_bytes[4..8], initial_hi, .little);
+
+    setCellStyleId(cell_bytes[0..], 42);
+    const rewritten_lo = std.mem.readInt(u32, cell_bytes[0..4], .little);
+    const rewritten_hi = std.mem.readInt(u32, cell_bytes[4..8], .little);
+
+    // Non-style bits should remain untouched.
+    try std.testing.expectEqual(initial_lo & ~(@as(u32, 0x3F) << 26), rewritten_lo & ~(@as(u32, 0x3F) << 26));
+    try std.testing.expectEqual(initial_hi & ~@as(u32, 0x3FF), rewritten_hi & ~@as(u32, 0x3FF));
+    try std.testing.expectEqual(@as(u16, 42), getCellStyleId(cell_bytes[0..]));
 }

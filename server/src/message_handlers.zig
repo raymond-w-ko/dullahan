@@ -229,9 +229,9 @@ fn handleResize(el: *EventLoop, client: *ClientState, resize_msg: ParsedResize) 
         rows < constants.limits.min_rows or rows > constants.limits.max_rows)
     {
         log.warn("Rejecting invalid resize for pane {d}: {d}x{d} (limits: {d}-{d}x{d}-{d})", .{
-            pane_id, cols, rows,
-            constants.limits.min_cols, constants.limits.max_cols,
-            constants.limits.min_rows, constants.limits.max_rows,
+            pane_id,                   cols,                      rows,
+            constants.limits.min_cols, constants.limits.max_cols, constants.limits.min_rows,
+            constants.limits.max_rows,
         });
         return;
     }
@@ -256,7 +256,10 @@ fn handlePing(el: *EventLoop, client: *ClientState, ping_msg: messages.ParsedPin
 }
 
 fn handleSync(el: *EventLoop, client: *ClientState, sync_msg: ParsedSync) !void {
-    const pane = el.session.activePane() orelse return;
+    const pane = el.session.getPaneById(sync_msg.paneId) orelse {
+        log.warn("Sync request for unknown pane {d}", .{sync_msg.paneId});
+        return;
+    };
     try el.handleSyncRequest(client, pane, sync_msg.gen, sync_msg.minRowId);
 }
 

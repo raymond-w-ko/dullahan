@@ -121,7 +121,11 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
         }) catch return null;
         defer parsed.deinit();
         return .{
-            .msg = .{ .sync = .{ .gen = parsed.value.gen, .minRowId = parsed.value.minRowId } },
+            .msg = .{ .sync = .{
+                .paneId = parsed.value.paneId,
+                .gen = parsed.value.gen,
+                .minRowId = parsed.value.minRowId,
+            } },
             .cleanup = .{ .none = {} },
         };
     } else if (std.mem.eql(u8, type_str, "resync")) {
@@ -399,11 +403,17 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
             .payload = payload,
         };
     } else if (std.mem.eql(u8, type_str, "sync")) {
+        const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
         const gen_payload = (payload.mapGet("gen") catch return null) orelse return null;
+        const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
         const gen: u64 = gen_payload.getUint() catch return null;
         const minRowId: u64 = if (payload.mapGet("minRowId") catch null) |p| (p.getUint() catch 0) else 0;
         return .{
-            .msg = .{ .sync = .{ .gen = gen, .minRowId = minRowId } },
+            .msg = .{ .sync = .{
+                .paneId = pane_id,
+                .gen = gen,
+                .minRowId = minRowId,
+            } },
             .payload = payload,
         };
     } else if (std.mem.eql(u8, type_str, "resync")) {
@@ -557,6 +567,16 @@ test "parseJsonMessage scroll" {
     try std.testing.expect(result != null);
     try std.testing.expect(result.?.msg == .scroll);
     try std.testing.expectEqual(result.?.msg.scroll.delta, -5);
+}
+
+test "parseJsonMessage sync includes pane id" {
+    const allocator = std.testing.allocator;
+    const result = parseJsonMessage(allocator, "{\"type\":\"sync\",\"paneId\":3,\"gen\":9,\"minRowId\":1234}");
+    try std.testing.expect(result != null);
+    try std.testing.expect(result.?.msg == .sync);
+    try std.testing.expectEqual(result.?.msg.sync.paneId, 3);
+    try std.testing.expectEqual(result.?.msg.sync.gen, 9);
+    try std.testing.expectEqual(result.?.msg.sync.minRowId, 1234);
 }
 
 test "parseJsonMessage unknown type" {
