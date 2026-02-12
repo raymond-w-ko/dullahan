@@ -28,6 +28,7 @@ const SwapPanesMessage = messages.SwapPanesMessage;
 const ResizeLayoutMessage = messages.ResizeLayoutMessage;
 const ClipboardResponseMessage = messages.ClipboardResponseMessage;
 const ClipboardSetMessage = messages.ClipboardSetMessage;
+const ImagePasteMessage = messages.ImagePasteMessage;
 const MessageType = messages.MessageType;
 
 pub const ParsedMessage = messages.ParsedMessage;
@@ -307,6 +308,17 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
             } },
             .cleanup = .{ .none = {} },
         };
+    } else if (std.mem.eql(u8, type_str, "image_paste")) {
+        const parsed = std.json.parseFromSlice(ImagePasteMessage, allocator, data, .{
+            .ignore_unknown_fields = true,
+        }) catch return null;
+        return .{
+            .msg = .{ .image_paste = .{
+                .paneId = parsed.value.paneId,
+                .path = parsed.value.path,
+            } },
+            .cleanup = .{ .json_image_paste = parsed },
+        };
     }
 
     return .{ .msg = .{ .unknown = {} }, .cleanup = .{ .none = {} } };
@@ -534,6 +546,18 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
                 .shift = shift,
                 .meta = meta,
                 .timestamp = timestamp,
+            } },
+            .payload = payload,
+        };
+    } else if (std.mem.eql(u8, type_str, "image_paste")) {
+        const pane_id_payload = (payload.mapGet("paneId") catch return null) orelse return null;
+        const path_payload = (payload.mapGet("path") catch return null) orelse return null;
+        const pane_id: u16 = @intCast(pane_id_payload.getUint() catch return null);
+        const path = path_payload.asStr() catch return null;
+        return .{
+            .msg = .{ .image_paste = .{
+                .paneId = pane_id,
+                .path = path,
             } },
             .payload = payload,
         };

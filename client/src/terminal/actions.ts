@@ -142,6 +142,12 @@ export interface ActionContext {
   /** Read from clipboard (navigator.clipboard) */
   readClipboard: () => Promise<string>;
 
+  /**
+   * Attempt image paste flow from clipboard.
+   * Returns true when an image paste was handled (success or terminal error shown).
+   */
+  pasteImageFromClipboard?: () => Promise<boolean>;
+
   /** Write to clipboard (navigator.clipboard) */
   writeClipboard: (text: string) => Promise<void>;
 
@@ -357,6 +363,11 @@ async function handleCopy(ctx: ActionContext): Promise<void> {
 }
 
 async function handlePaste(ctx: ActionContext): Promise<void> {
+  if (ctx.pasteImageFromClipboard) {
+    const handled = await ctx.pasteImageFromClipboard();
+    if (handled) return;
+  }
+
   const text = await ctx.readClipboard();
   if (text) {
     ctx.sendText(text);

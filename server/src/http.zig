@@ -7,6 +7,7 @@
 const std = @import("std");
 const posix = std.posix;
 const constants = @import("constants.zig");
+const paths = @import("paths.zig");
 const websocket = @import("websocket.zig");
 const embedded_assets = @import("embedded_assets.zig");
 const tls_wrapper = @import("tls_wrapper.zig");
@@ -18,6 +19,7 @@ pub const DEFAULT_PORT: u16 = 7681;
 const HANDSHAKE_TIMEOUT_MS: i64 = 10_000;
 const FIRST_BYTE_TIMEOUT_MS: i64 = 15_000;
 const HEADER_COMPLETE_TIMEOUT_MS: i64 = 15_000;
+const BODY_COMPLETE_TIMEOUT_MS: i64 = 60_000;
 const WRITE_TIMEOUT_MS: i64 = 30_000;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
@@ -233,6 +235,69 @@ fn getMimeType(path: []const u8) []const u8 {
     return "application/octet-stream";
 }
 
+fn parseContentLength(raw: []const u8) !usize {
+    const trimmed = std.mem.trim(u8, raw, " \t");
+    if (trimmed.len == 0) return error.InvalidContentLength;
+    return std.fmt.parseInt(usize, trimmed, 10);
+}
+
+fn pathWithoutQuery(path: []const u8) []const u8 {
+    const query_idx = std.mem.indexOf(u8, path, "?");
+    return if (query_idx) |idx| path[0..idx] else path;
+}
+
+fn extForImageMime(content_type: []const u8) []const u8 {
+    if (std.ascii.eqlIgnoreCase(content_type, "image/png")) return "png";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/jpeg")) return "jpg";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/webp")) return "webp";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/gif")) return "gif";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/bmp")) return "bmp";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/tiff")) return "tiff";
+    if (std.ascii.eqlIgnoreCase(content_type, "image/heic")) return "heic";
+    return "img";
+}
+
+fn readTokensFile(path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
+    const file = std.fs.openFileAbsolute(path, .{}) catch |e| switch (e) {
+        error.FileNotFound => return null,
+        else => return e,
+    };
+    defer file.close();
+
+    const n = try file.readAll(buf);
+    if (n == 0) return null;
+
+    var master: ?[]const u8 = null;
+    var view: ?[]const u8 = null;
+    var iter = std.mem.splitScalar(u8, buf[0..n], '\n');
+    while (iter.next()) |line| {
+        if (line.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "master=")) {
+            master = std.mem.trim(u8, line["master=".len..], " \t\r\n");
+        } else if (std.mem.startsWith(u8, line, "view=")) {
+            view = std.mem.trim(u8, line["view=".len..], " \t\r\n");
+        }
+    }
+
+    if (master == null or view == null) return null;
+    return .{ .master = master.?, .view = view.? };
+}
+
+fn isUploadAuthorized(request: *const Request) bool {
+    const auth = request.getHeader("authorization") orelse return false;
+    if (auth.len < 8) return false;
+    if (!std.ascii.eqlIgnoreCase(auth[0..7], "Bearer ")) return false;
+
+    const token = std.mem.trim(u8, auth[7..], " \t");
+    if (token.len == 0) return false;
+
+    var tokens_buf: [256]u8 = undefined;
+    const tokens = readTokensFile(paths.StaticPaths.tokens(), &tokens_buf) catch return false;
+    if (tokens == null) return false;
+
+    return std.mem.eql(u8, token, tokens.?.master);
+}
+
 const PendingStream = union(enum) {
     plain: std.net.Stream,
     tls_handshake: tls_wrapper.TlsHandshake,
@@ -288,6 +353,10 @@ const PendingBody = union(enum) {
         data: []const u8,
         sent: usize = 0,
     },
+    owned_bytes: struct {
+        data: []u8,
+        sent: usize = 0,
+    },
     file: struct {
         file: std.fs.File,
         remaining: u64,
@@ -296,8 +365,9 @@ const PendingBody = union(enum) {
         chunk_sent: usize = 0,
     },
 
-    fn deinit(self: *PendingBody) void {
+    fn deinit(self: *PendingBody, allocator: std.mem.Allocator) void {
         switch (self.*) {
+            .owned_bytes => |*b| allocator.free(b.data),
             .file => |*f| f.file.close(),
             else => {},
         }
@@ -308,6 +378,7 @@ const PendingBody = union(enum) {
         return switch (self.*) {
             .none => false,
             .bytes => |b| b.sent < b.data.len,
+            .owned_bytes => |b| b.sent < b.data.len,
             .file => |f| f.remaining > 0 or f.chunk_sent < f.chunk_len,
         };
     }
@@ -319,7 +390,7 @@ const PendingResponse = struct {
 
     fn deinit(self: *PendingResponse, allocator: std.mem.Allocator) void {
         self.header.deinit(allocator);
-        self.body.deinit();
+        self.body.deinit(allocator);
     }
 
     fn hasRemaining(self: *const PendingResponse) bool {
@@ -358,6 +429,8 @@ const PendingConn = struct {
     first_byte_ms: ?i64 = null,
     deadline_ms: i64,
     req_buf: std.ArrayListUnmanaged(u8) = .{},
+    header_end: ?usize = null,
+    expected_total_bytes: ?usize = null,
     write_state: PendingWriteState = .none,
 
     fn init(tls_context: ?*tls_wrapper.TlsContext, conn: std.net.Server.Connection) !PendingConn {
@@ -803,7 +876,7 @@ pub const Server = struct {
         while (idx < self.pending.items.len) {
             var pending = &self.pending.items[idx];
 
-            if (pending.req_buf.items.len >= MAX_HEADER_BYTES) {
+            if (pending.header_end == null and pending.req_buf.items.len >= MAX_HEADER_BYTES) {
                 log.warn("HTTP headers exceeded {d} bytes", .{MAX_HEADER_BYTES});
                 self.respondAndClose(idx, "431 Request Header Fields Too Large", "Headers too large");
                 return;
@@ -837,15 +910,53 @@ pub const Server = struct {
                 pending.deadline_ms = now + HEADER_COMPLETE_TIMEOUT_MS;
             }
 
-            if (std.mem.indexOf(u8, pending.req_buf.items, "\r\n\r\n") != null) {
-                const now = std.time.milliTimestamp();
-                const start_ms = pending.handshake_done_ms orelse pending.accepted_ms;
-                log.debug(
-                    "HTTP headers read in {d}ms (accept to headers {d}ms)",
-                    .{ now - start_ms, now - pending.accepted_ms },
-                );
-                try self.finishPendingRequest(idx);
-                return;
+            if (pending.header_end == null) {
+                if (std.mem.indexOf(u8, pending.req_buf.items, "\r\n\r\n")) |header_delim_idx| {
+                    const header_end = header_delim_idx + 4;
+                    pending.header_end = header_end;
+
+                    const now = std.time.milliTimestamp();
+                    const start_ms = pending.handshake_done_ms orelse pending.accepted_ms;
+                    log.debug(
+                        "HTTP headers read in {d}ms (accept to headers {d}ms)",
+                        .{ now - start_ms, now - pending.accepted_ms },
+                    );
+
+                    var header_request = parseRequest(self.allocator, pending.req_buf.items[0..header_end]) catch |e| {
+                        log.err("Failed to parse HTTP headers: {any}", .{e});
+                        self.respondAndClose(idx, "400 Bad Request", "Bad Request");
+                        return;
+                    };
+                    defer header_request.deinit();
+
+                    const content_length: usize = blk: {
+                        const raw = header_request.getHeader("content-length") orelse break :blk 0;
+                        const parsed = parseContentLength(raw) catch {
+                            self.respondAndClose(idx, "400 Bad Request", "Invalid Content-Length");
+                            return;
+                        };
+                        break :blk parsed;
+                    };
+
+                    if (content_length > constants.upload.max_image_paste_bytes) {
+                        self.respondAndClose(idx, "413 Payload Too Large", "Payload too large");
+                        return;
+                    }
+
+                    const expected_total = std.math.add(usize, header_end, content_length) catch {
+                        self.respondAndClose(idx, "413 Payload Too Large", "Payload too large");
+                        return;
+                    };
+                    pending.expected_total_bytes = expected_total;
+                    pending.deadline_ms = now + (if (content_length > 0) BODY_COMPLETE_TIMEOUT_MS else HEADER_COMPLETE_TIMEOUT_MS);
+                }
+            }
+
+            if (pending.expected_total_bytes) |expected_total| {
+                if (pending.req_buf.items.len >= expected_total) {
+                    try self.finishPendingRequest(idx);
+                    return;
+                }
             }
         }
     }
@@ -854,17 +965,31 @@ pub const Server = struct {
         if (idx >= self.pending.items.len) return;
         const pending = &self.pending.items[idx];
 
-        var request = parseRequest(self.allocator, pending.req_buf.items) catch |e| {
+        const header_end = pending.header_end orelse blk: {
+            const found = std.mem.indexOf(u8, pending.req_buf.items, "\r\n\r\n") orelse {
+                self.respondAndClose(idx, "400 Bad Request", "Bad Request");
+                return;
+            };
+            break :blk found + 4;
+        };
+        const expected_total = pending.expected_total_bytes orelse pending.req_buf.items.len;
+        if (expected_total < header_end or pending.req_buf.items.len < expected_total) {
+            self.respondAndClose(idx, "400 Bad Request", "Bad Request");
+            return;
+        }
+
+        var request = parseRequest(self.allocator, pending.req_buf.items[0..header_end]) catch |e| {
             log.err("Failed to parse HTTP request: {any}", .{e});
             self.respondAndClose(idx, "400 Bad Request", "Bad Request");
             return;
         };
         defer request.deinit();
+        const body = pending.req_buf.items[header_end..expected_total];
 
         log.debug("HTTP {s} {s} (upgrade={any})", .{ request.method, request.path, request.isWebSocketUpgrade() });
 
         if (!request.isWebSocketUpgrade()) {
-            self.serveRequestAndClose(idx, &request);
+            self.serveRequestAndClose(idx, &request, body);
             return;
         }
 
@@ -886,7 +1011,13 @@ pub const Server = struct {
         self.queuePendingHttpResponse(idx, response);
     }
 
-    fn serveRequestAndClose(self: *Server, idx: usize, request: *const Request) void {
+    fn serveRequestAndClose(self: *Server, idx: usize, request: *const Request, body: []const u8) void {
+        const req_path = pathWithoutQuery(request.path);
+        if (std.mem.eql(u8, req_path, "/api/paste-image")) {
+            self.handleImageUploadAndClose(idx, request, body);
+            return;
+        }
+
         const response = self.buildStaticFileResponse(request.path, request) catch {
             const fallback = self.buildErrorResponse() catch {
                 self.closeAndRemovePending(idx);
@@ -895,6 +1026,104 @@ pub const Server = struct {
             self.queuePendingHttpResponse(idx, fallback);
             return;
         };
+        self.queuePendingHttpResponse(idx, response);
+    }
+
+    fn handleImageUploadAndClose(self: *Server, idx: usize, request: *const Request, body: []const u8) void {
+        if (!std.mem.eql(u8, request.method, "POST")) {
+            self.respondAndClose(idx, "405 Method Not Allowed", "Method Not Allowed");
+            return;
+        }
+
+        if (!isUploadAuthorized(request)) {
+            self.respondAndClose(idx, "401 Unauthorized", "Unauthorized");
+            return;
+        }
+
+        const content_type_header = request.getHeader("content-type") orelse {
+            self.respondAndClose(idx, "415 Unsupported Media Type", "Missing Content-Type");
+            return;
+        };
+        const semicolon_idx = std.mem.indexOf(u8, content_type_header, ";");
+        const content_type = std.mem.trim(u8, if (semicolon_idx) |i| content_type_header[0..i] else content_type_header, " \t");
+        if (!std.mem.startsWith(u8, content_type, "image/")) {
+            self.respondAndClose(idx, "415 Unsupported Media Type", "Expected image/* Content-Type");
+            return;
+        }
+
+        if (body.len == 0) {
+            self.respondAndClose(idx, "400 Bad Request", "Empty image payload");
+            return;
+        }
+        if (body.len > constants.upload.max_image_paste_bytes) {
+            self.respondAndClose(idx, "413 Payload Too Large", "Payload too large");
+            return;
+        }
+
+        paths.ensureTempDir() catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to prepare temp dir");
+            return;
+        };
+
+        var rand_bytes: [8]u8 = undefined;
+        std.crypto.random.bytes(&rand_bytes);
+        var rand_hex: [16]u8 = undefined;
+        for (rand_bytes, 0..) |b, i| {
+            rand_hex[i * 2] = if ((b >> 4) < 10) '0' + @as(u8, (b >> 4)) else 'a' + @as(u8, (b >> 4) - 10);
+            rand_hex[i * 2 + 1] = if ((b & 0x0F) < 10) '0' + @as(u8, (b & 0x0F)) else 'a' + @as(u8, (b & 0x0F) - 10);
+        }
+
+        const now_ms: u64 = @intCast(std.time.milliTimestamp());
+        const ext = extForImageMime(content_type);
+
+        var filename_buf: [96]u8 = undefined;
+        const filename = std.fmt.bufPrint(&filename_buf, "paste-image-{d}-{s}.{s}", .{
+            now_ms,
+            rand_hex,
+            ext,
+        }) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to allocate upload name");
+            return;
+        };
+
+        const uploaded_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{
+            paths.getTempDir(),
+            filename,
+        }) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to allocate upload path");
+            return;
+        };
+        defer self.allocator.free(uploaded_path);
+
+        const file = std.fs.createFileAbsolute(uploaded_path, .{
+            .truncate = true,
+            .mode = 0o600,
+        }) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to create upload file");
+            return;
+        };
+        defer file.close();
+
+        file.writeAll(body) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to store upload");
+            return;
+        };
+
+        var size_buf: [32]u8 = undefined;
+        const size_str = std.fmt.bufPrint(&size_buf, "{d}", .{body.len}) catch "0";
+
+        const response = self.buildSimpleResponse("201 Created", &.{
+            .{ "Content-Type", "application/json; charset=utf-8" },
+            .{ "Cache-Control", "no-store" },
+            .{ "X-Dullahan-Image-Path", uploaded_path },
+            .{ "X-Dullahan-Image-Mime", content_type },
+            .{ "X-Dullahan-Image-Size", size_str },
+        }, "{\"ok\":true}") catch {
+            self.closeAndRemovePending(idx);
+            return;
+        };
+
+        log.debug("Stored image upload ({d} bytes) at {s}", .{ body.len, uploaded_path });
         self.queuePendingHttpResponse(idx, response);
     }
 
@@ -968,6 +1197,18 @@ pub const Server = struct {
         switch (response.body) {
             .none => return true,
             .bytes => |*body| {
+                while (body.sent < body.data.len) {
+                    const n = self.writeToPendingStream(pending, body.data[body.sent..]) catch |e| switch (e) {
+                        error.WouldBlock => return false,
+                        else => return e,
+                    };
+                    if (n == 0) return error.ConnectionClosed;
+                    body.sent += n;
+                    pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                }
+                return true;
+            },
+            .owned_bytes => |*body| {
                 while (body.sent < body.data.len) {
                     const n = self.writeToPendingStream(pending, body.data[body.sent..]) catch |e| switch (e) {
                         error.WouldBlock => return false,

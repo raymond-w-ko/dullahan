@@ -84,6 +84,45 @@ export async function pasteFromClipboard(): Promise<string> {
   }
 }
 
+export interface ClipboardImageData {
+  blob: Blob;
+  mime: string;
+  size: number;
+}
+
+/**
+ * Read first image payload from clipboard, if available.
+ * Returns null when clipboard has no image or the API is unavailable.
+ */
+export async function readImageFromClipboard(): Promise<ClipboardImageData | null> {
+  if (
+    typeof navigator === "undefined" ||
+    typeof navigator.clipboard === "undefined" ||
+    typeof navigator.clipboard.read !== "function"
+  ) {
+    return null;
+  }
+
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imageType = item.types.find((t) => t.startsWith("image/"));
+      if (!imageType) continue;
+      const blob = await item.getType(imageType);
+      return {
+        blob,
+        mime: imageType,
+        size: blob.size,
+      };
+    }
+    return null;
+  } catch (err) {
+    // Permission failures are expected in some browsers; fall back to text paste.
+    clipboardLog.log("Clipboard image read unavailable:", err);
+    return null;
+  }
+}
+
 /**
  * Fallback copy using deprecated execCommand.
  * Used when Clipboard API is unavailable or fails.

@@ -85,6 +85,12 @@ pub const process = struct {
     pub const sigkill_poll_interval_ms: u32 = 100;
 };
 
+/// Clipboard image upload/paste limits.
+pub const upload = struct {
+    /// Maximum accepted image upload payload (32 MiB).
+    pub const max_image_paste_bytes: usize = 32 * 1024 * 1024;
+};
+
 /// Default terminal colors for OSC 10/11 queries.
 /// Values match dullahan.css base theme (One Dark style).
 pub const colors = struct {

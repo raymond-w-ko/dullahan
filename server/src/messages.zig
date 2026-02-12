@@ -145,6 +145,13 @@ pub const ClipboardPasteMessage = struct {
     clipboard: []const u8, // "c" or "p"
 };
 
+/// Paste an uploaded image path to PTY as text.
+pub const ImagePasteMessage = struct {
+    type: []const u8,
+    paneId: u16,
+    path: []const u8,
+};
+
 pub const MessageType = struct {
     type: []const u8,
 };
@@ -179,6 +186,7 @@ pub const ParsedMessage = union(enum) {
     clipboard_set: ParsedClipboardSet,
     copy: ParsedCopy,
     clipboard_paste: ParsedClipboardPaste,
+    image_paste: ParsedImagePaste,
     unknown: void,
 };
 
@@ -313,6 +321,11 @@ pub const ParsedClipboardPaste = struct {
     clipboard: u8, // 'c' or 'p' - just the first char
 };
 
+pub const ParsedImagePaste = struct {
+    paneId: u16,
+    path: []const u8,
+};
+
 /// Cleanup helper for JSON parsed messages.
 /// Holds references to parsed JSON that need to be freed after message handling.
 pub const JsonCleanup = union(enum) {
@@ -327,6 +340,7 @@ pub const JsonCleanup = union(enum) {
     json_mouse: std.json.Parsed(MouseMessage),
     json_clipboard_response: std.json.Parsed(ClipboardResponseMessage),
     json_clipboard_set: std.json.Parsed(ClipboardSetMessage),
+    json_image_paste: std.json.Parsed(ImagePasteMessage),
 
     pub fn deinit(self: *JsonCleanup) void {
         switch (self.*) {
@@ -341,6 +355,7 @@ pub const JsonCleanup = union(enum) {
             .json_mouse => |*p| p.deinit(),
             .json_clipboard_response => |*p| p.deinit(),
             .json_clipboard_set => |*p| p.deinit(),
+            .json_image_paste => |*p| p.deinit(),
         }
     }
 };

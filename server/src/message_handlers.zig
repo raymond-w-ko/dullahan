@@ -12,6 +12,7 @@ const snapshot = @import("snapshot.zig");
 const layout_db = @import("layout_db.zig");
 const layout_helpers = @import("layout_helpers.zig");
 const websocket = @import("websocket.zig");
+const paths = @import("paths.zig");
 const messages = @import("messages.zig");
 const ws_proxy = @import("ws_proxy.zig");
 const Session = @import("session.zig").Session;
@@ -55,6 +56,7 @@ const ParsedClipboardResponse = messages.ParsedClipboardResponse;
 const ParsedClipboardSet = messages.ParsedClipboardSet;
 const ParsedCopy = messages.ParsedCopy;
 const ParsedClipboardPaste = messages.ParsedClipboardPaste;
+const ParsedImagePaste = messages.ParsedImagePaste;
 
 const KeyEvent = messages.KeyEvent;
 
@@ -103,6 +105,7 @@ pub fn handleParsedMessage(el: *EventLoop, msg: ParsedMessage, client: *ClientSt
         .clipboard_set => |clip_msg| if (can_control) handleClipboardSet(el, clip_msg),
         .copy => |copy_msg| if (can_control) handleCopy(el, copy_msg),
         .clipboard_paste => |paste_msg| if (can_control) handleClipboardPaste(el, paste_msg),
+        .image_paste => |image_msg| if (can_control) handleImagePaste(el, image_msg),
         .unknown => {},
     }
 }
@@ -1114,6 +1117,82 @@ fn handleClipboardPaste(el: *EventLoop, paste_msg: ParsedClipboardPaste) void {
         log.debug("Pasted '{c}' clipboard to pane {d}: {d} chars", .{ kind, paste_msg.paneId, data.len });
     } else {
         log.debug("Clipboard paste: '{c}' clipboard is empty", .{kind});
+    }
+}
+
+fn isValidUploadedImagePath(path: []const u8) bool {
+    const temp_dir = paths.getTempDir();
+    if (!std.mem.startsWith(u8, path, temp_dir)) return false;
+    if (path.len <= temp_dir.len + 1) return false;
+    if (path[temp_dir.len] != '/') return false;
+
+    const basename = std.fs.path.basename(path);
+    if (!std.mem.startsWith(u8, basename, "paste-image-")) return false;
+    if (std.mem.indexOf(u8, basename, "..") != null) return false;
+
+    return true;
+}
+
+fn handleImagePaste(el: *EventLoop, image_msg: ParsedImagePaste) void {
+    const pane = el.session.getPaneById(image_msg.paneId) orelse {
+        log.warn("image_paste for unknown pane {d}", .{image_msg.paneId});
+        return;
+    };
+
+    const path = image_msg.path;
+    if (!isValidUploadedImagePath(path)) {
+        log.warn("Rejected image_paste path outside runtime temp dir: {s}", .{path});
+        return;
+    }
+
+    const file = std.fs.openFileAbsolute(path, .{}) catch |e| {
+        log.warn("image_paste path open failed for pane {d}: {any}", .{ image_msg.paneId, e });
+        return;
+    };
+    defer file.close();
+
+    const stat = file.stat() catch |e| {
+        log.warn("image_paste stat failed for pane {d}: {any}", .{ image_msg.paneId, e });
+        return;
+    };
+    if (stat.size > constants.upload.max_image_paste_bytes) {
+        log.warn("Rejected image_paste over size limit: {d} > {d}", .{
+            stat.size,
+            constants.upload.max_image_paste_bytes,
+        });
+        return;
+    }
+
+    clip_log.info("Image paste path: pane={d} bytes={d} path={s}", .{
+        image_msg.paneId,
+        stat.size,
+        path,
+    });
+
+    if (pane.terminal.modes.get(.bracketed_paste)) {
+        const PASTE_START = "\x1b[200~";
+        const PASTE_END = "\x1b[201~";
+
+        el.session.logPtySend(pane.id, PASTE_START);
+        el.session.logPtySend(pane.id, path);
+        el.session.logPtySend(pane.id, PASTE_END);
+
+        pane.writeInput(PASTE_START) catch |e| {
+            logRecoverable("write image paste start to PTY", e);
+            return;
+        };
+        pane.writeInput(path) catch |e| {
+            logRecoverable("write image paste path to PTY", e);
+            return;
+        };
+        pane.writeInput(PASTE_END) catch |e| {
+            logRecoverable("write image paste end to PTY", e);
+        };
+    } else {
+        el.session.logPtySend(pane.id, path);
+        pane.writeInput(path) catch |e| {
+            logRecoverable("write image paste path to PTY", e);
+        };
     }
 }
 

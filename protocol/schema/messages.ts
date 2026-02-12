@@ -227,6 +227,16 @@ export interface ClipboardSetMessage {
   data: string; // base64-encoded text
 }
 
+/**
+ * Paste an uploaded image reference into a pane as text input.
+ * The path must point to a server-side upload in the runtime temp dir.
+ */
+export interface ImagePasteMessage {
+  type: "image_paste";
+  paneId: number;
+  path: string;
+}
+
 /** Union of all client → server message types */
 export type ClientMessage =
   | KeyMessage
@@ -251,7 +261,8 @@ export type ClientMessage =
   | ClipboardResponseMessage
   | CopyMessage
   | ClipboardPasteMessage
-  | ClipboardSetMessage;
+  | ClipboardSetMessage
+  | ImagePasteMessage;
 
 // =============================================================================
 // Server → Client Messages

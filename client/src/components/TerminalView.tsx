@@ -5,6 +5,7 @@ import { h } from "preact";
 import { debug } from "../debug";
 
 const imeLog = debug.category('ime');
+const clipboardLog = debug.category('clipboard');
 import { useRef, useEffect, useCallback } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
@@ -15,6 +16,7 @@ import {
   getSelection as getDOMSelection,
   copyToClipboard,
   pasteFromClipboard,
+  readImageFromClipboard,
   getTerminalSelectionText,
 } from "../terminal/clipboard";
 import type { ActionContext } from "../terminal/actions";
@@ -33,6 +35,8 @@ import { renderLine } from "../terminal/cursorRendering";
 import { SCROLL } from "../constants";
 import type { CursorConfig } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
+
+const MAX_IMAGE_PASTE_BYTES = 32 * 1024 * 1024;
 
 export interface TerminalViewProps {
   paneId: number;
@@ -133,6 +137,51 @@ export function TerminalView({
         // Always read from navigator.clipboard for keybind paste
         // This matches standard terminal emulator behavior
         return pasteFromClipboard();
+      },
+      pasteImageFromClipboard: async () => {
+        if (!connection?.isConnected || !connection.isMaster) return false;
+
+        const image = await readImageFromClipboard();
+        if (!image) return false;
+
+        if (image.size > MAX_IMAGE_PASTE_BYTES) {
+          window.alert(`Paste failed: image is ${image.size} bytes, limit is ${MAX_IMAGE_PASTE_BYTES} bytes.`);
+          return true;
+        }
+
+        const headers: Record<string, string> = {
+          "Content-Type": image.mime,
+        };
+        if (connection.authToken) {
+          headers.Authorization = `Bearer ${connection.authToken}`;
+        }
+
+        try {
+          const response = await fetch("/api/paste-image", {
+            method: "POST",
+            headers,
+            body: image.blob,
+          });
+
+          if (!response.ok) {
+            window.alert(`Paste failed: upload rejected (${response.status}).`);
+            return true;
+          }
+
+          const uploadedPath = response.headers.get("x-dullahan-image-path");
+          if (!uploadedPath) {
+            window.alert("Paste failed: server did not return an uploaded path.");
+            return true;
+          }
+
+          connection.sendImagePaste(paneId, uploadedPath);
+          clipboardLog.log(`Image pasted as path: pane=${paneId} bytes=${image.size} mime=${image.mime}`);
+          return true;
+        } catch (err) {
+          clipboardLog.warn("Image upload paste failed:", err);
+          window.alert(`Paste failed: ${err instanceof Error ? err.message : "Upload failed"}`);
+          return true;
+        }
       },
       writeClipboard: async (text: string) => {
         await copyToClipboard(text);

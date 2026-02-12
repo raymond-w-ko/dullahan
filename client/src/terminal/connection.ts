@@ -376,6 +376,11 @@ export class TerminalConnection {
     return this._latency;
   }
 
+  /** Get current auth token (if present) for authenticated HTTP endpoints. */
+  get authToken(): string | null {
+    return this._authToken;
+  }
+
   /** Get or create pane state */
   private getPaneState(paneId: number): PaneState {
     let state = this._panes.get(paneId);
@@ -1226,6 +1231,15 @@ export class TerminalConnection {
    */
   sendClipboardSet(clipboard: "c" | "p", data: string): void {
     this.send({ type: "clipboard_set", clipboard, data });
+  }
+
+  /**
+   * Request server to paste an uploaded image path into a pane.
+   * Server validates path and injects it into PTY as text.
+   */
+  sendImagePaste(paneId: number, path: string): void {
+    if (!this.isMaster) return;
+    this.send({ type: "image_paste", paneId, path });
   }
 
   /**
