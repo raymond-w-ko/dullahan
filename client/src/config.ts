@@ -84,12 +84,12 @@ export const DEFAULTS: ConfigSchema = {
   
   // Font settings
   fontFamily: 'Iosevka Term, JetBrains Mono, Fira Code, Cascadia Code, SF Mono, Consolas, Source Code Pro, DejaVu Sans Mono, Hack, Inconsolata, Ubuntu Mono, Menlo, Monaco, Courier New, Symbols Nerd Font, monospace',
-  fontSize: 12,
+  fontSize: 14,
   symbolFontFamily: 'Symbols Nerd Font',
   symbolFontSize: 0,
   fontStyle: 'normal',
   fontFeature: '',
-  lineHeight: 14.5,
+  lineHeight: 16,
   
   // Cell adjustments
   adjustCellWidth: 0,
