@@ -99,8 +99,8 @@ pub const colors = struct {
     pub const fg_g: u8 = 0xb2;
     pub const fg_b: u8 = 0xbf;
 
-    /// Background: #282c34
-    pub const bg_r: u8 = 0x28;
-    pub const bg_g: u8 = 0x2c;
-    pub const bg_b: u8 = 0x34;
+    /// Background: #21252b
+    pub const bg_r: u8 = 0x21;
+    pub const bg_g: u8 = 0x25;
+    pub const bg_b: u8 = 0x2b;
 };

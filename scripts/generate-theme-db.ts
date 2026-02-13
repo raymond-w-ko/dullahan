@@ -181,11 +181,11 @@ function generateZigSource(themes: ThemeColors[]): string {
   lines.push("    }");
   lines.push("};");
   lines.push("");
-  lines.push("/// Default foreground color (xterm white)");
-  lines.push("pub const default_fg: [3]u8 = .{ 0xff, 0xff, 0xff };");
+  lines.push("/// Default foreground color (Atom One Dark fg)");
+  lines.push("pub const default_fg: [3]u8 = .{ 0xab, 0xb2, 0xbf };");
   lines.push("");
-  lines.push("/// Default background color (xterm black)");
-  lines.push("pub const default_bg: [3]u8 = .{ 0x00, 0x00, 0x00 };");
+  lines.push("/// Default background color (Atom One Dark bg)");
+  lines.push("pub const default_bg: [3]u8 = .{ 0x21, 0x25, 0x2b };");
   lines.push("");
   lines.push("/// Default ANSI palette (xterm colors)");
   lines.push("pub const default_palette: [16][3]u8 = .{");

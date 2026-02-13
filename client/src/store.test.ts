@@ -6,7 +6,7 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 
 // Mock the config module before importing store
 const mockConfigValues: Record<string, any> = {
-  theme: "selenized-light",
+  theme: "atom-one-dark",
   cursorStyle: "block",
   cursorColor: "",
   cursorText: "",

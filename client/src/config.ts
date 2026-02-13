@@ -77,7 +77,7 @@ export interface ConfigSchema {
 // Default values - used when localStorage doesn't have a value
 export const DEFAULTS: ConfigSchema = {
   // Theme
-  theme: 'selenized-light',
+  theme: 'atom-one-dark',
   
   // Layout
   spacing: 'compact',

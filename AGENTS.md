@@ -95,6 +95,12 @@ log.log('msg');  // ✓ categorized — never console.log
 CSS vars: `--term-bg/fg`, `--term-cursor-bg/fg`, `--term-selection-bg/fg`, `--c0`–`--c15`
 **Always use palette:** `var(--c1)` red, `var(--c2)` green, `var(--c3)` yellow, `var(--c4)` blue, `var(--c8)` dim. Never hardcode colors.
 
+When changing the default theme/fallback colors, update all of these in one pass:
+- `client/src/config.ts` (`DEFAULTS.theme`)
+- `client/src/dullahan.css` (`:root` fallback `--term-*` and `--c0`–`--c15`)
+- `server/src/constants.zig` (`constants.colors` fallback fg/bg)
+- `scripts/generate-theme-db.ts` (`default_fg`/`default_bg` in generated Zig source), then regenerate `server/src/theme_db.zig` via `make theme-db` or `bun scripts/generate-theme-db.ts`
+
 ### Code Quality
 **TODOs:** Must link to beads issue: `// TODO(du-xxx): description`
 **Commits:** `<type>(<scope>)<!>: <desc>` — types: feat/fix/docs/style/refactor/test/chore/deps/ci/build
