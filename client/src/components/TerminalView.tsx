@@ -346,16 +346,17 @@ export function TerminalView({
     };
   }, [snapshot.hyperlinks]);
 
-  // Measure cell width and set CSS variable for wide character alignment
+  // Measure cell width and keep CSS variable in sync with font changes
   useEffect(() => {
     const el = terminalRef.current;
     if (!el) return;
 
-    const updateCellWidth = () => {
-      // Find or create measure element in parent container
-      const container = el.parentElement;
-      if (!container) return;
+    const container = el.parentElement;
+    if (!container) return;
 
+    let rafId: number | null = null;
+
+    const updateCellWidth = () => {
       let measure = container.querySelector(".terminal-measure") as HTMLDivElement | null;
       if (!measure) {
         measure = document.createElement("div");
@@ -370,13 +371,43 @@ export function TerminalView({
       }
     };
 
-    // Initial measurement
-    updateCellWidth();
+    const scheduleUpdateCellWidth = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        updateCellWidth();
+      });
+    };
 
-    // Re-measure when fonts load
-    document.fonts.ready.then(updateCellWidth);
+    const measure = container.querySelector(".terminal-measure") as HTMLDivElement | null;
+    const observedMeasure =
+      measure ??
+      (() => {
+        const created = document.createElement("div");
+        created.className = "terminal-measure terminal-line";
+        created.textContent = "X";
+        container.appendChild(created);
+        return created;
+      })();
 
-    // No cleanup needed - CSS variable persists
+    // Initial measurement + re-measure when browser font loading settles
+    scheduleUpdateCellWidth();
+    document.fonts.ready.then(scheduleUpdateCellWidth);
+
+    // Keep width synced when font settings change and resize the measure element.
+    const observer = new ResizeObserver(() => {
+      scheduleUpdateCellWidth();
+    });
+    observer.observe(observedMeasure);
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      observer.disconnect();
+    };
   }, []);
 
   // Focus IME textarea when terminal is clicked (but not when selecting text)
