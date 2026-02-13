@@ -12,6 +12,8 @@ RUNTIME_BASE="${XDG_RUNTIME_DIR:-/tmp}"
 RUNTIME_DIR="${DULLAHAN_RUNTIME_DIR:-$RUNTIME_BASE/dullahan-$(id -u)}"
 CERT_DIR="${DULLAHAN_CERT_DIR:-$RUNTIME_DIR/certs}"
 HOME_DIR="${HOME:-$(cd ~ 2>/dev/null && pwd || true)}"
+TERMINFO_SOURCE="${DULLAHAN_TERMINFO_SOURCE:-$SCRIPT_DIR/ghostty.terminfo}"
+TERMINFO_DIR="${DULLAHAN_TERMINFO_DIR:-$HOME_DIR/.terminfo}"
 
 mkdir -p "$CERT_DIR"
 
@@ -91,6 +93,33 @@ generate_fallback_cert() {
     -subj "/CN=${host}" >/dev/null
 }
 
+install_local_ghostty_terminfo() {
+  local compiled_path="${TERMINFO_DIR}/x/xterm-ghostty"
+
+  if [[ ! -f "$TERMINFO_SOURCE" ]]; then
+    log "Ghostty terminfo source not found, skipping install: $TERMINFO_SOURCE"
+    return 0
+  fi
+
+  if ! command -v tic >/dev/null 2>&1; then
+    log "tic not found, skipping Ghostty terminfo install"
+    return 0
+  fi
+
+  mkdir -p "$TERMINFO_DIR"
+
+  if [[ -f "$compiled_path" && "$compiled_path" -nt "$TERMINFO_SOURCE" ]]; then
+    log "Ghostty terminfo already up to date at $compiled_path"
+    return 0
+  fi
+
+  if tic -x -o "$TERMINFO_DIR" "$TERMINFO_SOURCE" >/dev/null 2>&1; then
+    log "Installed Ghostty terminfo to $TERMINFO_DIR"
+  else
+    log "Failed to install Ghostty terminfo from $TERMINFO_SOURCE"
+  fi
+}
+
 HOSTNAME_VALUE="$(resolve_hostname)"
 log "Resolved hostname: $HOSTNAME_VALUE"
 
@@ -128,6 +157,8 @@ cp -f "$SOURCE_KEY" "$TLS_KEY"
 
 log "Switching working directory to $HOME_DIR"
 cd "$HOME_DIR"
+
+install_local_ghostty_terminfo
 
 log "Starting dullahan HTTPS server in background on port $PORT (${CERT_SOURCE})"
 "$DULLAHAN_BIN" serve -d \
