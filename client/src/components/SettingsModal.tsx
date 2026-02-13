@@ -154,7 +154,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             </label>
 
             <label class="settings-field">
-              <span class="settings-label">Font Size</span>
+              <span class="settings-label">Font Size (px)</span>
               <input
                 type="number"
                 min="8"
