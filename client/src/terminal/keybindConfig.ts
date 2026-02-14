@@ -46,7 +46,7 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "ctrl+tab=next_window",
   "ctrl+shift+tab=prev_window",
 
-  // Direct window switching (alt+1 through alt+9)
+  // Direct window switching (alt/meta+1 through alt/meta+9)
   "alt+1=switch_window:1",
   "alt+2=switch_window:2",
   "alt+3=switch_window:3",
@@ -56,6 +56,15 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "alt+7=switch_window:7",
   "alt+8=switch_window:8",
   "alt+9=switch_window:9",
+  "meta+1=switch_window:1",
+  "meta+2=switch_window:2",
+  "meta+3=switch_window:3",
+  "meta+4=switch_window:4",
+  "meta+5=switch_window:5",
+  "meta+6=switch_window:6",
+  "meta+7=switch_window:7",
+  "meta+8=switch_window:8",
+  "meta+9=switch_window:9",
 
   // Pane navigation
   "ctrl+shift+left=focus_pane:left",

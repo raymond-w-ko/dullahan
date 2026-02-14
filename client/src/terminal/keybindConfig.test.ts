@@ -341,6 +341,12 @@ describe("getDefaultKeybinds", () => {
       DEFAULT_KEYBIND_STRINGS.length - 5
     );
   });
+
+  test("includes meta number bindings for direct window switching", () => {
+    const strings = getActiveKeybindStrings();
+    expect(strings).toContain("meta+1=switch_window:1");
+    expect(strings).toContain("meta+9=switch_window:9");
+  });
 });
 
 describe("custom keybinds storage", () => {
