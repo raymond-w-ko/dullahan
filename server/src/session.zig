@@ -91,7 +91,8 @@ pub const Session = struct {
     }
 
     /// Create a new window with a debug pane and three shell panes.
-    /// This is the standard window layout for window 0: [debug, shell1, shell2, shell3]
+    /// For window 0, pane order is [shell1, shell2, shell3, debug] so the default
+    /// 3-col layout shows shells while keeping debug hidden but available.
     /// Returns { window_id, debug_pane_id, shell1_pane_id, shell2_pane_id, shell3_pane_id }
     pub fn createWindowWithPanes(self: *Session) !struct { window_id: u16, debug_pane_id: u16, shell1_pane_id: u16, shell2_pane_id: u16, shell3_pane_id: u16 } {
         // Create window
@@ -118,11 +119,12 @@ pub const Session = struct {
         const shell3_pane_id = try self.pane_registry.createShellPane();
         errdefer self.pane_registry.destroy(shell3_pane_id);
 
-        // Add panes to window
-        try window.addPane(debug_pane_id);
+        // Add panes to window.
+        // Keep debug pane last so default 3-col layout maps to shells 1..3.
         try window.addPane(shell1_pane_id);
         try window.addPane(shell2_pane_id);
         try window.addPane(shell3_pane_id);
+        try window.addPane(debug_pane_id);
 
         // Set active pane to first shell (not debug)
         window.active_pane_id = shell1_pane_id;

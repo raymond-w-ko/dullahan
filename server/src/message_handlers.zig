@@ -402,14 +402,14 @@ fn handleNewWindow(el: *EventLoop, client: *ClientState, new_window_msg: ParsedN
         return;
     }
 
-    // Get template ID (default to 2x2 if not specified)
-    const template_id = new_window_msg.templateId orelse "2x2";
+    // Get template ID (default to 3-col if not specified)
+    const template_id = new_window_msg.templateId orelse "3-col";
 
     // Look up the template
     const template = el.layouts.get(template_id) orelse blk: {
-        log.warn("Template '{s}' not found, falling back to 2x2", .{template_id});
-        break :blk el.layouts.get("2x2") orelse {
-            log.err("Fallback template '2x2' not found", .{});
+        log.warn("Template '{s}' not found, falling back to 3-col", .{template_id});
+        break :blk el.layouts.get("3-col") orelse {
+            log.err("Fallback template '3-col' not found", .{});
             return;
         };
     };

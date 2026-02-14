@@ -185,16 +185,9 @@ pub const EventLoop = struct {
             // Skip windows that already have layouts
             if (window.template_id != null) continue;
 
-            // Choose template based on pane count
-            const pane_count = window.paneCount();
-            const template_id: []const u8 = switch (pane_count) {
-                1 => "single",
-                2 => "2-col",
-                3 => "3-col",
-                4 => "2x2",
-                6 => "3x2",
-                else => "single", // Fallback
-            };
+            // Use three columns as the default startup layout for all windows.
+            // Extra panes remain available as hidden panes.
+            const template_id: []const u8 = "3-col";
 
             if (self.layouts.get(template_id)) |template| {
                 window.setLayoutFromTemplate(template) catch |e| {
