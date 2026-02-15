@@ -318,6 +318,7 @@ pub const EventLoop = struct {
             if (revents & (posix.POLL.ERR | posix.POLL.HUP | posix.POLL.NVAL) != 0) {
                 log.info("Client {d} disconnected (poll error/hangup)", .{client_idx});
                 self.removeClient(client_idx);
+                continue;
             } else if (revents & posix.POLL.OUT != 0) {
                 // Socket is writable - flush pending writes and resume updates
                 if (client_idx < self.clients.items.len) {
@@ -339,12 +340,15 @@ pub const EventLoop = struct {
                         }
                         client.write_congested = false;
                         // Send updates for all panes to catch up
+                        var removed_during_resume = false;
                         self.sendClientUpdates(client) catch |e| {
                             if (!handleWriteError(client, "resume updates", e)) {
                                 log.info("Disconnecting client {s} after resume failure", .{client.shortId()});
                                 self.removeClient(client_idx);
+                                removed_during_resume = true;
                             }
                         };
+                        if (removed_during_resume) continue;
                     } else {
                         client.write_congested = true;
                     }
