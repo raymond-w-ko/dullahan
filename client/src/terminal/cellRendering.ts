@@ -217,6 +217,95 @@ export function isCellInSelection(
  * and have their `selected` property set accordingly.
  * If hyperlinks is provided, runs will be split at hyperlink boundaries.
  */
+export function cellsRowToRuns(
+  cells: Cell[],
+  styles: StyleTable,
+  cols: number,
+  y: number,
+  selection?: SelectionBounds,
+  hyperlinks?: HyperlinkTable,
+  graphemes?: GraphemeTable
+): StyledRun[] {
+  const runs: StyledRun[] = [];
+  let currentRun: StyledRun | null = null;
+  let skipNext = false;
+
+  for (let x = 0; x < cols; x++) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    const idx = y * cols + x;
+    const cell = cells[idx];
+
+    // Skip spacer tails (second half of wide characters)
+    // Spacer heads indicate a wrapped wide char on the next line and should
+    // still occupy a cell to keep column alignment.
+    if (cell && cell.wide === Wide.SPACER_TAIL) {
+      continue;
+    }
+
+    const expandSymbol = shouldExpandSymbol(cells, idx, cols);
+    if (expandSymbol) {
+      skipNext = true;
+    }
+
+    const char = cell ? cellToChar(cell, graphemes, idx) : " ";
+    const styleId = cell?.styleId ?? 0;
+    const selected = selection ? isCellInSelection(x, y, selection) : false;
+    // Extract content-based bg color (for bg-only cells like htop headers)
+    const bgOverride = cell ? getCellContentBgColor(cell) : undefined;
+    // Get hyperlink URL if this cell is part of a hyperlink
+    const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
+
+    // Check if this is a wide character, or a private-use glyph that should
+    // be constrained to a single cell (e.g. Nerd Font icons).
+    const isWide = cell?.wide === Wide.WIDE || expandSymbol;
+    const cp = getCellCodepoint(cell);
+    const isPrivateUse = char.length > 0 && hasPrivateUse(char);
+    const isSingle = !isWide && (isPrivateUse || isForcedSingleCodepoint(cp));
+
+    // Start a new run if style, selection, bgOverride, or hyperlink changes
+    if (
+      currentRun &&
+      currentRun.styleId === styleId &&
+      currentRun.selected === selected &&
+      colorsEqual(currentRun.bgOverride, bgOverride) &&
+      currentRun.hyperlink === hyperlink
+    ) {
+      if (isWide) {
+        // Track the range of this wide character (graphemes can be multi-codepoint)
+        if (!currentRun.wideRanges) {
+          currentRun.wideRanges = [];
+        }
+        const start = currentRun.text.length;
+        currentRun.text += char;
+        currentRun.wideRanges.push({ start, end: currentRun.text.length });
+      } else if (isSingle) {
+        if (!currentRun.singleRanges) {
+          currentRun.singleRanges = [];
+        }
+        const start = currentRun.text.length;
+        currentRun.text += char;
+        currentRun.singleRanges.push({ start, end: currentRun.text.length });
+      } else {
+        currentRun.text += char;
+      }
+    } else {
+      const style = getStyle(styles, styleId);
+      currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
+      if (isWide) {
+        currentRun.wideRanges = [{ start: 0, end: char.length }];
+      } else if (isSingle) {
+        currentRun.singleRanges = [{ start: 0, end: char.length }];
+      }
+      runs.push(currentRun);
+    }
+  }
+
+  return runs;
+}
+
 export function cellsToRuns(
   cells: Cell[],
   styles: StyleTable,
@@ -229,84 +318,7 @@ export function cellsToRuns(
   const lines: StyledRun[][] = [];
 
   for (let y = 0; y < rows; y++) {
-    const runs: StyledRun[] = [];
-    let currentRun: StyledRun | null = null;
-    let skipNext = false;
-
-    for (let x = 0; x < cols; x++) {
-      if (skipNext) {
-        skipNext = false;
-        continue;
-      }
-      const idx = y * cols + x;
-      const cell = cells[idx];
-
-      // Skip spacer tails (second half of wide characters)
-      // Spacer heads indicate a wrapped wide char on the next line and should
-      // still occupy a cell to keep column alignment.
-      if (cell && cell.wide === Wide.SPACER_TAIL) {
-        continue;
-      }
-
-      const expandSymbol = shouldExpandSymbol(cells, idx, cols);
-      if (expandSymbol) {
-        skipNext = true;
-      }
-
-      const char = cell ? cellToChar(cell, graphemes, idx) : " ";
-      const styleId = cell?.styleId ?? 0;
-      const selected = selection ? isCellInSelection(x, y, selection) : false;
-      // Extract content-based bg color (for bg-only cells like htop headers)
-      const bgOverride = cell ? getCellContentBgColor(cell) : undefined;
-      // Get hyperlink URL if this cell is part of a hyperlink
-      const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
-
-      // Check if this is a wide character, or a private-use glyph that should
-      // be constrained to a single cell (e.g. Nerd Font icons).
-      const isWide = cell?.wide === Wide.WIDE || expandSymbol;
-      const cp = getCellCodepoint(cell);
-      const isPrivateUse = char.length > 0 && hasPrivateUse(char);
-      const isSingle = !isWide && (isPrivateUse || isForcedSingleCodepoint(cp));
-
-      // Start a new run if style, selection, bgOverride, or hyperlink changes
-      if (
-        currentRun &&
-        currentRun.styleId === styleId &&
-        currentRun.selected === selected &&
-        colorsEqual(currentRun.bgOverride, bgOverride) &&
-        currentRun.hyperlink === hyperlink
-      ) {
-        if (isWide) {
-          // Track the range of this wide character (graphemes can be multi-codepoint)
-          if (!currentRun.wideRanges) {
-            currentRun.wideRanges = [];
-          }
-          const start = currentRun.text.length;
-          currentRun.text += char;
-          currentRun.wideRanges.push({ start, end: currentRun.text.length });
-        } else if (isSingle) {
-          if (!currentRun.singleRanges) {
-            currentRun.singleRanges = [];
-          }
-          const start = currentRun.text.length;
-          currentRun.text += char;
-          currentRun.singleRanges.push({ start, end: currentRun.text.length });
-        } else {
-          currentRun.text += char;
-        }
-      } else {
-        const style = getStyle(styles, styleId);
-        currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
-        if (isWide) {
-          currentRun.wideRanges = [{ start: 0, end: char.length }];
-        } else if (isSingle) {
-          currentRun.singleRanges = [{ start: 0, end: char.length }];
-        }
-        runs.push(currentRun);
-      }
-    }
-
-    lines.push(runs);
+    lines.push(cellsRowToRuns(cells, styles, cols, y, selection, hyperlinks, graphemes));
   }
 
   return lines;

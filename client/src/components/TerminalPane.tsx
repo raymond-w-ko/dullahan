@@ -5,11 +5,8 @@ import { h } from "preact";
 import { useEffect, useRef, useCallback } from "preact/hooks";
 import { TerminalView } from "./TerminalView";
 import { ProgressBar } from "./ProgressBar";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import {
-  getStore,
-  getPane,
-  getConnection,
   setPaneDimensions,
   setBellActive,
   setFocusedPane,
@@ -23,14 +20,58 @@ export interface TerminalPaneProps {
 }
 
 export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
-  useStoreSubscription();
   const terminalRef = useRef<HTMLDivElement>(null);
+  const {
+    paneExists,
+    snapshot,
+    syncDeltas,
+    syncResyncs,
+    syncGen,
+    deltaChangedRowIds,
+    deltaGen,
+    isReadOnly,
+    title,
+    dimensions,
+    connected,
+    bellActive,
+    cursorStyle,
+    cursorColor,
+    cursorText,
+    cursorBlink,
+    focusedPaneId,
+    dimensionVersion,
+    connection,
+    theme,
+  } = useStoreSelector(
+    (store) => {
+      const pane = store.panes.get(paneId);
+      return {
+        paneExists: pane !== undefined,
+        snapshot: pane?.snapshot ?? null,
+        syncDeltas: pane?.syncStats.deltas ?? 0,
+        syncResyncs: pane?.syncStats.resyncs ?? 0,
+        syncGen: pane?.syncStats.gen ?? 0,
+        deltaChangedRowIds: pane?.deltaChangedRowIds ?? [],
+        deltaGen: pane?.deltaGen ?? 0,
+        isReadOnly: pane?.isReadOnly ?? false,
+        title: pane?.title ?? `Pane ${paneId}`,
+        dimensions: pane?.dimensions ?? null,
+        connected: store.connected,
+        bellActive: store.bellActive,
+        cursorStyle: store.cursorStyle,
+        cursorColor: store.cursorColor,
+        cursorText: store.cursorText,
+        cursorBlink: store.cursorBlink,
+        focusedPaneId: store.focusedPaneId,
+        dimensionVersion: store.dimensionVersion,
+        connection: store.connection,
+        theme: store.theme,
+      };
+    },
+    shallowEqual
+  );
 
-  const store = getStore();
-  const pane = getPane(paneId);
-  const connection = getConnection();
-
-  if (!pane) {
+  if (!paneExists) {
     return (
       <div class="not-found">
         <div class="not-found-icon">⚠</div>
@@ -39,9 +80,6 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
       </div>
     );
   }
-
-  const { snapshot, syncStats, isReadOnly, title, dimensions } = pane;
-  const { connected, bellActive, cursorStyle, cursorColor, cursorText, cursorBlink, focusedPaneId, dimensionVersion } = store;
 
   // This pane has bell if it's focused and bell is active
   const hasBell = bellActive && focusedPaneId === paneId && !isReadOnly;
@@ -129,7 +167,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     }
   }, [windowId, paneId, connection]);
 
-  const displayDims = dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
+  const displayDims = dimensions && dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
   const isFocused = focusedPaneId === paneId;
 
   return (
@@ -147,14 +185,12 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
           {hasBell && getBellFeatures().title ? "\u{1F514} " : ""}
           {title}
         </span>
-        {syncStats && (
-          <span
-            class="terminal-sync-stats"
-            title={`Generation: ${syncStats.gen}, Deltas: ${syncStats.deltas}, Resyncs: ${syncStats.resyncs}`}
-          >
-            {"\u0394"}{syncStats.deltas} {"\u27F3"}{syncStats.resyncs}
-          </span>
-        )}
+        <span
+          class="terminal-sync-stats"
+          title={`Generation: ${syncGen}, Deltas: ${syncDeltas}, Resyncs: ${syncResyncs}`}
+        >
+          {"\u0394"}{syncDeltas} {"\u27F3"}{syncResyncs}
+        </span>
         <span
           class="terminal-size"
           title={`Server: ${snapshot?.cols}\u00D7${snapshot?.rows}, Visible: ${displayDims.cols}\u00D7${displayDims.rows}`}
@@ -193,6 +229,9 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
             isActive={focusedPaneId === paneId}
             onKeyInput={isReadOnly ? undefined : handleKeyInput}
             connection={connection}
+            theme={theme}
+            deltaChangedRowIds={deltaChangedRowIds}
+            deltaGen={deltaGen}
           />
         ) : (
           <div class="terminal terminal--empty">

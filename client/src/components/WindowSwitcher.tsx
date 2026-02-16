@@ -3,6 +3,7 @@
 // Right-click on tabs opens context menu with layout options
 
 import { h } from "preact";
+import { useStoreSubscription } from "../hooks/useStoreSubscription";
 import { getStore, switchWindow, setLayoutPickerOpen, openWindowContextMenu, openHiddenPanesPicker } from "../store";
 import type { WindowState } from "../store";
 import { countPanes } from "../../../protocol/schema/layout";
@@ -35,6 +36,7 @@ function getWindowTooltip(win: WindowState): string {
 }
 
 export function WindowSwitcher() {
+  useStoreSubscription();
   const store = getStore();
   const { windows, activeWindowId, isMaster } = store;
 

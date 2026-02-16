@@ -2,16 +2,14 @@
 // Ghostty-style: minimal, positioned at top edge of each pane
 
 import { h } from "preact";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
-import { getStore } from "../store";
+import { useStoreSelector } from "../hooks/useStoreSubscription";
 
 export interface ProgressBarProps {
   paneId: number;
 }
 
 export function ProgressBar({ paneId }: ProgressBarProps) {
-  useStoreSubscription();
-  const { progress } = getStore();
+  const progress = useStoreSelector((store) => store.progress);
 
   // Only show if progress is for this pane
   if (!progress || progress.state === 0 || progress.paneId !== paneId) {

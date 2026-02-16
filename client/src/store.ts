@@ -24,6 +24,8 @@ export interface PaneState {
   title: string;
   snapshot: TerminalSnapshot | null;
   syncStats: { deltas: number; resyncs: number; gen: number };
+  deltaChangedRowIds: bigint[];
+  deltaGen: number;
   isReadOnly: boolean;
   dimensions: { cols: number; rows: number };
 }
@@ -140,6 +142,8 @@ function createPaneState(id: number): PaneState {
     title: `Pane ${id}`,
     snapshot: null,
     syncStats: { deltas: 0, resyncs: 0, gen: 0 },
+    deltaChangedRowIds: [],
+    deltaGen: 0,
     isReadOnly: false,
     dimensions: { cols: 80, rows: 24 },
   };
@@ -248,7 +252,11 @@ export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
   notify();
 }
 
-export function updatePaneSyncStats(paneId: number, gen: number) {
+export function updatePaneSyncStats(
+  paneId: number,
+  gen: number,
+  changedRowIds?: bigint[]
+) {
   const pane = store.panes.get(paneId);
   const conn = store.connection;
   if (pane && conn) {
@@ -257,6 +265,10 @@ export function updatePaneSyncStats(paneId: number, gen: number) {
       resyncs: conn.getResyncCount(paneId),
       gen,
     };
+    if (changedRowIds) {
+      pane.deltaChangedRowIds = changedRowIds;
+      pane.deltaGen = gen;
+    }
     notify();
   }
 }
@@ -695,7 +707,7 @@ export function initConnection() {
   });
 
   conn.on("delta", (delta) => {
-    updatePaneSyncStats(delta.paneId, delta.gen);
+    updatePaneSyncStats(delta.paneId, delta.gen, delta.changedRowIds);
   });
 
   conn.on("title", (paneId, title) => {

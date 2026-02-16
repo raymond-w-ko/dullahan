@@ -6,7 +6,7 @@ import { debug } from "../debug";
 
 const imeLog = debug.category('ime');
 const clipboardLog = debug.category('clipboard');
-import { useRef, useEffect, useCallback } from "preact/hooks";
+import { useRef, useEffect, useCallback, useMemo } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
 import { IMEHandler, createIMEHandler } from "../terminal/ime";
@@ -30,13 +30,28 @@ import {
   setFocusedPane,
   toggleFullscreen,
 } from "../store";
-import { cellsToRuns } from "../terminal/cellRendering";
+import { cellsRowToRuns, type StyledRun } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
 import { SCROLL } from "../constants";
 import type { CursorConfig } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
+import type { SelectionBounds } from "../../../protocol/schema/messages";
 
 const MAX_IMAGE_PASTE_BYTES = 32 * 1024 * 1024;
+const INVALID_ROW_ID = 0xffffffffffffffffn;
+const MAX_CACHED_ROW_RUNS = 800;
+
+interface RowRunsCacheEntry {
+  runs: StyledRun[];
+  selectionKey: string;
+  cols: number;
+  lastAccess: number;
+}
+
+function selectionKeyForRow(selection: SelectionBounds | undefined, y: number): string {
+  if (!selection) return "none";
+  return `${selection.startX}:${selection.startY}:${selection.endX}:${selection.endY}:${selection.isRectangle ? 1 : 0}:${y}`;
+}
 
 export interface TerminalViewProps {
   paneId: number;
@@ -49,6 +64,9 @@ export interface TerminalViewProps {
   isActive: boolean;
   onKeyInput?: () => void;
   connection: TerminalConnection | null;
+  theme: string;
+  deltaChangedRowIds: bigint[];
+  deltaGen: number;
 }
 
 export function TerminalView({
@@ -62,12 +80,25 @@ export function TerminalView({
   isActive,
   onKeyInput,
   connection,
+  theme,
+  deltaChangedRowIds,
+  deltaGen,
 }: TerminalViewProps) {
   const { cols, rows, cursor, cells, styles } = snapshot;
   const terminalRef = useRef<HTMLPreElement>(null);
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
   const mouseRef = useRef<MouseHandler | null>(null);
+  const rowRunsCacheRef = useRef<Map<bigint, RowRunsCacheEntry>>(new Map());
+  const rowRunsClockRef = useRef(0);
+  const lastRenderedGenRef = useRef<number | null>(null);
+  const lastAppliedDeltaInvalidationGenRef = useRef<number | null>(null);
+  const cacheContextRef = useRef({
+    paneId,
+    cols,
+    altScreen: snapshot.altScreen,
+    theme,
+  });
 
   // Keep current snapshot in a ref so getSelection closure always accesses latest
   const snapshotRef = useRef(snapshot);
@@ -421,8 +452,116 @@ export function TerminalView({
     imeRef.current?.focus();
   }, []);
 
-  // Convert cells to styled runs (with selection highlighting, hyperlinks, and graphemes if active)
-  const lines = cellsToRuns(cells, styles, cols, rows, snapshot.selection, snapshot.hyperlinks, snapshot.graphemes);
+  // Convert cells to runs with per-row caching keyed by stable row IDs.
+  const lines = useMemo(() => {
+    const cache = rowRunsCacheRef.current;
+    const context = cacheContextRef.current;
+    if (
+      context.paneId !== paneId ||
+      context.cols !== cols ||
+      context.altScreen !== snapshot.altScreen ||
+      context.theme !== theme
+    ) {
+      cache.clear();
+      cacheContextRef.current = {
+        paneId,
+        cols,
+        altScreen: snapshot.altScreen,
+        theme,
+      };
+    }
+
+    // If generation changed and we don't yet have matching dirty row metadata
+    // for this generation, clear cache to avoid stale row reuse.
+    if (lastRenderedGenRef.current !== snapshot.gen && deltaGen !== snapshot.gen) {
+      cache.clear();
+      lastAppliedDeltaInvalidationGenRef.current = null;
+    }
+
+    if (
+      deltaGen === snapshot.gen &&
+      lastAppliedDeltaInvalidationGenRef.current !== snapshot.gen
+    ) {
+      for (const changedRowId of deltaChangedRowIds) {
+        cache.delete(changedRowId);
+      }
+      lastAppliedDeltaInvalidationGenRef.current = snapshot.gen;
+    }
+
+    const nextLines: StyledRun[][] = new Array(rows);
+    for (let y = 0; y < rows; y++) {
+      const rowId = snapshot.rowIds[y];
+      const selectionKey = selectionKeyForRow(snapshot.selection, y);
+      let runs: StyledRun[] | undefined;
+
+      if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
+        const cached = cache.get(rowId);
+        if (
+          cached &&
+          cached.cols === cols &&
+          cached.selectionKey === selectionKey
+        ) {
+          cached.lastAccess = ++rowRunsClockRef.current;
+          runs = cached.runs;
+        }
+      }
+
+      if (!runs) {
+        runs = cellsRowToRuns(
+          cells,
+          styles,
+          cols,
+          y,
+          snapshot.selection,
+          snapshot.hyperlinks,
+          snapshot.graphemes
+        );
+
+        if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
+          cache.set(rowId, {
+            runs,
+            cols,
+            selectionKey,
+            lastAccess: ++rowRunsClockRef.current,
+          });
+        }
+      }
+
+      nextLines[y] = runs;
+    }
+
+    if (cache.size > MAX_CACHED_ROW_RUNS) {
+      const overflow = cache.size - MAX_CACHED_ROW_RUNS;
+      const sorted = Array.from(cache.entries()).sort(
+        (a, b) => a[1].lastAccess - b[1].lastAccess
+      );
+      for (let i = 0; i < overflow; i++) {
+        const stale = sorted[i];
+        if (stale) {
+          cache.delete(stale[0]);
+        }
+      }
+    }
+
+    lastRenderedGenRef.current = snapshot.gen;
+
+    return nextLines;
+  }, [
+    paneId,
+    cells,
+    styles,
+    cols,
+    rows,
+    snapshot.altScreen,
+    snapshot.rowIds,
+    snapshot.selection,
+    snapshot.hyperlinks,
+    snapshot.graphemes,
+    theme,
+    deltaChangedRowIds,
+    deltaGen,
+    snapshot.gen,
+  ]);
 
   // Build cursor config object
   const cursorConfig: CursorConfig = {

@@ -11,9 +11,8 @@ import { ClipboardBar } from "./ClipboardBar";
 import { LayoutPickerModal } from "./LayoutPickerModal";
 import { ToastContainer } from "./ToastContainer";
 import { ContextMenu } from "./ContextMenu";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import {
-  getStore,
   initConnection,
   disconnectConnection,
   setSettingsOpen,
@@ -23,7 +22,30 @@ import {
 import * as config from "../config";
 
 export function App() {
-  useStoreSubscription();
+  const {
+    connected,
+    error,
+    theme,
+    settingsOpen,
+    isMaster,
+    masterId,
+    activeWindowId,
+    latency,
+    fullscreenPaneId,
+  } = useStoreSelector(
+    (store) => ({
+      connected: store.connected,
+      error: store.error,
+      theme: store.theme,
+      settingsOpen: store.settingsOpen,
+      isMaster: store.isMaster,
+      masterId: store.masterId,
+      activeWindowId: store.activeWindowId,
+      latency: store.latency,
+      fullscreenPaneId: store.fullscreenPaneId,
+    }),
+    shallowEqual
+  );
   const dividerHoldTimeoutRef = useRef<number | null>(null);
   const dividerHoldAwaitingReleaseRef = useRef(false);
   const dividerHoldHeldRef = useRef(false);
@@ -39,14 +61,14 @@ export function App() {
   // Exit fullscreen on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && getStore().fullscreenPaneId !== null) {
+      if (e.key === "Escape" && fullscreenPaneId !== null) {
         e.preventDefault();
         setFullscreenPane(null);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [fullscreenPaneId]);
 
   // Toggle layout dividers after holding Meta for ~3 seconds
   useEffect(() => {
@@ -109,9 +131,6 @@ export function App() {
       clearTimer();
     };
   }, []);
-
-  const store = getStore();
-  const { connected, error, theme, settingsOpen, isMaster, masterId, activeWindowId, latency } = store;
 
   return (
     <div class="app" data-theme={theme}>
