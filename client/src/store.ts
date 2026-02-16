@@ -193,6 +193,16 @@ function notify() {
   listeners.forEach((fn) => fn());
 }
 
+let notifyScheduled = false;
+function scheduleNotify() {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  queueMicrotask(() => {
+    notifyScheduled = false;
+    notify();
+  });
+}
+
 // Public API
 export function getStore(): Readonly<Store> {
   return store;
@@ -232,7 +242,11 @@ export function setLatency(latency: number) {
   notify();
 }
 
-export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
+export function setPaneSnapshot(
+  paneId: number,
+  snapshot: TerminalSnapshot,
+  notifyListeners: boolean = true
+) {
   // Create pane if it doesn't exist (snapshots may arrive before layout)
   let pane = store.panes.get(paneId);
   if (!pane) {
@@ -249,13 +263,16 @@ export function setPaneSnapshot(paneId: number, snapshot: TerminalSnapshot) {
       gen: snapshot.gen,
     };
   }
-  notify();
+  if (notifyListeners) {
+    notify();
+  }
 }
 
 export function updatePaneSyncStats(
   paneId: number,
   gen: number,
-  changedRowIds?: bigint[]
+  changedRowIds?: bigint[],
+  notifyListeners: boolean = true
 ) {
   const pane = store.panes.get(paneId);
   const conn = store.connection;
@@ -269,7 +286,9 @@ export function updatePaneSyncStats(
       pane.deltaChangedRowIds = changedRowIds;
       pane.deltaGen = gen;
     }
-    notify();
+    if (notifyListeners) {
+      notify();
+    }
   }
 }
 
@@ -288,6 +307,9 @@ export function setPaneDimensions(
 ) {
   const pane = store.panes.get(paneId);
   if (pane) {
+    if (pane.dimensions.cols === cols && pane.dimensions.rows === rows) {
+      return;
+    }
     pane.dimensions = { cols, rows };
     notify();
   }
@@ -703,11 +725,13 @@ export function initConnection() {
   conn.on("latency", (latency) => setLatency(latency));
 
   conn.on("snapshot", (snap) => {
-    setPaneSnapshot(snap.paneId, snap);
+    setPaneSnapshot(snap.paneId, snap, false);
+    scheduleNotify();
   });
 
   conn.on("delta", (delta) => {
-    updatePaneSyncStats(delta.paneId, delta.gen, delta.changedRowIds);
+    updatePaneSyncStats(delta.paneId, delta.gen, delta.changedRowIds, false);
+    scheduleNotify();
   });
 
   conn.on("title", (paneId, title) => {
