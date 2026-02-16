@@ -920,11 +920,14 @@ pub const EventLoop = struct {
             const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
             defer pane.allocator.free(snap);
             try client.ws.sendBinary(snap);
+            // Track generation as soon as message is accepted by ws.sendBinary().
+            // Waiting for the write buffer to fully drain causes repeated
+            // snapshot fallback loops under backpressure.
+            client.setGeneration(pane_id, pane.generation);
             if (client.ws.hasPendingWrite()) {
                 client.write_congested = true;
                 return;
             }
-            client.setGeneration(pane_id, pane.generation);
             return;
         }
 
@@ -934,12 +937,14 @@ pub const EventLoop = struct {
         if (last_gen == result.from_gen) {
             // Client can apply this delta
             try client.ws.sendBinary(result.delta);
+            // Advance generation once queued/sent to avoid resend loops while
+            // the socket still has buffered writes.
+            client.setGeneration(pane_id, pane.generation);
 
             if (client.ws.hasPendingWrite()) {
                 client.write_congested = true;
                 return;
             }
-            client.setGeneration(pane_id, pane.generation);
         } else {
             // Client can't apply delta (generation mismatch).
             // Send full snapshot to resync immediately.
@@ -949,11 +954,13 @@ pub const EventLoop = struct {
             const snap = try snapshot.generateBinarySnapshot(pane.allocator, pane);
             defer pane.allocator.free(snap);
             try client.ws.sendBinary(snap);
+            // Advance generation once queued/sent to avoid repeated fallback
+            // snapshots when large payloads are buffered.
+            client.setGeneration(pane_id, pane.generation);
             if (client.ws.hasPendingWrite()) {
                 client.write_congested = true;
                 return;
             }
-            client.setGeneration(pane_id, pane.generation);
         }
     }
 
