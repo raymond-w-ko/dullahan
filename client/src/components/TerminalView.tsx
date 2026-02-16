@@ -2,6 +2,7 @@
 // Displays terminal cells with styling and cursor
 
 import { h } from "preact";
+import { memo } from "preact/compat";
 import { debug } from "../debug";
 
 const imeLog = debug.category('ime');
@@ -33,7 +34,7 @@ import {
 import { cellsRowToRuns, type StyledRun } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
 import { SCROLL } from "../constants";
-import type { CursorConfig } from "../terminal/cursorRendering";
+import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
 import type { SelectionBounds } from "../../../protocol/schema/messages";
 
@@ -52,6 +53,84 @@ function selectionKeyForRow(selection: SelectionBounds | undefined, y: number): 
   if (!selection) return "none";
   return `${selection.startX}:${selection.startY}:${selection.endX}:${selection.endY}:${selection.isRectangle ? 1 : 0}:${y}`;
 }
+
+const HIDDEN_CURSOR: CursorState = {
+  x: 0,
+  y: -1,
+  visible: false,
+  blink: true,
+};
+
+interface TerminalRowProps {
+  runs: StyledRun[];
+  y: number;
+  cols: number;
+  showCursor: boolean;
+  cursorX: number;
+  cursorBlinkFromServer: boolean;
+  cursorStyle: "block" | "bar" | "underline" | "block_hollow";
+  cursorColor: string;
+  cursorText: string;
+  cursorBlink: "" | "true" | "false";
+}
+
+const TerminalRow = memo(function TerminalRow({
+  runs,
+  y,
+  cols,
+  showCursor,
+  cursorX,
+  cursorBlinkFromServer,
+  cursorStyle,
+  cursorColor,
+  cursorText,
+  cursorBlink,
+}: TerminalRowProps) {
+  const rowCursor: CursorState = showCursor
+    ? {
+        x: cursorX,
+        y,
+        visible: true,
+        blink: cursorBlinkFromServer,
+      }
+    : HIDDEN_CURSOR;
+
+  const rowCursorConfig: CursorConfig = {
+    style: cursorStyle,
+    color: cursorColor,
+    textColor: cursorText,
+    blink: cursorBlink,
+  };
+
+  return (
+    <div class="terminal-line">
+      {renderLine(runs, y, rowCursor, rowCursorConfig, true, cols)}
+    </div>
+  );
+}, (prev, next) => {
+  if (
+    prev.runs !== next.runs ||
+    prev.y !== next.y ||
+    prev.cols !== next.cols ||
+    prev.showCursor !== next.showCursor
+  ) {
+    return false;
+  }
+
+  // Cursor-related props only matter on the row that currently renders cursor.
+  if (!next.showCursor) {
+    return true;
+  }
+
+  return (
+    prev.cursorX === next.cursorX &&
+    prev.cursorBlinkFromServer === next.cursorBlinkFromServer &&
+    prev.cursorStyle === next.cursorStyle &&
+    prev.cursorColor === next.cursorColor &&
+    prev.cursorText === next.cursorText &&
+    prev.cursorBlink === next.cursorBlink
+  );
+});
 
 export interface TerminalViewProps {
   paneId: number;
@@ -563,17 +642,10 @@ export function TerminalView({
     snapshot.gen,
   ]);
 
-  // Build cursor config object
-  const cursorConfig: CursorConfig = {
-    style: cursorStyle,
-    color: cursorColor,
-    textColor: cursorText,
-    blink: cursorBlink,
-  };
-
   // Show scrollback indicator if not at bottom
   const isScrolledUp =
     snapshot.scrollback.viewportTop < snapshot.scrollback.totalRows - rows;
+  const hasVisibleCursor = isActive && cursor.visible;
 
   return (
     <pre
@@ -586,11 +658,28 @@ export function TerminalView({
           {snapshot.scrollback.totalRows - snapshot.scrollback.viewportTop - rows} lines above
         </div>
       )}
-      {lines.map((runs, y) => (
-        <div key={y} class="terminal-line">
-          {renderLine(runs, y, cursor, cursorConfig, isActive, cols)}
-        </div>
-      ))}
+      {lines.map((runs, y) => {
+        const rowId = snapshot.rowIds[y];
+        const key = rowId !== undefined && rowId !== INVALID_ROW_ID
+          ? `row-${rowId.toString()}`
+          : `row-invalid-${y}`;
+        const showCursor = hasVisibleCursor && cursor.y === y;
+        return (
+          <TerminalRow
+            key={key}
+            runs={runs}
+            y={y}
+            cols={cols}
+            showCursor={showCursor}
+            cursorX={cursor.x}
+            cursorBlinkFromServer={cursor.blink}
+            cursorStyle={cursorStyle}
+            cursorColor={cursorColor}
+            cursorText={cursorText}
+            cursorBlink={cursorBlink}
+          />
+        );
+      })}
     </pre>
   );
 }

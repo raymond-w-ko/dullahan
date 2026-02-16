@@ -2,10 +2,9 @@
 // Allows user to pick a layout when creating a new window
 
 import { h } from "preact";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import { useModalBehavior } from "../hooks/useModalBehavior";
 import {
-  getStore,
   setLayoutPickerOpen,
   createWindowWithTemplate,
 } from "../store";
@@ -57,10 +56,13 @@ function LayoutPreview({ template }: { template: LayoutTemplate }) {
 }
 
 export function LayoutPickerModal() {
-  useStoreSubscription();
-
-  const store = getStore();
-  const { layoutPickerOpen, layoutTemplates } = store;
+  const { layoutPickerOpen, layoutTemplates } = useStoreSelector(
+    (store) => ({
+      layoutPickerOpen: store.layoutPickerOpen,
+      layoutTemplates: store.layoutTemplates,
+    }),
+    shallowEqual
+  );
 
   // Modal behavior (escape key, scroll prevention)
   useModalBehavior({

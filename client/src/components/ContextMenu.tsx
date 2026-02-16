@@ -5,9 +5,8 @@
 
 import { h } from "preact";
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import {
-  getStore,
   getPane,
   closeContextMenu,
   closeWindow,
@@ -120,8 +119,14 @@ function LayoutSubmenu({ templates, windowId, parentRect }: LayoutSubmenuProps) 
 
 /** Window context menu content - shows close/layout options */
 function WindowMenuContent({ menu }: { menu: WindowContextMenuState }) {
-  const store = getStore();
-  const { layoutTemplates, isMaster, windows } = store;
+  const { layoutTemplates, isMaster, windowCount } = useStoreSelector(
+    (store) => ({
+      layoutTemplates: store.layoutTemplates,
+      isMaster: store.isMaster,
+      windowCount: store.windows.size,
+    }),
+    shallowEqual
+  );
 
   const layoutItemRef = useRef<HTMLDivElement>(null);
   const [showLayoutSubmenu, setShowLayoutSubmenu] = useState(false);
@@ -145,7 +150,7 @@ function WindowMenuContent({ menu }: { menu: WindowContextMenuState }) {
   }, []);
 
   const canChangeLayout = isMaster && layoutTemplates.length > 0;
-  const canCloseWindow = isMaster && windows.size > 1;
+  const canCloseWindow = isMaster && windowCount > 1;
 
   const handleCloseWindow = useCallback(() => {
     if (!canCloseWindow) return;
@@ -210,9 +215,13 @@ function getPaneName(paneId: number): string {
 
 /** Pane context menu content - shows swap and hide options */
 function PaneMenuContent({ menu }: { menu: PaneContextMenuState }) {
-  const store = getStore();
-  const { windows, isMaster } = store;
-  const win = windows.get(menu.windowId);
+  const { isMaster, win } = useStoreSelector(
+    (store) => ({
+      isMaster: store.isMaster,
+      win: store.windows.get(menu.windowId),
+    }),
+    shallowEqual
+  );
 
   if (!win || !isMaster) {
     return (
@@ -308,9 +317,14 @@ function PaneMenuContent({ menu }: { menu: PaneContextMenuState }) {
 
 /** Hidden panes picker content - shows list of hidden panes */
 function HiddenPickerContent({ menu }: { menu: HiddenPanesPickerState }) {
-  const store = getStore();
-  const { windows, isMaster, focusedPaneId } = store;
-  const win = windows.get(menu.windowId);
+  const { isMaster, focusedPaneId, win } = useStoreSelector(
+    (store) => ({
+      isMaster: store.isMaster,
+      focusedPaneId: store.focusedPaneId,
+      win: store.windows.get(menu.windowId),
+    }),
+    shallowEqual
+  );
 
   if (!win || !isMaster) {
     return (
@@ -358,10 +372,7 @@ function HiddenPickerContent({ menu }: { menu: HiddenPanesPickerState }) {
 }
 
 export function ContextMenu() {
-  useStoreSubscription();
-
-  const store = getStore();
-  const { contextMenu } = store;
+  const contextMenu = useStoreSelector((store) => store.contextMenu);
 
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });

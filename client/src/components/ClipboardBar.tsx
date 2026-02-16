@@ -3,9 +3,8 @@
 
 import { h } from "preact";
 import { useState, useEffect } from "preact/hooks";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
+import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import {
-  getStore,
   copyInternalToSystem,
   pasteClipboardToTerminal,
   type ClipboardEntry,
@@ -75,9 +74,13 @@ function ClipboardPanel({ kind, label, entry, isRecent }: ClipboardPanelProps) {
 }
 
 export function ClipboardBar() {
-  useStoreSubscription();
-  const store = getStore();
-  const { clipboardC, clipboardP } = store;
+  const { clipboardC, clipboardP } = useStoreSelector(
+    (store) => ({
+      clipboardC: store.clipboardC,
+      clipboardP: store.clipboardP,
+    }),
+    shallowEqual
+  );
 
   // Periodic re-render to update relative timestamps
   const [, setTick] = useState(0);

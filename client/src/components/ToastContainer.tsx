@@ -3,8 +3,8 @@
 
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
-import { getStore, dismissToast, getVisibleToasts, type ToastNotification } from "../store";
+import { useStoreSelector } from "../hooks/useStoreSubscription";
+import { dismissToast, type ToastNotification } from "../store";
 import { TOAST } from "../constants";
 
 interface ToastProps {
@@ -35,8 +35,8 @@ function Toast({ toast, onDismiss }: ToastProps) {
 }
 
 export function ToastContainer() {
-  useStoreSubscription();
-  const visibleToasts = getVisibleToasts(TOAST.MAX_VISIBLE);
+  const toasts = useStoreSelector((store) => store.toasts);
+  const visibleToasts = toasts.slice(-TOAST.MAX_VISIBLE);
 
   if (visibleToasts.length === 0) {
     return null;

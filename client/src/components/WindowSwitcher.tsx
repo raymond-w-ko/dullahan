@@ -3,8 +3,8 @@
 // Right-click on tabs opens context menu with layout options
 
 import { h } from "preact";
-import { useStoreSubscription } from "../hooks/useStoreSubscription";
-import { getStore, switchWindow, setLayoutPickerOpen, openWindowContextMenu, openHiddenPanesPicker } from "../store";
+import { useStoreSelector } from "../hooks/useStoreSubscription";
+import { switchWindow, setLayoutPickerOpen, openWindowContextMenu, openHiddenPanesPicker } from "../store";
 import type { WindowState } from "../store";
 import { countPanes } from "../../../protocol/schema/layout";
 
@@ -15,20 +15,37 @@ function getHiddenPaneCount(win: WindowState): number {
   return Math.max(0, totalPanes - visiblePanes);
 }
 
-/** Format window tab label (display id + 1 to match Alt+N keybinds) */
-function getWindowLabel(win: WindowState): string {
-  const displayId = win.id + 1;
-  const hidden = getHiddenPaneCount(win);
-  if (hidden > 0) {
-    return `${displayId} (+${hidden})`;
+interface WindowTabModel {
+  id: number;
+  hidden: number;
+}
+
+function areWindowTabsEqual(a: WindowTabModel[], b: WindowTabModel[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.id !== right.id || left.hidden !== right.hidden) return false;
   }
-  return String(displayId);
+  return true;
+}
+
+function areWindowSwitcherStateEqual(
+  a: { tabs: WindowTabModel[]; activeWindowId: number; isMaster: boolean },
+  b: { tabs: WindowTabModel[]; activeWindowId: number; isMaster: boolean }
+): boolean {
+  return (
+    a.activeWindowId === b.activeWindowId &&
+    a.isMaster === b.isMaster &&
+    areWindowTabsEqual(a.tabs, b.tabs)
+  );
 }
 
 /** Format window tab tooltip (display id + 1 to match Alt+N keybinds) */
-function getWindowTooltip(win: WindowState): string {
+function getWindowTooltip(win: WindowTabModel): string {
   const displayId = win.id + 1;
-  const hidden = getHiddenPaneCount(win);
+  const hidden = win.hidden;
   if (hidden > 0) {
     return `Window ${displayId} (${hidden} pane${hidden > 1 ? "s" : ""} hidden) - right-click for options`;
   }
@@ -36,16 +53,23 @@ function getWindowTooltip(win: WindowState): string {
 }
 
 export function WindowSwitcher() {
-  useStoreSubscription();
-  const store = getStore();
-  const { windows, activeWindowId, isMaster } = store;
-
-  // Convert windows map to sorted array
-  const windowList = Array.from(windows.values()).sort((a, b) => a.id - b.id);
+  const { tabs, activeWindowId, isMaster } = useStoreSelector(
+    (store) => ({
+      tabs: Array.from(store.windows.values())
+        .sort((a, b) => a.id - b.id)
+        .map((win) => ({
+          id: win.id,
+          hidden: getHiddenPaneCount(win),
+        })),
+      activeWindowId: store.activeWindowId,
+      isMaster: store.isMaster,
+    }),
+    areWindowSwitcherStateEqual
+  );
 
   // Show switcher if multiple windows exist (anyone can switch)
   // or if master (who can create new windows via + button)
-  const hasMultipleWindows = windowList.length > 1;
+  const hasMultipleWindows = tabs.length > 1;
   if (!hasMultipleWindows && !isMaster) {
     return null;
   }
@@ -62,8 +86,8 @@ export function WindowSwitcher() {
 
   return (
     <div class="window-switcher">
-      {windowList.map((win) => {
-        const hidden = getHiddenPaneCount(win);
+      {tabs.map((win) => {
+        const hidden = win.hidden;
         const classes = [
           "window-tab",
           win.id === activeWindowId ? "window-tab--active" : "",
