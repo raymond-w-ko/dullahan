@@ -189,6 +189,7 @@ export interface TerminalSnapshot {
 /** A cached row with LRU tracking */
 interface CachedRow {
   cells: Cell[];
+  styleIds: Set<number>;
   lastAccess: number;  // Timestamp of last access
 }
 
@@ -205,6 +206,7 @@ interface PaneState {
   autoFollowInFlight: boolean; // Prevent repeated auto-follow scroll sends
   lastViewportTop: number | null;
   styleIdentity: StyleIdentityState;
+  styleUsage: Map<number, number>; // styleId -> number of cached rows referencing it
   lastStyles: StyleTable | null;
   lastRowIds: bigint[] | null;
   lastGraphemes: GraphemeTable | null; // Last snapshot's graphemes (global indices)
@@ -218,6 +220,33 @@ type ResyncReason = "cache_miss" | "style_miss" | "corruption" | "manual";
 interface PendingResync {
   reason: ResyncReason;
   timer: number | null;
+}
+
+function collectRowStyleIds(cells: Cell[]): Set<number> {
+  const styleIds = new Set<number>();
+  for (const cell of cells) {
+    if (cell.styleId !== 0) {
+      styleIds.add(cell.styleId);
+    }
+  }
+  return styleIds;
+}
+
+function incrementStyleUsage(usage: Map<number, number>, styleIds: Set<number>): void {
+  for (const styleId of styleIds) {
+    usage.set(styleId, (usage.get(styleId) ?? 0) + 1);
+  }
+}
+
+function decrementStyleUsage(usage: Map<number, number>, styleIds: Set<number>): void {
+  for (const styleId of styleIds) {
+    const next = (usage.get(styleId) ?? 0) - 1;
+    if (next <= 0) {
+      usage.delete(styleId);
+    } else {
+      usage.set(styleId, next);
+    }
+  }
 }
 
 /** Storage key for client ID */
@@ -397,6 +426,7 @@ export class TerminalConnection {
         autoFollowInFlight: false,
         lastViewportTop: null,
         styleIdentity: createStyleIdentityState(),
+        styleUsage: new Map(),
         lastStyles: null,
         lastRowIds: null,
         lastGraphemes: null,
@@ -646,13 +676,20 @@ export class TerminalConnection {
         paneState.rowCache.clear();
         paneState.rowGraphemes.clear();
         paneState.rowHyperlinks.clear();
+        paneState.styleUsage.clear();
         const now = Date.now();
         let minSeen = -1n;  // Use -1n as "not set" since row IDs are unsigned
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
           if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
             const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
-            paneState.rowCache.set(rowId, { cells: rowCells, lastAccess: now });
+            const styleIds = collectRowStyleIds(rowCells);
+            paneState.rowCache.set(rowId, {
+              cells: rowCells,
+              styleIds,
+              lastAccess: now,
+            });
+            incrementStyleUsage(paneState.styleUsage, styleIds);
             // Track minimum row ID
             if (minSeen < 0n || rowId < minSeen) {
               minSeen = rowId;
@@ -1367,6 +1404,7 @@ export class TerminalConnection {
 
     type PendingRow = {
       cells: Cell[];
+      styleIds: Set<number>;
       graphemes: GraphemeTable | null;
       hyperlinks: HyperlinkTable | null;
     };
@@ -1390,9 +1428,18 @@ export class TerminalConnection {
         this.requestResync(paneId, "style_miss");
         return;
       }
+      const styleIds = collectRowStyleIds(rowCells);
+      for (const styleId of styleIds) {
+        if (!styles.has(styleId)) {
+          deltaLog.warn(`Pane ${paneId}: row ${rowId} references unknown style ${styleId}, requesting resync`);
+          this.requestResync(paneId, "style_miss");
+          return;
+        }
+      }
 
       pendingRows.set(rowId, {
         cells: rowCells,
+        styleIds,
         graphemes: row.graphemes ? decodeGraphemes(row.graphemes) : null,
         hyperlinks: row.hyperlinks ? decodeHyperlinks(row.hyperlinks) : null,
       });
@@ -1499,22 +1546,18 @@ export class TerminalConnection {
     }
     deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${fromDelta} dirty + ${filled} empty rows, ${graphemes.size} graphemes`);
 
-    // Check if any cells reference styles we don't have
-    const missingStyles = new Set<number>();
-    for (const cell of cells) {
-      if (cell.styleId !== 0 && !styles.has(cell.styleId)) {
-        missingStyles.add(cell.styleId);
-      }
-    }
-    if (missingStyles.size > 0) {
-      deltaLog.warn(`Pane ${paneId}: ${missingStyles.size} styles missing, requesting resync`);
-      this.requestResync(paneId, "style_miss");
-      return; // Don't emit corrupted snapshot
-    }
-
     // Validation passed. Commit staged dirty rows and style identity state.
     for (const [rowId, pending] of pendingRows) {
-      paneState.rowCache.set(rowId, { cells: pending.cells, lastAccess: now });
+      const previous = paneState.rowCache.get(rowId);
+      if (previous) {
+        decrementStyleUsage(paneState.styleUsage, previous.styleIds);
+      }
+      paneState.rowCache.set(rowId, {
+        cells: pending.cells,
+        styleIds: pending.styleIds,
+        lastAccess: now,
+      });
+      incrementStyleUsage(paneState.styleUsage, pending.styleIds);
 
       if (pending.graphemes && pending.graphemes.size > 0) {
         paneState.rowGraphemes.set(rowId, pending.graphemes);
@@ -1622,6 +1665,10 @@ export class TerminalConnection {
       const toEvict = paneState.rowCache.size - MAX_CACHED_ROWS;
       for (let i = 0; i < toEvict && i < scored.length; i++) {
         const [rowId] = scored[i]!;
+        const cached = paneState.rowCache.get(rowId);
+        if (cached) {
+          decrementStyleUsage(paneState.styleUsage, cached.styleIds);
+        }
         paneState.rowCache.delete(rowId);
         paneState.rowGraphemes.delete(rowId);
         paneState.rowHyperlinks.delete(rowId);
@@ -1640,18 +1687,10 @@ export class TerminalConnection {
     }
 
     // Prune unused styles to prevent unbounded growth.
-    // IMPORTANT: usage must be computed from the full row cache, not just viewport
-    // cells, otherwise we can drop styles still referenced by cached scrollback rows.
+    // styleUsage is maintained incrementally as rows enter/leave the cache.
     const MAX_CACHED_STYLES = 256;
     if (paneState.lastStyles && paneState.lastStyles.size > MAX_CACHED_STYLES) {
-      const usedStyleIds = new Set<number>();
-      for (const cached of paneState.rowCache.values()) {
-        for (const cell of cached.cells) {
-          if (cell.styleId !== 0) {
-            usedStyleIds.add(cell.styleId);
-          }
-        }
-      }
+      const usedStyleIds = new Set<number>(paneState.styleUsage.keys());
       // Remove styles not used by any cached row.
       pruneUnusedStyles(paneState.lastStyles, paneState.styleIdentity, usedStyleIds);
       deltaLog.log(`Pane ${paneId}: Pruned styles to ${paneState.lastStyles.size}`);

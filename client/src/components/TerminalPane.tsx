@@ -5,7 +5,11 @@ import { h } from "preact";
 import { useEffect, useRef, useCallback } from "preact/hooks";
 import { TerminalView } from "./TerminalView";
 import { ProgressBar } from "./ProgressBar";
-import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
+import {
+  useStoreSelector,
+  usePaneStoreSelector,
+  shallowEqual,
+} from "../hooks/useStoreSubscription";
 import {
   setPaneDimensions,
   setBellActive,
@@ -32,17 +36,8 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     isReadOnly,
     title,
     dimensions,
-    connected,
-    bellActive,
-    cursorStyle,
-    cursorColor,
-    cursorText,
-    cursorBlink,
-    focusedPaneId,
-    dimensionVersion,
-    connection,
-    theme,
-  } = useStoreSelector(
+  } = usePaneStoreSelector(
+    paneId,
     (store) => {
       const pane = store.panes.get(paneId);
       return {
@@ -56,6 +51,23 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
         isReadOnly: pane?.isReadOnly ?? false,
         title: pane?.title ?? `Pane ${paneId}`,
         dimensions: pane?.dimensions ?? null,
+      };
+    },
+    shallowEqual
+  );
+  const {
+    connected,
+    bellActive,
+    cursorStyle,
+    cursorColor,
+    cursorText,
+    cursorBlink,
+    focusedPaneId,
+    dimensionVersion,
+    connection,
+    theme,
+  } = useStoreSelector(
+    (store) => ({
         connected: store.connected,
         bellActive: store.bellActive,
         cursorStyle: store.cursorStyle,
@@ -66,8 +78,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
         dimensionVersion: store.dimensionVersion,
         connection: store.connection,
         theme: store.theme,
-      };
-    },
+      }),
     shallowEqual
   );
 

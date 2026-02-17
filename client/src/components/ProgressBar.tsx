@@ -9,10 +9,15 @@ export interface ProgressBarProps {
 }
 
 export function ProgressBar({ paneId }: ProgressBarProps) {
-  const progress = useStoreSelector((store) => store.progress);
+  const progress = useStoreSelector((store) => {
+    const current = store.progress;
+    if (!current || current.state === 0 || current.paneId !== paneId) {
+      return null;
+    }
+    return current;
+  });
 
-  // Only show if progress is for this pane
-  if (!progress || progress.state === 0 || progress.paneId !== paneId) {
+  if (!progress) {
     return null;
   }
 

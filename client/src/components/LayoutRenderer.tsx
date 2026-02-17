@@ -5,7 +5,7 @@ import { h, Fragment } from "preact";
 import { useRef, useState, useCallback } from "preact/hooks";
 import { TerminalPane } from "./TerminalPane";
 import { LayoutDivider } from "./LayoutDivider";
-import type { LayoutNode, LayoutContainer, LayoutPane } from "../../../protocol/schema/layout";
+import type { LayoutNode, LayoutContainer } from "../../../protocol/schema/layout";
 import { isContainer, isPane } from "../../../protocol/schema/layout";
 
 export interface LayoutRendererProps {
@@ -16,18 +16,27 @@ export interface LayoutRendererProps {
   onResizeLayout?: (nodes: LayoutNode[]) => void;
 }
 
-/** Deep clone layout nodes */
-function cloneNodes(nodes: LayoutNode[]): LayoutNode[] {
-  return nodes.map((node) => {
-    if (isPane(node)) {
-      return { ...node };
-    } else {
-      return {
-        ...node,
-        children: cloneNodes(node.children),
-      };
-    }
-  });
+/** Clone only the direct node object; child references are preserved. */
+function cloneNodeShallow(node: LayoutNode): LayoutNode {
+  if (isPane(node)) {
+    return { ...node };
+  }
+  return { ...node, children: node.children };
+}
+
+function cloneNodesShallow(nodes: LayoutNode[]): LayoutNode[] {
+  return nodes.map(cloneNodeShallow);
+}
+
+function withUpdatedNodeSize(
+  node: LayoutNode,
+  horizontal: boolean,
+  size: number
+): LayoutNode {
+  if (horizontal) {
+    return { ...node, width: size };
+  }
+  return { ...node, height: size };
 }
 
 /**
@@ -151,13 +160,16 @@ function NodeRenderer({
   const handleResizeLayout = useCallback(
     (childNodes: LayoutNode[]) => {
       if (!onResizeLayout) return;
-      const updated = cloneNodes(siblings);
+      const updated = siblings.slice();
       const target = updated[index];
       if (!target) {
         return;
       }
       if (isContainer(target)) {
-        target.children = childNodes;
+        updated[index] = {
+          ...target,
+          children: childNodes,
+        };
       } else {
         return;
       }
@@ -248,7 +260,7 @@ function ContainerRenderer({
         startSizesRef.current = node.children.map((n) =>
           childIsHorizontal ? n.width : n.height
         );
-        setLocalNodes(cloneNodes(node.children));
+        setLocalNodes(cloneNodesShallow(node.children));
       }
 
       const startSizes = startSizesRef.current;
@@ -270,21 +282,12 @@ function ContainerRenderer({
       // Update local nodes
       setLocalNodes((prev) => {
         if (!prev) return null;
-        const updated = cloneNodes(prev);
+        const updated = prev.slice();
         const leftNode = updated[dividerIndex]!;
         const rightNode = updated[dividerIndex + 1]!;
 
-        if (childIsHorizontal) {
-          if (isPane(leftNode)) (leftNode as LayoutPane).width = newLeftSize;
-          else (leftNode as LayoutContainer).width = newLeftSize;
-          if (isPane(rightNode)) (rightNode as LayoutPane).width = newRightSize;
-          else (rightNode as LayoutContainer).width = newRightSize;
-        } else {
-          if (isPane(leftNode)) (leftNode as LayoutPane).height = newLeftSize;
-          else (leftNode as LayoutContainer).height = newLeftSize;
-          if (isPane(rightNode)) (rightNode as LayoutPane).height = newRightSize;
-          else (rightNode as LayoutContainer).height = newRightSize;
-        }
+        updated[dividerIndex] = withUpdatedNodeSize(leftNode, childIsHorizontal, newLeftSize);
+        updated[dividerIndex + 1] = withUpdatedNodeSize(rightNode, childIsHorizontal, newRightSize);
 
         return updated;
       });
@@ -351,7 +354,7 @@ export function LayoutRenderer({
         startSizesRef.current = nodes.map((n) =>
           isHorizontal ? n.width : n.height
         );
-        setLocalNodes(cloneNodes(nodes));
+        setLocalNodes(cloneNodesShallow(nodes));
       }
 
       const startSizes = startSizesRef.current;
@@ -373,21 +376,12 @@ export function LayoutRenderer({
       // Update local nodes
       setLocalNodes((prev) => {
         if (!prev) return null;
-        const updated = cloneNodes(prev);
+        const updated = prev.slice();
         const leftNode = updated[dividerIndex]!;
         const rightNode = updated[dividerIndex + 1]!;
 
-        if (isHorizontal) {
-          if (isPane(leftNode)) (leftNode as LayoutPane).width = newLeftSize;
-          else (leftNode as LayoutContainer).width = newLeftSize;
-          if (isPane(rightNode)) (rightNode as LayoutPane).width = newRightSize;
-          else (rightNode as LayoutContainer).width = newRightSize;
-        } else {
-          if (isPane(leftNode)) (leftNode as LayoutPane).height = newLeftSize;
-          else (leftNode as LayoutContainer).height = newLeftSize;
-          if (isPane(rightNode)) (rightNode as LayoutPane).height = newRightSize;
-          else (rightNode as LayoutContainer).height = newRightSize;
-        }
+        updated[dividerIndex] = withUpdatedNodeSize(leftNode, isHorizontal, newLeftSize);
+        updated[dividerIndex + 1] = withUpdatedNodeSize(rightNode, isHorizontal, newRightSize);
 
         return updated;
       });

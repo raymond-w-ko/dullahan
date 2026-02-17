@@ -134,6 +134,11 @@ export interface Store {
 }
 
 type Listener = () => void;
+type ScopedListenerMap = Map<number, Set<Listener>>;
+interface NotifyScope {
+  paneIds?: Iterable<number>;
+  windowIds?: Iterable<number>;
+}
 
 // Create initial pane state with default values
 function createPaneState(id: number): PaneState {
@@ -188,17 +193,118 @@ const store: Store = {
 
 // Listeners for reactive updates
 const listeners = new Set<Listener>();
+const paneListeners: ScopedListenerMap = new Map();
+const windowListeners: ScopedListenerMap = new Map();
+
+function addScopedListener(map: ScopedListenerMap, key: number, listener: Listener): () => void {
+  let scoped = map.get(key);
+  if (!scoped) {
+    scoped = new Set<Listener>();
+    map.set(key, scoped);
+  }
+  scoped.add(listener);
+  return () => {
+    const existing = map.get(key);
+    if (!existing) return;
+    existing.delete(listener);
+    if (existing.size === 0) {
+      map.delete(key);
+    }
+  };
+}
+
+function addScopedListenersToSet(
+  map: ScopedListenerMap,
+  keys: Iterable<number> | undefined,
+  target: Set<Listener>
+): void {
+  if (!keys) return;
+  for (const key of keys) {
+    const scoped = map.get(key);
+    if (!scoped) continue;
+    for (const listener of scoped) {
+      target.add(listener);
+    }
+  }
+}
+
+function addAllScopedListenersToSet(map: ScopedListenerMap, target: Set<Listener>): void {
+  for (const scoped of map.values()) {
+    for (const listener of scoped) {
+      target.add(listener);
+    }
+  }
+}
+
+function notifyScoped(scope: NotifyScope): void {
+  const targets = new Set<Listener>(listeners);
+  addScopedListenersToSet(paneListeners, scope.paneIds, targets);
+  addScopedListenersToSet(windowListeners, scope.windowIds, targets);
+  for (const listener of targets) {
+    listener();
+  }
+}
 
 function notify() {
-  listeners.forEach((fn) => fn());
+  const targets = new Set<Listener>(listeners);
+  addAllScopedListenersToSet(paneListeners, targets);
+  addAllScopedListenersToSet(windowListeners, targets);
+  for (const listener of targets) {
+    listener();
+  }
 }
 
 let notifyScheduled = false;
-function scheduleNotify() {
+let notifyAllScheduled = false;
+let scheduledPaneIds: Set<number> | null = null;
+let scheduledWindowIds: Set<number> | null = null;
+
+function scheduleNotify(scope?: NotifyScope) {
+  if (scope) {
+    if (scope.paneIds) {
+      if (!scheduledPaneIds) scheduledPaneIds = new Set<number>();
+      for (const paneId of scope.paneIds) {
+        scheduledPaneIds.add(paneId);
+      }
+    }
+    if (scope.windowIds) {
+      if (!scheduledWindowIds) scheduledWindowIds = new Set<number>();
+      for (const windowId of scope.windowIds) {
+        scheduledWindowIds.add(windowId);
+      }
+    }
+  } else {
+    notifyAllScheduled = true;
+  }
+
   if (notifyScheduled) return;
   notifyScheduled = true;
   queueMicrotask(() => {
     notifyScheduled = false;
+    if (notifyAllScheduled) {
+      notifyAllScheduled = false;
+      scheduledPaneIds = null;
+      scheduledWindowIds = null;
+      notify();
+      return;
+    }
+
+    const paneIds = scheduledPaneIds;
+    const windowIds = scheduledWindowIds;
+    scheduledPaneIds = null;
+    scheduledWindowIds = null;
+
+    if (
+      (paneIds && paneIds.size > 0) ||
+      (windowIds && windowIds.size > 0)
+    ) {
+      notifyScoped({
+        paneIds: paneIds ?? undefined,
+        windowIds: windowIds ?? undefined,
+      });
+      return;
+    }
+
     notify();
   });
 }
@@ -211,6 +317,14 @@ export function getStore(): Readonly<Store> {
 export function subscribe(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+export function subscribePane(paneId: number, listener: Listener): () => void {
+  return addScopedListener(paneListeners, paneId, listener);
+}
+
+export function subscribeWindow(windowId: number, listener: Listener): () => void {
+  return addScopedListener(windowListeners, windowId, listener);
 }
 
 export function getPane(paneId: number): PaneState | undefined {
@@ -264,7 +378,7 @@ export function setPaneSnapshot(
     };
   }
   if (notifyListeners) {
-    notify();
+    notifyScoped({ paneIds: [paneId] });
   }
 }
 
@@ -287,7 +401,7 @@ export function updatePaneSyncStats(
       pane.deltaGen = gen;
     }
     if (notifyListeners) {
-      notify();
+      notifyScoped({ paneIds: [paneId] });
     }
   }
 }
@@ -296,7 +410,7 @@ export function setPaneTitle(paneId: number, title: string) {
   const pane = store.panes.get(paneId);
   if (pane) {
     pane.title = title;
-    notify();
+    notifyScoped({ paneIds: [paneId] });
   }
 }
 
@@ -311,7 +425,7 @@ export function setPaneDimensions(
       return;
     }
     pane.dimensions = { cols, rows };
-    notify();
+    notifyScoped({ paneIds: [paneId] });
   }
 }
 
@@ -726,12 +840,12 @@ export function initConnection() {
 
   conn.on("snapshot", (snap) => {
     setPaneSnapshot(snap.paneId, snap, false);
-    scheduleNotify();
+    scheduleNotify({ paneIds: [snap.paneId] });
   });
 
   conn.on("delta", (delta) => {
     updatePaneSyncStats(delta.paneId, delta.gen, delta.changedRowIds, false);
-    scheduleNotify();
+    scheduleNotify({ paneIds: [delta.paneId] });
   });
 
   conn.on("title", (paneId, title) => {
