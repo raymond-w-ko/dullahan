@@ -3,7 +3,12 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { cellsToRuns, isCellInSelection } from "./cellRendering";
+import {
+  cellsRowToRuns,
+  cellsToRuns,
+  isCellInSelection,
+  prepareSelection,
+} from "./cellRendering";
 import { ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { StyleTable } from "../../../protocol/schema/style";
@@ -192,6 +197,40 @@ describe("cellsToRuns", () => {
     expect(lines.length).toBe(2);
     expect(lines[0]![0]!.text).toBe("中A");
     expect(lines[1]![0]!.text).toBe("B文");
+  });
+
+  test("row-relative rendering path supports prepared selection and hyperlinks", () => {
+    const cells = [makeCell(65), makeCell(66), makeCell(67)]; // ABC
+    cells[1]!.hyperlink = true;
+    const prepared = prepareSelection({
+      startX: 1,
+      startY: 0,
+      endX: 2,
+      endY: 0,
+      isRectangle: false,
+    });
+    const hyperlinks = new Map<number, string>([[1, "https://example.test"]]);
+
+    const runs = cellsRowToRuns(
+      cells,
+      emptyStyles,
+      3,
+      0,
+      prepared,
+      hyperlinks,
+      undefined,
+      0,
+      true
+    );
+
+    expect(runs.length).toBe(3);
+    expect(runs[0]?.text).toBe("A");
+    expect(runs[0]?.selected).toBe(false);
+    expect(runs[1]?.text).toBe("B");
+    expect(runs[1]?.selected).toBe(true);
+    expect(runs[1]?.hyperlink).toBe("https://example.test");
+    expect(runs[2]?.text).toBe("C");
+    expect(runs[2]?.selected).toBe(true);
   });
 });
 

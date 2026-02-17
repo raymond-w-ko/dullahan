@@ -31,7 +31,11 @@ import {
   setFocusedPane,
   toggleFullscreen,
 } from "../store";
-import { cellsRowToRuns, type StyledRun } from "../terminal/cellRendering";
+import {
+  cellsRowToRuns,
+  prepareSelection,
+  type StyledRun,
+} from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
 import { SCROLL } from "../constants";
 import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
@@ -255,7 +259,7 @@ export function TerminalView({
   deltaChangedRowIds,
   deltaGen,
 }: TerminalViewProps) {
-  const { cols, rows, cursor, cells, styles } = snapshot;
+  const { cols, rows, cursor, styles } = snapshot;
   const terminalRef = useRef<HTMLPreElement>(null);
   const keyboardRef = useRef<KeyboardHandler | null>(null);
   const imeRef = useRef<IMEHandler | null>(null);
@@ -523,6 +527,13 @@ export function TerminalView({
     // Use a stable lookup closure that always reads from the latest snapshot ref.
     mouse.setHyperlinkLookup((x: number, y: number) => {
       const currentSnapshot = snapshotRef.current;
+      const row = currentSnapshot.viewportRows?.[y];
+      if (row) {
+        return row.hyperlinks?.get(x);
+      }
+      if (currentSnapshot.viewportRows) {
+        return undefined;
+      }
       const idx = y * currentSnapshot.cols + x;
       return currentSnapshot.hyperlinks.get(idx);
     });
@@ -653,6 +664,7 @@ export function TerminalView({
     }
 
     const selection = snapshot.selection;
+    const preparedSelection = prepareSelection(selection);
     const selectionPresent = selection !== undefined;
     const selectionStartX = selection?.startX ?? 0;
     const selectionStartY = selection?.startY ?? 0;
@@ -687,15 +699,32 @@ export function TerminalView({
       }
 
       if (!runs) {
-        runs = cellsRowToRuns(
-          cells,
-          styles,
-          cols,
-          y,
-          snapshot.selection,
-          snapshot.hyperlinks,
-          snapshot.graphemes
-        );
+        const rowView = snapshot.viewportRows?.[y];
+        if (rowView) {
+          runs = cellsRowToRuns(
+            rowView.cells,
+            styles,
+            cols,
+            y,
+            preparedSelection,
+            rowView.hyperlinks,
+            rowView.graphemes,
+            rowView.offset,
+            true
+          );
+        } else if (snapshot.viewportRows) {
+          runs = cellsRowToRuns([], styles, cols, y, preparedSelection);
+        } else {
+          runs = cellsRowToRuns(
+            snapshot.cells,
+            styles,
+            cols,
+            y,
+            preparedSelection,
+            snapshot.hyperlinks,
+            snapshot.graphemes
+          );
+        }
 
         if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
           cache.set(rowId, {
@@ -736,15 +765,13 @@ export function TerminalView({
     return nextLines;
   }, [
     paneId,
-    cells,
     styles,
     cols,
     rows,
     snapshot.altScreen,
     snapshot.rowIds,
+    snapshot.viewportRows,
     snapshot.selection,
-    snapshot.hyperlinks,
-    snapshot.graphemes,
     theme,
     deltaChangedRowIds,
     deltaGen,

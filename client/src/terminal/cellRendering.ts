@@ -28,6 +28,11 @@ export interface StyledRun {
   singleRanges?: WideCharRange[]; // Ranges of single-cell private-use characters within text
 }
 
+export interface PreparedSelection extends SelectionBounds {
+  minX: number;
+  maxX: number;
+}
+
 function isPrivateUseCodePoint(cp: number): boolean {
   // Private Use Areas:
   // - BMP:      U+E000..U+F8FF
@@ -179,15 +184,35 @@ export function isCellInSelection(
   y: number,
   selection: SelectionBounds
 ): boolean {
-  // Normalize so start is before end
-  const { startX, startY, endX, endY, isRectangle } =
-    normalizeSelectionBounds(selection);
+  const prepared = prepareSelection(selection);
+  if (!prepared) {
+    return false;
+  }
+  return isCellInPreparedSelection(x, y, prepared);
+}
 
+export function prepareSelection(
+  selection?: SelectionBounds
+): PreparedSelection | undefined {
+  if (!selection) return undefined;
+  // Normalize so start is before end
+  const normalized = normalizeSelectionBounds(selection);
+  return {
+    ...normalized,
+    minX: Math.min(normalized.startX, normalized.endX),
+    maxX: Math.max(normalized.startX, normalized.endX),
+  };
+}
+
+function isCellInPreparedSelection(
+  x: number,
+  y: number,
+  selection: PreparedSelection
+): boolean {
+  const { startX, startY, endX, endY, isRectangle, minX, maxX } = selection;
   if (isRectangle) {
     // Rectangle selection: cell is in if x is between startX/endX
     // and y is between startY/endY
-    const minX = Math.min(startX, endX);
-    const maxX = Math.max(startX, endX);
     return y >= startY && y <= endY && x >= minX && x <= maxX;
   } else {
     // Normal (line) selection
@@ -222,21 +247,31 @@ export function cellsRowToRuns(
   styles: StyleTable,
   cols: number,
   y: number,
-  selection?: SelectionBounds,
+  selection?: SelectionBounds | PreparedSelection,
   hyperlinks?: HyperlinkTable,
-  graphemes?: GraphemeTable
+  graphemes?: GraphemeTable,
+  rowOffset?: number,
+  rowRelativeTables: boolean = false
 ): StyledRun[] {
   const runs: StyledRun[] = [];
   let currentRun: StyledRun | null = null;
   let skipNext = false;
+  const preparedSelection =
+    selection === undefined
+      ? undefined
+      : "minX" in selection && "maxX" in selection
+        ? selection
+        : prepareSelection(selection);
+  const baseOffset = rowOffset ?? y * cols;
 
   for (let x = 0; x < cols; x++) {
     if (skipNext) {
       skipNext = false;
       continue;
     }
-    const idx = y * cols + x;
+    const idx = baseOffset + x;
     const cell = cells[idx];
+    const tableIndex = rowRelativeTables ? x : idx;
 
     // Skip spacer tails (second half of wide characters)
     // Spacer heads indicate a wrapped wide char on the next line and should
@@ -250,13 +285,15 @@ export function cellsRowToRuns(
       skipNext = true;
     }
 
-    const char = cell ? cellToChar(cell, graphemes, idx) : " ";
+    const char = cell ? cellToChar(cell, graphemes, tableIndex) : " ";
     const styleId = cell?.styleId ?? 0;
-    const selected = selection ? isCellInSelection(x, y, selection) : false;
+    const selected = preparedSelection
+      ? isCellInPreparedSelection(x, y, preparedSelection)
+      : false;
     // Extract content-based bg color (for bg-only cells like htop headers)
     const bgOverride = cell ? getCellContentBgColor(cell) : undefined;
     // Get hyperlink URL if this cell is part of a hyperlink
-    const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(idx) : undefined;
+    const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(tableIndex) : undefined;
 
     // Check if this is a wide character, or a private-use glyph that should
     // be constrained to a single cell (e.g. Nerd Font icons).

@@ -184,7 +184,17 @@ export interface TerminalSnapshot {
   rowIds: bigint[]; // Stable row IDs for delta sync (one per row)
   graphemes: GraphemeTable; // Grapheme data for multi-codepoint characters
   hyperlinks: HyperlinkTable; // Hyperlink data for OSC 8 links
+  viewportRows?: Array<TerminalViewportRow | null>; // Row-oriented data for render hot path
   selection?: SelectionBounds; // Current selection (if any)
+}
+
+export interface TerminalViewportRow {
+  rowId: bigint;
+  cells: Cell[];
+  offset: number;
+  length: number;
+  graphemes?: GraphemeTable; // Row-relative indices
+  hyperlinks?: HyperlinkTable; // Row-relative indices
 }
 
 /** A cached row with LRU tracking */
@@ -249,6 +259,95 @@ function groupCellTableByRow<T>(
     row.set(x, value);
   }
   return grouped;
+}
+
+function emptyCell(): Cell {
+  return {
+    content: { tag: 0, codepoint: 32 }, // space
+    styleId: 0,
+    wide: 0,
+    protected: false,
+    hyperlink: false,
+  };
+}
+
+function materializeCellsFromViewportRows(
+  viewportRows: Array<TerminalViewportRow | null>,
+  cols: number
+): Cell[] {
+  const cells: Cell[] = [];
+  for (const row of viewportRows) {
+    if (!row) {
+      for (let x = 0; x < cols; x++) {
+        cells.push(emptyCell());
+      }
+      continue;
+    }
+    for (let x = 0; x < cols; x++) {
+      const cell = row.cells[row.offset + x];
+      cells.push(cell ?? emptyCell());
+    }
+  }
+  return cells;
+}
+
+function materializeTableFromViewportRows<T>(
+  viewportRows: Array<TerminalViewportRow | null>,
+  cols: number,
+  select: (row: TerminalViewportRow) => Map<number, T> | undefined
+): Map<number, T> {
+  const table = new Map<number, T>();
+  for (let y = 0; y < viewportRows.length; y++) {
+    const row = viewportRows[y];
+    if (!row) continue;
+    const rowTable = select(row);
+    if (!rowTable) continue;
+    const rowStart = y * cols;
+    for (const [x, value] of rowTable) {
+      table.set(rowStart + x, value);
+    }
+  }
+  return table;
+}
+
+function createLazyViewportSnapshot(
+  base: Omit<TerminalSnapshot, "cells" | "graphemes" | "hyperlinks"> & {
+    viewportRows: Array<TerminalViewportRow | null>;
+  }
+): TerminalSnapshot {
+  let cellsCache: Cell[] | null = null;
+  let graphemesCache: GraphemeTable | null = null;
+  let hyperlinksCache: HyperlinkTable | null = null;
+
+  return {
+    ...base,
+    get cells(): Cell[] {
+      if (!cellsCache) {
+        cellsCache = materializeCellsFromViewportRows(base.viewportRows, base.cols);
+      }
+      return cellsCache;
+    },
+    get graphemes(): GraphemeTable {
+      if (!graphemesCache) {
+        graphemesCache = materializeTableFromViewportRows(
+          base.viewportRows,
+          base.cols,
+          (row) => row.graphemes
+        );
+      }
+      return graphemesCache;
+    },
+    get hyperlinks(): HyperlinkTable {
+      if (!hyperlinksCache) {
+        hyperlinksCache = materializeTableFromViewportRows(
+          base.viewportRows,
+          base.cols,
+          (row) => row.hyperlinks
+        );
+      }
+      return hyperlinksCache;
+    },
+  };
 }
 
 function collectRowStyleIds(cells: Cell[], start: number = 0, end: number = cells.length): Set<number> {
@@ -721,7 +820,7 @@ export class TerminalConnection {
         const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
         const graphemesByRow = groupCellTableByRow(graphemes, msg.cols);
         const hyperlinksByRow = groupCellTableByRow(hyperlinks, msg.cols);
-
+        const viewportRows: Array<TerminalViewportRow | null> = new Array(msg.rows).fill(null);
         // Validate snapshot style table integrity before mutating pane state.
         const missingStyles = new Set<number>();
         for (const cell of cells) {
@@ -746,28 +845,6 @@ export class TerminalConnection {
           this.requestResync(paneId, "style_miss");
           return;
         }
-
-        const snapshot: TerminalSnapshot = {
-          paneId,
-          gen: msg.gen,
-          cols: msg.cols,
-          rows: msg.rows,
-          cursor: {
-            x: msg.cursor.x,
-            y: msg.cursor.y,
-            visible: msg.cursor.visible,
-            style: msg.cursor.style as "block" | "underline" | "bar",
-            blink: msg.cursor.blink ?? true, // Default to true (blinking) if not sent
-          },
-          altScreen: msg.altScreen,
-          scrollback: msg.scrollback,
-          cells,
-          styles,
-          rowIds,
-          graphemes,
-          hyperlinks,
-          selection: msg.selection,
-        };
 
         // Update pane state from snapshot
         paneState.generation = msg.gen;
@@ -811,9 +888,41 @@ export class TerminalConnection {
             if (rowHyperlinks && rowHyperlinks.size > 0) {
               paneState.rowHyperlinks.set(rowId, rowHyperlinks);
             }
+
+            viewportRows[y] = {
+              rowId,
+              cells,
+              offset: rowOffset,
+              length: msg.cols,
+              graphemes: rowGraphemes && rowGraphemes.size > 0 ? rowGraphemes : undefined,
+              hyperlinks: rowHyperlinks && rowHyperlinks.size > 0 ? rowHyperlinks : undefined,
+            };
           }
         }
         paneState.minRowId = minSeen >= 0n ? minSeen : null;
+
+        const snapshot: TerminalSnapshot = {
+          paneId,
+          gen: msg.gen,
+          cols: msg.cols,
+          rows: msg.rows,
+          cursor: {
+            x: msg.cursor.x,
+            y: msg.cursor.y,
+            visible: msg.cursor.visible,
+            style: msg.cursor.style as "block" | "underline" | "bar",
+            blink: msg.cursor.blink ?? true, // Default to true (blinking) if not sent
+          },
+          altScreen: msg.altScreen,
+          scrollback: msg.scrollback,
+          cells,
+          styles,
+          rowIds,
+          graphemes,
+          hyperlinks,
+          viewportRows,
+          selection: msg.selection,
+        };
 
         // Save for delta merging
         paneState.styleIdentity = styleIdentity;
@@ -1653,16 +1762,14 @@ export class TerminalConnection {
       return; // Don't emit corrupted snapshot
     }
 
-    // Build cells array, grapheme table, and hyperlink table from cache for current viewport.
-    // This requires knowing which row IDs are in the viewport
-    // INVALID_ROW_ID rows are rendered as empty rows without cache lookup.
-    const cells: Cell[] = [];
-    const graphemes: GraphemeTable = new Map();
-    const hyperlinks: HyperlinkTable = new Map();
+    // Build row-oriented viewport data from cache for render hot paths.
+    // INVALID_ROW_ID rows are represented as null and materialized lazily when
+    // flat cell tables are needed (e.g. selection copy).
+    const viewportRows: Array<TerminalViewportRow | null> = new Array(delta.rows).fill(null);
     const viewportTouched = new Set<bigint>();
     let fromCache = 0;
     let fromDelta = 0;
-    let filled = 0;
+    let emptyRows = 0;
     let cacheCorrupt = false;
     for (let y = 0; y < delta.rows; y++) {
       const rowId = rowIds[y];
@@ -1686,29 +1793,20 @@ export class TerminalConnection {
               cacheCorrupt = true;
               break;
             }
-            cells.push(cell);
           }
           if (cacheCorrupt) {
             break;
           }
-
-          const rowStart = y * delta.cols;
-
-          // Convert row-relative grapheme indices to global cell indices
           const rowGraphemes = pending?.graphemes ?? paneState.rowGraphemes.get(rowId);
-          if (rowGraphemes) {
-            for (const [colIndex, cps] of rowGraphemes) {
-              graphemes.set(rowStart + colIndex, cps);
-            }
-          }
-
-          // Convert row-relative hyperlink indices to global cell indices
           const rowHyperlinks = pending?.hyperlinks ?? paneState.rowHyperlinks.get(rowId);
-          if (rowHyperlinks) {
-            for (const [colIndex, url] of rowHyperlinks) {
-              hyperlinks.set(rowStart + colIndex, url);
-            }
-          }
+          viewportRows[y] = {
+            rowId,
+            cells: rowCells,
+            offset: rowOffset,
+            length: delta.cols,
+            graphemes: rowGraphemes && rowGraphemes.size > 0 ? rowGraphemes : undefined,
+            hyperlinks: rowHyperlinks && rowHyperlinks.size > 0 ? rowHyperlinks : undefined,
+          };
 
           if (pending) {
             fromDelta++;
@@ -1717,24 +1815,16 @@ export class TerminalConnection {
           }
           continue;
         }
+        cacheCorrupt = true;
+        break;
       }
-      // Fill with empty cells if row not in cache
-      filled++;
-      for (let x = 0; x < delta.cols; x++) {
-        cells.push({
-          content: { tag: 0, codepoint: 32 }, // space
-          styleId: 0,
-          wide: 0,
-          protected: false,
-          hyperlink: false,
-        });
-      }
+      emptyRows++;
     }
     if (cacheCorrupt) {
       this.requestResync(paneId, "corruption");
       return; // Don't emit corrupted snapshot
     }
-    deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${fromDelta} dirty + ${filled} empty rows, ${graphemes.size} graphemes`);
+    deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${fromDelta} dirty + ${emptyRows} empty rows`);
 
     // Copy-on-write style table merge: avoid cloning the entire map when this
     // delta introduced no new canonical styles.
@@ -1794,11 +1884,11 @@ export class TerminalConnection {
     paneState.generation = delta.gen;
 
     // Update last graphemes and hyperlinks for future merging
-    paneState.lastGraphemes = graphemes;
-    paneState.lastHyperlinks = hyperlinks;
+    paneState.lastGraphemes = null;
+    paneState.lastHyperlinks = null;
 
-    // Build merged snapshot
-    const snapshot: TerminalSnapshot = {
+    // Build merged snapshot (cells/graphemes/hyperlinks are lazily materialized).
+    const snapshot = createLazyViewportSnapshot({
       paneId,
       gen: delta.gen,
       cols: delta.cols,
@@ -1815,13 +1905,11 @@ export class TerminalConnection {
         totalRows: delta.vp.totalRows,
         viewportTop: delta.vp.viewportTop,
       },
-      cells,
       styles,
       rowIds,
-      graphemes,
-      hyperlinks,
+      viewportRows,
       selection: delta.selection,
-    };
+    });
     this.maybeFollowViewportTail(paneId, paneState, snapshot.scrollback, delta.rows);
 
     // Notify via onSnapshot (unified handler)
