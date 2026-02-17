@@ -44,7 +44,13 @@ const MAX_CACHED_ROW_RUNS = 800;
 
 interface RowRunsCacheEntry {
   runs: StyledRun[];
-  selectionKey: string;
+  selectionPresent: boolean;
+  selectionStartX: number;
+  selectionStartY: number;
+  selectionEndX: number;
+  selectionEndY: number;
+  selectionIsRectangle: boolean;
+  selectionRow: number;
   cols: number;
   lastAccess: number;
 }
@@ -112,9 +118,32 @@ function pushOldestRowRunsCandidate(
   heapSiftDownByLastAccess(heap, 0);
 }
 
-function selectionKeyForRow(selection: SelectionBounds | undefined, y: number): string {
-  if (!selection) return "none";
-  return `${selection.startX}:${selection.startY}:${selection.endX}:${selection.endY}:${selection.isRectangle ? 1 : 0}:${y}`;
+function rowSelectionMatches(
+  entry: RowRunsCacheEntry,
+  y: number,
+  selectionPresent: boolean,
+  selectionStartX: number,
+  selectionStartY: number,
+  selectionEndX: number,
+  selectionEndY: number,
+  selectionIsRectangle: boolean
+): boolean {
+  if (entry.selectionRow !== y) {
+    return false;
+  }
+
+  if (!selectionPresent) {
+    return !entry.selectionPresent;
+  }
+
+  return (
+    entry.selectionPresent &&
+    entry.selectionStartX === selectionStartX &&
+    entry.selectionStartY === selectionStartY &&
+    entry.selectionEndX === selectionEndX &&
+    entry.selectionEndY === selectionEndY &&
+    entry.selectionIsRectangle === selectionIsRectangle
+  );
 }
 
 const HIDDEN_CURSOR: CursorState = {
@@ -630,10 +659,17 @@ export function TerminalView({
       lastAppliedDeltaInvalidationGenRef.current = snapshot.gen;
     }
 
+    const selection = snapshot.selection;
+    const selectionPresent = selection !== undefined;
+    const selectionStartX = selection?.startX ?? 0;
+    const selectionStartY = selection?.startY ?? 0;
+    const selectionEndX = selection?.endX ?? 0;
+    const selectionEndY = selection?.endY ?? 0;
+    const selectionIsRectangle = selection?.isRectangle ?? false;
+
     const nextLines: StyledRun[][] = new Array(rows);
     for (let y = 0; y < rows; y++) {
       const rowId = snapshot.rowIds[y];
-      const selectionKey = selectionKeyForRow(snapshot.selection, y);
       let runs: StyledRun[] | undefined;
 
       if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
@@ -641,7 +677,16 @@ export function TerminalView({
         if (
           cached &&
           cached.cols === cols &&
-          cached.selectionKey === selectionKey
+          rowSelectionMatches(
+            cached,
+            y,
+            selectionPresent,
+            selectionStartX,
+            selectionStartY,
+            selectionEndX,
+            selectionEndY,
+            selectionIsRectangle
+          )
         ) {
           cached.lastAccess = ++rowRunsClockRef.current;
           runs = cached.runs;
@@ -663,7 +708,13 @@ export function TerminalView({
           cache.set(rowId, {
             runs,
             cols,
-            selectionKey,
+            selectionPresent,
+            selectionStartX,
+            selectionStartY,
+            selectionEndX,
+            selectionEndY,
+            selectionIsRectangle,
+            selectionRow: y,
             lastAccess: ++rowRunsClockRef.current,
           });
         }

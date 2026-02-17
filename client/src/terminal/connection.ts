@@ -227,6 +227,27 @@ interface RowEvictionCandidate {
   lastAccess: number;
 }
 
+function groupCellTableByRow<T>(
+  table: Map<number, T>,
+  cols: number
+): Map<number, Map<number, T>> {
+  const grouped = new Map<number, Map<number, T>>();
+  if (cols <= 0 || table.size === 0) {
+    return grouped;
+  }
+  for (const [cellIndex, value] of table) {
+    const y = Math.floor(cellIndex / cols);
+    const x = cellIndex - y * cols;
+    let row = grouped.get(y);
+    if (!row) {
+      row = new Map<number, T>();
+      grouped.set(y, row);
+    }
+    row.set(x, value);
+  }
+  return grouped;
+}
+
 function collectRowStyleIds(cells: Cell[]): Set<number> {
   const styleIds = new Set<number>();
   for (const cell of cells) {
@@ -406,11 +427,16 @@ export class TerminalConnection {
 
   // Outbound backpressure handling
   private _sendQueue: string[] = [];
+  private _sendQueueHead: number = 0;
   private _sendQueueBytes: number = 0;
   private _flushTimer: number | null = null;
+  private _inputCoalesceTimer: number | null = null;
+  private _pendingScrollByPane = new Map<number, number>();
+  private _pendingMouseMoveByPane = new Map<number, MouseMessage>();
   private static readonly MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
   private static readonly MAX_QUEUE_BYTES = 4 * 1024 * 1024;
   private static readonly FLUSH_INTERVAL_MS = 50;
+  private static readonly INPUT_COALESCE_MS = 16;
 
   // Event emitter for connection events
   private _emitter = new TypedEventEmitter<ConnectionEvents>();
@@ -599,6 +625,7 @@ export class TerminalConnection {
       this.stopPingTimer();
       // Drop any queued outbound messages
       this.clearSendQueue();
+      this.clearCoalescedInput();
       this.emit("disconnect");
       this.scheduleReconnect();
     };
@@ -684,6 +711,8 @@ export class TerminalConnection {
         const rowIds = decodeRowIds(msg.rowIds);
         const graphemes = msg.graphemes ? decodeGraphemes(msg.graphemes) : new Map();
         const hyperlinks = msg.hyperlinks ? decodeHyperlinks(msg.hyperlinks) : new Map();
+        const graphemesByRow = groupCellTableByRow(graphemes, msg.cols);
+        const hyperlinksByRow = groupCellTableByRow(hyperlinks, msg.cols);
 
         // Validate snapshot style table integrity before mutating pane state.
         const missingStyles = new Set<number>();
@@ -762,27 +791,14 @@ export class TerminalConnection {
               minSeen = rowId;
             }
 
-            // Extract per-row graphemes (convert global cell indices to row-relative)
-            const rowGraphemes: GraphemeTable = new Map();
-            const rowStart = y * msg.cols;
-            const rowEnd = rowStart + msg.cols;
-            for (const [cellIndex, cps] of graphemes) {
-              if (cellIndex >= rowStart && cellIndex < rowEnd) {
-                rowGraphemes.set(cellIndex - rowStart, cps);
-              }
-            }
-            if (rowGraphemes.size > 0) {
+            // Reuse pre-grouped row-relative grapheme/hyperlink maps.
+            const rowGraphemes = graphemesByRow.get(y);
+            if (rowGraphemes && rowGraphemes.size > 0) {
               paneState.rowGraphemes.set(rowId, rowGraphemes);
             }
 
-            // Extract per-row hyperlinks (convert global cell indices to row-relative)
-            const rowHyperlinks: HyperlinkTable = new Map();
-            for (const [cellIndex, url] of hyperlinks) {
-              if (cellIndex >= rowStart && cellIndex < rowEnd) {
-                rowHyperlinks.set(cellIndex - rowStart, url);
-              }
-            }
-            if (rowHyperlinks.size > 0) {
+            const rowHyperlinks = hyperlinksByRow.get(y);
+            if (rowHyperlinks && rowHyperlinks.size > 0) {
               paneState.rowHyperlinks.set(rowId, rowHyperlinks);
             }
           }
@@ -942,6 +958,7 @@ export class TerminalConnection {
   disconnect(): void {
     this.stopPingTimer();
     this.clearSendQueue();
+    this.clearCoalescedInput();
     this.clearPendingResyncs();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -963,6 +980,7 @@ export class TerminalConnection {
    */
   sendKey(message: KeyMessage): void {
     if (!this.isMaster) return;
+    this.flushCoalescedInput();
     this.send(message);
   }
 
@@ -972,6 +990,7 @@ export class TerminalConnection {
    */
   sendText(message: TextMessage): void {
     if (!this.isMaster) return;
+    this.flushCoalescedInput();
     this.send(message);
   }
 
@@ -981,6 +1000,11 @@ export class TerminalConnection {
    */
   sendMouse(message: MouseMessage): void {
     if (!this.isMaster) return;
+    if (message.state === "move") {
+      this.queueMouseMove(message);
+      return;
+    }
+    this.flushCoalescedInput();
     this.send(message);
   }
 
@@ -1101,6 +1125,60 @@ export class TerminalConnection {
     }
   }
 
+  private scheduleInputCoalesceFlush(): void {
+    if (this._inputCoalesceTimer !== null) {
+      return;
+    }
+    this._inputCoalesceTimer = window.setTimeout(() => {
+      this._inputCoalesceTimer = null;
+      this.flushCoalescedInput();
+    }, TerminalConnection.INPUT_COALESCE_MS);
+  }
+
+  private flushCoalescedInput(): void {
+    if (this._inputCoalesceTimer !== null) {
+      window.clearTimeout(this._inputCoalesceTimer);
+      this._inputCoalesceTimer = null;
+    }
+
+    if (!this.isMaster) {
+      this._pendingScrollByPane.clear();
+      this._pendingMouseMoveByPane.clear();
+      return;
+    }
+
+    if (this._pendingScrollByPane.size > 0) {
+      for (const [paneId, delta] of this._pendingScrollByPane) {
+        if (delta === 0) continue;
+        this.send({ type: "scroll", paneId, delta });
+      }
+      this._pendingScrollByPane.clear();
+    }
+
+    if (this._pendingMouseMoveByPane.size > 0) {
+      for (const message of this._pendingMouseMoveByPane.values()) {
+        this.send(message);
+      }
+      this._pendingMouseMoveByPane.clear();
+    }
+  }
+
+  private queueScroll(paneId: number, delta: number): void {
+    if (delta === 0) return;
+    const next = (this._pendingScrollByPane.get(paneId) ?? 0) + delta;
+    if (next === 0) {
+      this._pendingScrollByPane.delete(paneId);
+    } else {
+      this._pendingScrollByPane.set(paneId, next);
+    }
+    this.scheduleInputCoalesceFlush();
+  }
+
+  private queueMouseMove(message: MouseMessage): void {
+    this._pendingMouseMoveByPane.set(message.paneId, message);
+    this.scheduleInputCoalesceFlush();
+  }
+
   /**
    * Scroll the terminal viewport by delta rows.
    * Negative values scroll up (toward history), positive scroll down.
@@ -1115,7 +1193,7 @@ export class TerminalConnection {
       paneState.followTail = false;
       paneState.autoFollowInFlight = false;
     }
-    this.send({ type: "scroll", paneId, delta });
+    this.queueScroll(paneId, delta);
   }
 
   /**
@@ -1540,18 +1618,21 @@ export class TerminalConnection {
     }
     // Check which rowIds are in cache (excluding explicit invalid-row sentinels).
     // Rows staged in this delta are treated as cache hits.
-    const notInCache = rowIds.filter(id => {
+    let notInCache = 0;
+    for (const id of rowIds) {
       if (id === INVALID_ROW_ID) {
-        return false;
+        continue;
       }
       if (pendingRows.has(id)) {
-        return false;
+        continue;
       }
-      return !paneState.rowCache.has(id);
-    });
+      if (!paneState.rowCache.has(id)) {
+        notInCache += 1;
+      }
+    }
 
-    if (notInCache.length > 0) {
-      deltaLog.warn(`Pane ${paneId}: ${notInCache.length} rows missing from cache, requesting resync`);
+    if (notInCache > 0) {
+      deltaLog.warn(`Pane ${paneId}: ${notInCache} rows missing from cache, requesting resync`);
       this.requestResync(paneId, "cache_miss");
       return; // Don't emit corrupted snapshot
     }
@@ -1808,7 +1889,7 @@ export class TerminalConnection {
   private send(msg: ClientMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const payload = JSON.stringify(msg);
-      if (this._sendQueue.length > 0 || this.ws.bufferedAmount > TerminalConnection.MAX_BUFFERED_BYTES) {
+      if (this.hasQueuedSends() || this.ws.bufferedAmount > TerminalConnection.MAX_BUFFERED_BYTES) {
         this.enqueueSend(payload);
         return;
       }
@@ -1825,21 +1906,43 @@ export class TerminalConnection {
       this.ws?.close();
       return;
     }
+    if (this._sendQueueHead === this._sendQueue.length && this._sendQueueHead > 0) {
+      this._sendQueue.length = 0;
+      this._sendQueueHead = 0;
+    }
     this._sendQueue.push(payload);
     this._sendQueueBytes += payload.length;
     this.scheduleFlush();
+  }
+
+  private hasQueuedSends(): boolean {
+    return this._sendQueueHead < this._sendQueue.length;
+  }
+
+  private compactSendQueue(force: boolean = false): void {
+    const head = this._sendQueueHead;
+    if (head === 0) {
+      return;
+    }
+    if (!force && (head < 256 || head * 2 < this._sendQueue.length)) {
+      return;
+    }
+    this._sendQueue = this._sendQueue.slice(head);
+    this._sendQueueHead = 0;
   }
 
   private flushSendQueue(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
-    while (this._sendQueue.length > 0 && this.ws.bufferedAmount < TerminalConnection.MAX_BUFFERED_BYTES) {
-      const payload = this._sendQueue.shift()!;
+    while (this.hasQueuedSends() && this.ws.bufferedAmount < TerminalConnection.MAX_BUFFERED_BYTES) {
+      const payload = this._sendQueue[this._sendQueueHead]!;
+      this._sendQueueHead += 1;
       this._sendQueueBytes -= payload.length;
       this.ws.send(payload);
     }
-    if (this._sendQueue.length > 0) {
+    this.compactSendQueue();
+    if (this.hasQueuedSends()) {
       this.scheduleFlush();
     }
   }
@@ -1860,7 +1963,17 @@ export class TerminalConnection {
       this._flushTimer = null;
     }
     this._sendQueue.length = 0;
+    this._sendQueueHead = 0;
     this._sendQueueBytes = 0;
+  }
+
+  private clearCoalescedInput(): void {
+    if (this._inputCoalesceTimer !== null) {
+      window.clearTimeout(this._inputCoalesceTimer);
+      this._inputCoalesceTimer = null;
+    }
+    this._pendingScrollByPane.clear();
+    this._pendingMouseMoveByPane.clear();
   }
 
   get isConnected(): boolean {

@@ -73,6 +73,10 @@ interface PositionedSegment extends LineSegment {
   endCell: number;
 }
 
+// Cache line segmentation by runs identity and column count so cursor-only
+// updates can reuse prior segment computation.
+const lineSegmentsCache = new WeakMap<StyledRun[], Map<number, PositionedSegment[]>>();
+
 function countCodepoints(text: string): number {
   let count = 0;
   for (const _ of text) {
@@ -263,6 +267,23 @@ function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[]
   return segments;
 }
 
+function getLineSegments(runs: StyledRun[], cols: number): PositionedSegment[] {
+  let byCols = lineSegmentsCache.get(runs);
+  if (!byCols) {
+    byCols = new Map<number, PositionedSegment[]>();
+    lineSegmentsCache.set(runs, byCols);
+  }
+
+  const cached = byCols.get(cols);
+  if (cached) {
+    return cached;
+  }
+
+  const built = buildLineSegments(runs, cols);
+  byCols.set(cols, built);
+  return built;
+}
+
 /** Get inline style for a run, including bgOverride RGB colors */
 function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
   const baseStyle = styleToInlineCached(run.styleId, run.style);
@@ -291,7 +312,7 @@ export function renderLine(
   isActive: boolean,
   cols: number
 ): preact.JSX.Element {
-  const segments = buildLineSegments(runs, cols);
+  const segments = getLineSegments(runs, cols);
   // Determine if cursor should blink:
   // - '' (auto): use server's DEC Mode 12 state (cursor.blink)
   // - 'true': always blink (override server)
