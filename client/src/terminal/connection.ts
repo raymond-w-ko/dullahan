@@ -222,6 +222,11 @@ interface PendingResync {
   timer: number | null;
 }
 
+interface RowEvictionCandidate {
+  rowId: bigint;
+  lastAccess: number;
+}
+
 function collectRowStyleIds(cells: Cell[]): Set<number> {
   const styleIds = new Set<number>();
   for (const cell of cells) {
@@ -247,6 +252,64 @@ function decrementStyleUsage(usage: Map<number, number>, styleIds: Set<number>):
       usage.set(styleId, next);
     }
   }
+}
+
+function heapSiftUpByLastAccess(heap: RowEvictionCandidate[], index: number): void {
+  let i = index;
+  while (i > 0) {
+    const parent = (i - 1) >> 1;
+    if (heap[parent]!.lastAccess >= heap[i]!.lastAccess) {
+      break;
+    }
+    const tmp = heap[parent]!;
+    heap[parent] = heap[i]!;
+    heap[i] = tmp;
+    i = parent;
+  }
+}
+
+function heapSiftDownByLastAccess(heap: RowEvictionCandidate[], index: number): void {
+  let i = index;
+  const n = heap.length;
+  while (true) {
+    const left = i * 2 + 1;
+    const right = left + 1;
+    let largest = i;
+
+    if (left < n && heap[left]!.lastAccess > heap[largest]!.lastAccess) {
+      largest = left;
+    }
+    if (right < n && heap[right]!.lastAccess > heap[largest]!.lastAccess) {
+      largest = right;
+    }
+    if (largest === i) {
+      break;
+    }
+    const tmp = heap[largest]!;
+    heap[largest] = heap[i]!;
+    heap[i] = tmp;
+    i = largest;
+  }
+}
+
+function pushOldestCandidate(
+  heap: RowEvictionCandidate[],
+  candidate: RowEvictionCandidate,
+  maxSize: number
+): void {
+  if (maxSize <= 0) {
+    return;
+  }
+  if (heap.length < maxSize) {
+    heap.push(candidate);
+    heapSiftUpByLastAccess(heap, heap.length - 1);
+    return;
+  }
+  if (candidate.lastAccess >= heap[0]!.lastAccess) {
+    return;
+  }
+  heap[0] = candidate;
+  heapSiftDownByLastAccess(heap, 0);
 }
 
 /** Storage key for client ID */
@@ -334,8 +397,12 @@ export class TerminalConnection {
   private _pingTimer: number | null = null;
   private _latencySamples: number[] = [];
   private _latency: number = 0;
-  private static readonly PING_INTERVAL_MS = 250;
+  private _lastEmittedLatency: number | null = null;
+  private _lastLatencyEmitTs: number = 0;
+  private static readonly PING_INTERVAL_MS = 750;
   private static readonly LATENCY_SAMPLE_COUNT = 8;
+  private static readonly LATENCY_EMIT_MIN_DELTA_MS = 2;
+  private static readonly LATENCY_EMIT_MAX_SILENCE_MS = 3000;
 
   // Outbound backpressure handling
   private _sendQueue: string[] = [];
@@ -1195,6 +1262,8 @@ export class TerminalConnection {
     this.stopPingTimer();
     this._latencySamples = [];
     this._latency = 0;
+    this._lastEmittedLatency = null;
+    this._lastLatencyEmitTs = 0;
     this._pingTimer = window.setInterval(() => {
       this.sendPing();
     }, TerminalConnection.PING_INTERVAL_MS);
@@ -1223,9 +1292,21 @@ export class TerminalConnection {
 
     // Calculate average
     const sum = this._latencySamples.reduce((a, b) => a + b, 0);
-    this._latency = Math.round(sum / this._latencySamples.length);
+    const averaged = Math.round(sum / this._latencySamples.length);
+    this._latency = averaged;
 
-    this.emit("latency", this._latency);
+    const previous = this._lastEmittedLatency;
+    const delta = previous === null ? Infinity : Math.abs(averaged - previous);
+    const changedEnough = delta >= TerminalConnection.LATENCY_EMIT_MIN_DELTA_MS;
+    const elapsed = now - this._lastLatencyEmitTs;
+    const stale = elapsed >= TerminalConnection.LATENCY_EMIT_MAX_SILENCE_MS;
+    if (!changedEnough && !stale) {
+      return;
+    }
+
+    this._lastEmittedLatency = averaged;
+    this._lastLatencyEmitTs = now;
+    this.emit("latency", averaged);
   }
 
   /**
@@ -1649,22 +1730,17 @@ export class TerminalConnection {
     // Evict oldest accessed rows first, but never evict current viewport rows
     const MAX_CACHED_ROWS = 500;
     if (paneState.rowCache.size > MAX_CACHED_ROWS) {
+      const toEvict = paneState.rowCache.size - MAX_CACHED_ROWS;
       const viewportRowIdSet = new Set(rowIds);
-
-      // Score each cached row by age (older = higher score = evict first)
-      const scored: Array<[bigint, number]> = [];
+      const oldestCandidates: RowEvictionCandidate[] = [];
       for (const [rowId, cached] of paneState.rowCache) {
         if (viewportRowIdSet.has(rowId)) continue; // Never evict viewport rows
-        scored.push([rowId, now - cached.lastAccess]);
+        pushOldestCandidate(oldestCandidates, { rowId, lastAccess: cached.lastAccess }, toEvict);
       }
 
-      // Sort by score descending (oldest access first)
-      scored.sort((a, b) => b[1] - a[1]);
-
-      // Evict oldest until under limit
-      const toEvict = paneState.rowCache.size - MAX_CACHED_ROWS;
-      for (let i = 0; i < toEvict && i < scored.length; i++) {
-        const [rowId] = scored[i]!;
+      // Evict selected oldest rows (unordered candidate set).
+      for (const candidate of oldestCandidates) {
+        const rowId = candidate.rowId;
         const cached = paneState.rowCache.get(rowId);
         if (cached) {
           decrementStyleUsage(paneState.styleUsage, cached.styleIds);
@@ -1683,7 +1759,7 @@ export class TerminalConnection {
       }
       paneState.minRowId = newMinRowId;
 
-      deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${Math.min(toEvict, scored.length)} oldest, minRowId=${newMinRowId})`);
+      deltaLog.log(`Pane ${paneId}: LRU pruned cache to ${paneState.rowCache.size} rows (evicted ${oldestCandidates.length} oldest, minRowId=${newMinRowId})`);
     }
 
     // Prune unused styles to prevent unbounded growth.
