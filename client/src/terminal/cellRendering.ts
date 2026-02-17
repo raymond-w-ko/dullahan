@@ -92,6 +92,45 @@ function isForcedSingleCodepoint(cp: number): boolean {
   return forcedSingleCodepoints.has(cp);
 }
 
+function isFastPathCell(cell: Cell | undefined): boolean {
+  if (!cell) return true;
+  if (cell.wide !== Wide.NARROW) return false;
+  if (cell.hyperlink) return false;
+  if (cell.content.tag !== ContentTag.CODEPOINT) return false;
+  if (cell.content.codepoint === 0) return true;
+  const cp = cell.content.codepoint;
+  return !isSymbolLikeCodepoint(cp) && !isForcedSingleCodepoint(cp);
+}
+
+function tryBuildFastPathRuns(
+  cells: Cell[],
+  styles: StyleTable,
+  cols: number,
+  baseOffset: number
+): StyledRun[] | null {
+  const runs: StyledRun[] = [];
+  let currentRun: StyledRun | null = null;
+
+  for (let x = 0; x < cols; x++) {
+    const idx = baseOffset + x;
+    const cell = cells[idx];
+    if (!isFastPathCell(cell)) {
+      return null;
+    }
+    const char = cell ? cellToChar(cell, undefined, idx) : " ";
+    const styleId = cell?.styleId ?? 0;
+    if (currentRun && currentRun.styleId === styleId) {
+      currentRun.text += char;
+      continue;
+    }
+    const style = getStyle(styles, styleId);
+    currentRun = { text: char, styleId, style };
+    runs.push(currentRun);
+  }
+
+  return runs;
+}
+
 function shouldExpandSymbol(
   cells: Cell[],
   idx: number,
@@ -264,6 +303,15 @@ export function cellsRowToRuns(
         : prepareSelection(selection);
   const baseOffset = rowOffset ?? y * cols;
 
+  // Fast path: plain rows with no selection/link/grapheme metadata and no
+  // wide/symbol handling can be converted with minimal branching/allocation.
+  if (!preparedSelection && !hyperlinks && !graphemes) {
+    const fastRuns = tryBuildFastPathRuns(cells, styles, cols, baseOffset);
+    if (fastRuns) {
+      return fastRuns;
+    }
+  }
+
   for (let x = 0; x < cols; x++) {
     if (skipNext) {
       skipNext = false;
@@ -353,9 +401,10 @@ export function cellsToRuns(
   graphemes?: GraphemeTable
 ): StyledRun[][] {
   const lines: StyledRun[][] = [];
+  const preparedSelection = prepareSelection(selection);
 
   for (let y = 0; y < rows; y++) {
-    lines.push(cellsRowToRuns(cells, styles, cols, y, selection, hyperlinks, graphemes));
+    lines.push(cellsRowToRuns(cells, styles, cols, y, preparedSelection, hyperlinks, graphemes));
   }
 
   return lines;

@@ -33,6 +33,7 @@ import {
 } from "../store";
 import {
   cellsRowToRuns,
+  type PreparedSelection,
   prepareSelection,
   type StyledRun,
 } from "../terminal/cellRendering";
@@ -48,13 +49,7 @@ const MAX_CACHED_ROW_RUNS = 800;
 
 interface RowRunsCacheEntry {
   runs: StyledRun[];
-  selectionPresent: boolean;
-  selectionStartX: number;
-  selectionStartY: number;
-  selectionEndX: number;
-  selectionEndY: number;
-  selectionIsRectangle: boolean;
-  selectionRow: number;
+  selectionKey: string;
   cols: number;
   lastAccess: number;
 }
@@ -122,32 +117,31 @@ function pushOldestRowRunsCandidate(
   heapSiftDownByLastAccess(heap, 0);
 }
 
-function rowSelectionMatches(
-  entry: RowRunsCacheEntry,
+function getRowSelectionKey(
   y: number,
-  selectionPresent: boolean,
-  selectionStartX: number,
-  selectionStartY: number,
-  selectionEndX: number,
-  selectionEndY: number,
-  selectionIsRectangle: boolean
-): boolean {
-  if (entry.selectionRow !== y) {
-    return false;
+  cols: number,
+  selection: PreparedSelection | undefined
+): string {
+  if (!selection) {
+    return "n";
   }
-
-  if (!selectionPresent) {
-    return !entry.selectionPresent;
+  const { startX, startY, endX, endY, isRectangle, minX, maxX } = selection;
+  if (y < startY || y > endY) {
+    return "n";
   }
-
-  return (
-    entry.selectionPresent &&
-    entry.selectionStartX === selectionStartX &&
-    entry.selectionStartY === selectionStartY &&
-    entry.selectionEndX === selectionEndX &&
-    entry.selectionEndY === selectionEndY &&
-    entry.selectionIsRectangle === selectionIsRectangle
-  );
+  if (isRectangle) {
+    return `r:${minX}:${maxX}`;
+  }
+  if (startY === endY) {
+    return `l:${startX}:${endX}`;
+  }
+  if (y === startY) {
+    return `l:${startX}:${cols - 1}`;
+  }
+  if (y === endY) {
+    return `l:0:${endX}`;
+  }
+  return `l:0:${cols - 1}`;
 }
 
 const HIDDEN_CURSOR: CursorState = {
@@ -665,34 +659,16 @@ export function TerminalView({
 
     const selection = snapshot.selection;
     const preparedSelection = prepareSelection(selection);
-    const selectionPresent = selection !== undefined;
-    const selectionStartX = selection?.startX ?? 0;
-    const selectionStartY = selection?.startY ?? 0;
-    const selectionEndX = selection?.endX ?? 0;
-    const selectionEndY = selection?.endY ?? 0;
-    const selectionIsRectangle = selection?.isRectangle ?? false;
 
     const nextLines: StyledRun[][] = new Array(rows);
     for (let y = 0; y < rows; y++) {
       const rowId = snapshot.rowIds[y];
+      const selectionKey = getRowSelectionKey(y, cols, preparedSelection);
       let runs: StyledRun[] | undefined;
 
       if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
         const cached = cache.get(rowId);
-        if (
-          cached &&
-          cached.cols === cols &&
-          rowSelectionMatches(
-            cached,
-            y,
-            selectionPresent,
-            selectionStartX,
-            selectionStartY,
-            selectionEndX,
-            selectionEndY,
-            selectionIsRectangle
-          )
-        ) {
+        if (cached && cached.cols === cols && cached.selectionKey === selectionKey) {
           cached.lastAccess = ++rowRunsClockRef.current;
           runs = cached.runs;
         }
@@ -730,13 +706,7 @@ export function TerminalView({
           cache.set(rowId, {
             runs,
             cols,
-            selectionPresent,
-            selectionStartX,
-            selectionStartY,
-            selectionEndX,
-            selectionEndY,
-            selectionIsRectangle,
-            selectionRow: y,
+            selectionKey,
             lastAccess: ++rowRunsClockRef.current,
           });
         }
