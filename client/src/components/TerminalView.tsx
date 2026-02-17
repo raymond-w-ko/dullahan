@@ -59,6 +59,14 @@ interface RowRunsEvictionCandidate {
   lastAccess: number;
 }
 
+interface LineRenderState {
+  lines: StyledRun[][];
+  rowIds: Array<bigint | null>;
+  selectionKeys: string[];
+  rows: number;
+  hasViewportRows: boolean;
+}
+
 function heapSiftUpByLastAccess(heap: RowRunsEvictionCandidate[], index: number): void {
   let i = index;
   while (i > 0) {
@@ -142,6 +150,13 @@ function getRowSelectionKey(
     return `l:0:${endX}`;
   }
   return `l:0:${cols - 1}`;
+}
+
+function getStableRowId(rowId: bigint | undefined): bigint | null {
+  if (rowId === undefined || rowId === INVALID_ROW_ID) {
+    return null;
+  }
+  return rowId;
 }
 
 const HIDDEN_CURSOR: CursorState = {
@@ -262,6 +277,13 @@ export function TerminalView({
   const rowRunsClockRef = useRef(0);
   const lastRenderedGenRef = useRef<number | null>(null);
   const lastAppliedDeltaInvalidationGenRef = useRef<number | null>(null);
+  const lineRenderStateRef = useRef<LineRenderState>({
+    lines: [],
+    rowIds: [],
+    selectionKeys: [],
+    rows: 0,
+    hasViewportRows: false,
+  });
   const cacheContextRef = useRef({
     paneId,
     cols,
@@ -625,6 +647,10 @@ export function TerminalView({
   const lines = useMemo(() => {
     const cache = rowRunsCacheRef.current;
     const context = cacheContextRef.current;
+    const lineState = lineRenderStateRef.current;
+    const hasViewportRows = snapshot.viewportRows !== undefined;
+    let forceFullRecompute = false;
+
     if (
       context.paneId !== paneId ||
       context.cols !== cols ||
@@ -638,6 +664,7 @@ export function TerminalView({
         altScreen: snapshot.altScreen,
         theme,
       };
+      forceFullRecompute = true;
     }
 
     // If generation changed and we don't yet have matching dirty row metadata
@@ -645,6 +672,7 @@ export function TerminalView({
     if (lastRenderedGenRef.current !== snapshot.gen && deltaGen !== snapshot.gen) {
       cache.clear();
       lastAppliedDeltaInvalidationGenRef.current = null;
+      forceFullRecompute = true;
     }
 
     if (
@@ -657,17 +685,65 @@ export function TerminalView({
       lastAppliedDeltaInvalidationGenRef.current = snapshot.gen;
     }
 
-    const selection = snapshot.selection;
-    const preparedSelection = prepareSelection(selection);
+    if (lineState.rows !== rows || lineState.hasViewportRows !== hasViewportRows) {
+      forceFullRecompute = true;
+    }
 
-    const nextLines: StyledRun[][] = new Array(rows);
+    let nextLines = lineState.lines;
+    let nextRowIds = lineState.rowIds;
+    let nextSelectionKeys = lineState.selectionKeys;
+
+    if (nextLines.length !== rows) {
+      nextLines = new Array(rows);
+      forceFullRecompute = true;
+    }
+    if (nextRowIds.length !== rows) {
+      nextRowIds = new Array(rows);
+      forceFullRecompute = true;
+    }
+    if (nextSelectionKeys.length !== rows) {
+      nextSelectionKeys = new Array(rows);
+      forceFullRecompute = true;
+    }
+
+    const preparedSelection = prepareSelection(snapshot.selection);
+    const changedRowIdSet =
+      deltaGen === snapshot.gen && deltaChangedRowIds.length > 0
+        ? new Set(deltaChangedRowIds)
+        : null;
+    const rowsToRecompute: number[] = [];
+
+    // Identify only rows that need fresh run generation and preserve previous
+    // run arrays for untouched rows.
     for (let y = 0; y < rows; y++) {
-      const rowId = snapshot.rowIds[y];
+      const stableRowId = getStableRowId(snapshot.rowIds[y]);
       const selectionKey = getRowSelectionKey(y, cols, preparedSelection);
+      const changedByDelta =
+        changedRowIdSet !== null &&
+        stableRowId !== null &&
+        changedRowIdSet.has(stableRowId);
+
+      if (
+        forceFullRecompute ||
+        nextLines[y] === undefined ||
+        nextRowIds[y] !== stableRowId ||
+        nextSelectionKeys[y] !== selectionKey ||
+        changedByDelta
+      ) {
+        rowsToRecompute.push(y);
+      }
+
+      nextRowIds[y] = stableRowId;
+      nextSelectionKeys[y] = selectionKey;
+    }
+
+    for (const y of rowsToRecompute) {
+      const stableRowId = nextRowIds[y] ?? null;
+      const selectionKey = nextSelectionKeys[y]!;
       let runs: StyledRun[] | undefined;
 
-      if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
-        const cached = cache.get(rowId);
+      if (stableRowId !== null) {
+        const cached = cache.get(stableRowId);
         if (cached && cached.cols === cols && cached.selectionKey === selectionKey) {
           cached.lastAccess = ++rowRunsClockRef.current;
           runs = cached.runs;
@@ -702,8 +778,8 @@ export function TerminalView({
           );
         }
 
-        if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
-          cache.set(rowId, {
+        if (stableRowId !== null) {
+          cache.set(stableRowId, {
             runs,
             cols,
             selectionKey,
@@ -731,8 +807,15 @@ export function TerminalView({
     }
 
     lastRenderedGenRef.current = snapshot.gen;
+    lineRenderStateRef.current = {
+      lines: nextLines,
+      rowIds: nextRowIds,
+      selectionKeys: nextSelectionKeys,
+      rows,
+      hasViewportRows,
+    };
 
-    return nextLines;
+    return lineRenderStateRef.current.lines;
   }, [
     paneId,
     styles,
