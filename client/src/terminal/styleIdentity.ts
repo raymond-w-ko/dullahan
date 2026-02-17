@@ -1,36 +1,90 @@
 import type { Cell } from "../../../protocol/schema/cell";
-import { DEFAULT_STYLE, encodeStyle } from "../../../protocol/schema/style";
+import { DEFAULT_STYLE, encodeFlags } from "../../../protocol/schema/style";
 import type { Style, StyleTable } from "../../../protocol/schema/style";
+
+interface StyleIdentityEntry {
+  canonicalId: number;
+  style: Style;
+}
 
 export interface StyleIdentityState {
   nextStyleId: number;
-  keyToId: Map<string, number>;
-  idToKey: Map<number, string>;
+  hashToEntries: Map<number, StyleIdentityEntry[]>;
+  idToHash: Map<number, number>;
 }
 
 export function createStyleIdentityState(): StyleIdentityState {
   return {
     nextStyleId: 1,
-    keyToId: new Map(),
-    idToKey: new Map(),
+    hashToEntries: new Map(),
+    idToHash: new Map(),
   };
 }
 
 export function cloneStyleIdentityState(state: StyleIdentityState): StyleIdentityState {
+  const hashToEntries = new Map<number, StyleIdentityEntry[]>();
+  for (const [hash, entries] of state.hashToEntries) {
+    hashToEntries.set(hash, entries.slice());
+  }
   return {
     nextStyleId: state.nextStyleId,
-    keyToId: new Map(state.keyToId),
-    idToKey: new Map(state.idToKey),
+    hashToEntries,
+    idToHash: new Map(state.idToHash),
   };
 }
 
-export function styleFingerprint(style: Style): string {
-  const bytes = encodeStyle(style);
-  let out = "";
-  for (const b of bytes) {
-    out += b.toString(16).padStart(2, "0");
+function hashStep(hash: number, byte: number): number {
+  return Math.imul((hash ^ (byte & 0xff)) >>> 0, 0x01000193) >>> 0;
+}
+
+function hashColor(hash: number, color: Style["fgColor"]): number {
+  let next = hashStep(hash, color.tag);
+  if (color.tag === 1) {
+    next = hashStep(next, color.index);
+    next = hashStep(next, 0);
+    next = hashStep(next, 0);
+    return next;
   }
-  return out;
+  if (color.tag === 2) {
+    next = hashStep(next, color.r);
+    next = hashStep(next, color.g);
+    next = hashStep(next, color.b);
+    return next;
+  }
+  next = hashStep(next, 0);
+  next = hashStep(next, 0);
+  next = hashStep(next, 0);
+  return next;
+}
+
+function hashStyle(style: Style): number {
+  let hash = 0x811c9dc5;
+  hash = hashColor(hash, style.fgColor);
+  hash = hashColor(hash, style.bgColor);
+  hash = hashColor(hash, style.underlineColor);
+  const flags = encodeFlags(style.flags);
+  hash = hashStep(hash, flags & 0xff);
+  hash = hashStep(hash, (flags >> 8) & 0xff);
+  return hash >>> 0;
+}
+
+function colorsEqual(a: Style["fgColor"], b: Style["fgColor"]): boolean {
+  if (a.tag !== b.tag) return false;
+  if (a.tag === 0) return true;
+  if (a.tag === 1 && b.tag === 1) {
+    return a.index === b.index;
+  }
+  if (a.tag === 2 && b.tag === 2) {
+    return a.r === b.r && a.g === b.g && a.b === b.b;
+  }
+  return false;
+}
+
+function stylesEqual(a: Style, b: Style): boolean {
+  if (!colorsEqual(a.fgColor, b.fgColor)) return false;
+  if (!colorsEqual(a.bgColor, b.bgColor)) return false;
+  if (!colorsEqual(a.underlineColor, b.underlineColor)) return false;
+  return encodeFlags(a.flags) === encodeFlags(b.flags);
 }
 
 export function ensureDefaultStyle(styles: StyleTable, fallback?: Style): void {
@@ -53,12 +107,27 @@ export function canonicalizePayloadStyles(
   for (const [payloadId, style] of payloadStyles) {
     if (payloadId === 0) continue;
 
-    const key = styleFingerprint(style);
-    let canonicalId = identity.keyToId.get(key);
+    const hash = hashStyle(style);
+    let entries = identity.hashToEntries.get(hash);
+    let canonicalId: number | undefined;
+
+    if (entries) {
+      for (const entry of entries) {
+        if (stylesEqual(entry.style, style)) {
+          canonicalId = entry.canonicalId;
+          break;
+        }
+      }
+    }
+
     if (canonicalId === undefined) {
       canonicalId = identity.nextStyleId++;
-      identity.keyToId.set(key, canonicalId);
-      identity.idToKey.set(canonicalId, key);
+      if (!entries) {
+        entries = [];
+        identity.hashToEntries.set(hash, entries);
+      }
+      entries.push({ canonicalId, style });
+      identity.idToHash.set(canonicalId, hash);
     }
 
     payloadToCanonical.set(payloadId, canonicalId);
@@ -104,10 +173,19 @@ export function pruneUnusedStyles(
     if (usedStyleIds.has(styleId)) continue;
 
     styles.delete(styleId);
-    const key = identity.idToKey.get(styleId);
-    if (key !== undefined) {
-      identity.idToKey.delete(styleId);
-      identity.keyToId.delete(key);
+    const hash = identity.idToHash.get(styleId);
+    if (hash !== undefined) {
+      identity.idToHash.delete(styleId);
+      const entries = identity.hashToEntries.get(hash);
+      if (entries) {
+        const idx = entries.findIndex((entry) => entry.canonicalId === styleId);
+        if (idx >= 0) {
+          entries.splice(idx, 1);
+        }
+        if (entries.length === 0) {
+          identity.hashToEntries.delete(hash);
+        }
+      }
     }
   }
 }

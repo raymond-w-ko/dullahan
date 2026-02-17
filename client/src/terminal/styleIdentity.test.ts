@@ -132,6 +132,9 @@ describe("style identity canonicalization", () => {
 
     expect(styles.has(keepId)).toBe(true);
     expect(styles.has(dropId)).toBe(false);
-    expect(identity.idToKey.has(dropId)).toBe(false);
+    expect(identity.idToHash.has(dropId)).toBe(false);
+    for (const entries of identity.hashToEntries.values()) {
+      expect(entries.some((entry) => entry.canonicalId === dropId)).toBe(false);
+    }
   });
 });

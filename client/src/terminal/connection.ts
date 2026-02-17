@@ -189,6 +189,8 @@ export interface TerminalSnapshot {
 /** A cached row with LRU tracking */
 interface CachedRow {
   cells: Cell[];
+  offset: number;
+  length: number;
   styleIds: Set<number>;
   lastAccess: number;  // Timestamp of last access
 }
@@ -248,9 +250,13 @@ function groupCellTableByRow<T>(
   return grouped;
 }
 
-function collectRowStyleIds(cells: Cell[]): Set<number> {
+function collectRowStyleIds(cells: Cell[], start: number = 0, end: number = cells.length): Set<number> {
   const styleIds = new Set<number>();
-  for (const cell of cells) {
+  const from = Math.max(0, start);
+  const to = Math.min(end, cells.length);
+  for (let i = from; i < to; i++) {
+    const cell = cells[i];
+    if (!cell) continue;
     if (cell.styleId !== 0) {
       styleIds.add(cell.styleId);
     }
@@ -574,7 +580,8 @@ export class TerminalConnection {
   /** Get cached row by ID for a pane, or undefined if not cached */
   getCachedRow(paneId: number, rowId: bigint): Cell[] | undefined {
     const cached = this._panes.get(paneId)?.rowCache.get(rowId);
-    return cached?.cells;
+    if (!cached) return undefined;
+    return cached.cells.slice(cached.offset, cached.offset + cached.length);
   }
 
   connect(): void {
@@ -778,10 +785,12 @@ export class TerminalConnection {
         for (let y = 0; y < msg.rows; y++) {
           const rowId = rowIds[y];
           if (rowId !== undefined && rowId !== INVALID_ROW_ID) {
-            const rowCells = cells.slice(y * msg.cols, (y + 1) * msg.cols);
-            const styleIds = collectRowStyleIds(rowCells);
+            const rowOffset = y * msg.cols;
+            const styleIds = collectRowStyleIds(cells, rowOffset, rowOffset + msg.cols);
             paneState.rowCache.set(rowId, {
-              cells: rowCells,
+              cells,
+              offset: rowOffset,
+              length: msg.cols,
               styleIds,
               lastAccess: now,
             });
@@ -1656,13 +1665,25 @@ export class TerminalConnection {
         const pending = pendingRows.get(rowId);
         const cached = pending ? null : paneState.rowCache.get(rowId);
         const rowCells = pending?.cells ?? cached?.cells;
+        const rowOffset = pending ? 0 : (cached?.offset ?? 0);
+        const rowLength = pending ? pending.cells.length : (cached?.length ?? 0);
         if (rowCells) {
-          if (rowCells.length !== delta.cols) {
-            deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowCells.length} cells, expected ${delta.cols}`);
+          if (rowLength !== delta.cols) {
+            deltaLog.warn(`Row ${y} (id=${rowId}) has ${rowLength} cells, expected ${delta.cols}`);
             cacheCorrupt = true;
             break;
           }
-          cells.push(...rowCells);
+          for (let x = 0; x < delta.cols; x++) {
+            const cell = rowCells[rowOffset + x];
+            if (!cell) {
+              cacheCorrupt = true;
+              break;
+            }
+            cells.push(cell);
+          }
+          if (cacheCorrupt) {
+            break;
+          }
 
           const rowStart = y * delta.cols;
 
@@ -1716,6 +1737,8 @@ export class TerminalConnection {
       }
       paneState.rowCache.set(rowId, {
         cells: pending.cells,
+        offset: 0,
+        length: pending.cells.length,
         styleIds: pending.styleIds,
         lastAccess: now,
       });
