@@ -49,6 +49,69 @@ interface RowRunsCacheEntry {
   lastAccess: number;
 }
 
+interface RowRunsEvictionCandidate {
+  rowId: bigint;
+  lastAccess: number;
+}
+
+function heapSiftUpByLastAccess(heap: RowRunsEvictionCandidate[], index: number): void {
+  let i = index;
+  while (i > 0) {
+    const parent = (i - 1) >> 1;
+    if (heap[parent]!.lastAccess >= heap[i]!.lastAccess) {
+      break;
+    }
+    const tmp = heap[parent]!;
+    heap[parent] = heap[i]!;
+    heap[i] = tmp;
+    i = parent;
+  }
+}
+
+function heapSiftDownByLastAccess(heap: RowRunsEvictionCandidate[], index: number): void {
+  let i = index;
+  const n = heap.length;
+  while (true) {
+    const left = i * 2 + 1;
+    const right = left + 1;
+    let largest = i;
+
+    if (left < n && heap[left]!.lastAccess > heap[largest]!.lastAccess) {
+      largest = left;
+    }
+    if (right < n && heap[right]!.lastAccess > heap[largest]!.lastAccess) {
+      largest = right;
+    }
+    if (largest === i) {
+      break;
+    }
+    const tmp = heap[largest]!;
+    heap[largest] = heap[i]!;
+    heap[i] = tmp;
+    i = largest;
+  }
+}
+
+function pushOldestRowRunsCandidate(
+  heap: RowRunsEvictionCandidate[],
+  candidate: RowRunsEvictionCandidate,
+  maxSize: number
+): void {
+  if (maxSize <= 0) {
+    return;
+  }
+  if (heap.length < maxSize) {
+    heap.push(candidate);
+    heapSiftUpByLastAccess(heap, heap.length - 1);
+    return;
+  }
+  if (candidate.lastAccess >= heap[0]!.lastAccess) {
+    return;
+  }
+  heap[0] = candidate;
+  heapSiftDownByLastAccess(heap, 0);
+}
+
 function selectionKeyForRow(selection: SelectionBounds | undefined, y: number): string {
   if (!selection) return "none";
   return `${selection.startX}:${selection.startY}:${selection.endX}:${selection.endY}:${selection.isRectangle ? 1 : 0}:${y}`;
@@ -611,14 +674,16 @@ export function TerminalView({
 
     if (cache.size > MAX_CACHED_ROW_RUNS) {
       const overflow = cache.size - MAX_CACHED_ROW_RUNS;
-      const sorted = Array.from(cache.entries()).sort(
-        (a, b) => a[1].lastAccess - b[1].lastAccess
-      );
-      for (let i = 0; i < overflow; i++) {
-        const stale = sorted[i];
-        if (stale) {
-          cache.delete(stale[0]);
-        }
+      const oldestCandidates: RowRunsEvictionCandidate[] = [];
+      for (const [rowId, entry] of cache.entries()) {
+        pushOldestRowRunsCandidate(
+          oldestCandidates,
+          { rowId, lastAccess: entry.lastAccess },
+          overflow
+        );
+      }
+      for (const candidate of oldestCandidates) {
+        cache.delete(candidate.rowId);
       }
     }
 

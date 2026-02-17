@@ -140,6 +140,62 @@ interface NotifyScope {
   windowIds?: Iterable<number>;
 }
 
+type LayoutNodeLike = NonNullable<WindowLayout["nodes"]>[number];
+
+function numberArraysEqual(a: readonly number[], b: readonly number[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function layoutNodesEqual(a: readonly LayoutNodeLike[], b: readonly LayoutNodeLike[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.type !== right.type) return false;
+    if (left.width !== right.width || left.height !== right.height) return false;
+
+    if (left.type === "pane" && right.type === "pane") {
+      if (left.paneId !== right.paneId) return false;
+      continue;
+    }
+
+    if (left.type === "container" && right.type === "container") {
+      if (!layoutNodesEqual(left.children, right.children)) return false;
+      continue;
+    }
+
+    return false;
+  }
+  return true;
+}
+
+function windowLayoutsEqual(a: WindowLayout | undefined, b: WindowLayout | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.templateId !== b.templateId) return false;
+  return layoutNodesEqual(a.nodes, b.nodes);
+}
+
+function layoutTemplatesEqual(a: readonly LayoutTemplate[], b: readonly LayoutTemplate[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.id !== right.id || left.name !== right.name) return false;
+    if (!layoutNodesEqual(left.nodes as LayoutNodeLike[], right.nodes as LayoutNodeLike[])) return false;
+  }
+  return true;
+}
+
 // Create initial pane state with default values
 function createPaneState(id: number): PaneState {
   return {
@@ -609,29 +665,69 @@ export function closeWindow(windowId: number) {
 }
 
 export function setLayout(layout: LayoutUpdate) {
+  let changed = false;
+  const changedWindowIds = new Set<number>();
+  const changedPaneIds = new Set<number>();
+  const previousActiveWindowId = store.activeWindowId;
+
   // Only adopt the server's activeWindowId on initial layout or if our
   // current window no longer exists.  Otherwise preserve the client's
   // selection so a resize broadcast doesn't snap us back to window 0.
   const hasWindows = store.windows.size > 0;
   const currentStillExists = layout.windows.some(w => w.id === store.activeWindowId);
   if (!hasWindows || !currentStillExists) {
+    if (store.activeWindowId !== layout.activeWindowId) {
+      changed = true;
+    }
     store.activeWindowId = layout.activeWindowId;
   }
 
   // Update templates if provided
-  if (layout.templates) {
+  if (layout.templates && !layoutTemplatesEqual(store.layoutTemplates, layout.templates)) {
     store.layoutTemplates = layout.templates;
+    changed = true;
   }
 
-  // Update windows map from layout
-  store.windows.clear();
+  // Diff windows and preserve references for unchanged windows.
+  const nextWindows = new Map<number, WindowState>();
   for (const win of layout.windows) {
-    store.windows.set(win.id, {
+    const existing = store.windows.get(win.id);
+    const paneIds = existing && numberArraysEqual(existing.paneIds, win.panes)
+      ? existing.paneIds
+      : win.panes;
+    const nextLayout = existing && windowLayoutsEqual(existing.layout, win.layout)
+      ? existing.layout
+      : win.layout;
+
+    if (
+      existing &&
+      existing.focusedPaneId === win.activePaneId &&
+      existing.paneIds === paneIds &&
+      existing.layout === nextLayout
+    ) {
+      nextWindows.set(win.id, existing);
+      continue;
+    }
+
+    nextWindows.set(win.id, {
       id: win.id,
-      paneIds: win.panes,
+      paneIds,
       focusedPaneId: win.activePaneId,
-      layout: win.layout,
+      layout: nextLayout,
     });
+    changed = true;
+    changedWindowIds.add(win.id);
+  }
+
+  for (const windowId of store.windows.keys()) {
+    if (!nextWindows.has(windowId)) {
+      changed = true;
+      changedWindowIds.add(windowId);
+    }
+  }
+
+  if (changedWindowIds.size > 0 || nextWindows.size !== store.windows.size) {
+    store.windows = nextWindows;
   }
 
   // Collect all pane IDs from the new layout
@@ -646,6 +742,8 @@ export function setLayout(layout: LayoutUpdate) {
   for (const paneId of store.panes.keys()) {
     if (!activePaneIds.has(paneId)) {
       store.panes.delete(paneId);
+      changedPaneIds.add(paneId);
+      changed = true;
     }
   }
 
@@ -653,20 +751,35 @@ export function setLayout(layout: LayoutUpdate) {
   for (const paneId of activePaneIds) {
     if (!store.panes.has(paneId)) {
       store.panes.set(paneId, createPaneState(paneId));
+      changedPaneIds.add(paneId);
+      changed = true;
     }
   }
 
-  // Increment dimensionVersion to force pane dimension recalculation
-  // This ensures panes get proper sizes when layout changes
-  store.dimensionVersion++;
+  const activeWindowChanged =
+    store.activeWindowId !== previousActiveWindowId ||
+    changedWindowIds.has(store.activeWindowId);
+  if (activeWindowChanged) {
+    // Increment dimensionVersion to force pane dimension recalculation
+    // This ensures panes get proper sizes when layout changes
+    store.dimensionVersion++;
+    changed = true;
 
-  // Clear resize cache for active window's panes to ensure fresh calculations
-  const activeWindow = store.windows.get(store.activeWindowId);
-  if (activeWindow && store.connection) {
-    store.connection.clearResizeCache(activeWindow.paneIds);
+    // Clear resize cache for active window's panes to ensure fresh calculations
+    const activeWindow = store.windows.get(store.activeWindowId);
+    if (activeWindow && store.connection) {
+      store.connection.clearResizeCache(activeWindow.paneIds);
+    }
   }
 
-  notify();
+  if (!changed) {
+    return;
+  }
+
+  notifyScoped({
+    paneIds: changedPaneIds.size > 0 ? changedPaneIds : undefined,
+    windowIds: changedWindowIds.size > 0 ? changedWindowIds : undefined,
+  });
 }
 
 export function switchWindow(windowId: number) {
