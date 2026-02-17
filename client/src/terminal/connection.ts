@@ -45,6 +45,7 @@ import type { TextMessage } from "./ime";
 import type { MouseMessage } from "./mouse";
 import {
   canonicalizePayloadStyles,
+  canonicalizePayloadStylesWithOverlay,
   cloneStyleIdentityState,
   createStyleIdentityState,
   pruneUnusedStyles,
@@ -1582,9 +1583,15 @@ export class TerminalConnection {
 
     // Canonicalize payload-local style IDs by style bytes using staged maps.
     const payloadStyles = decodeStyleTableFromBytes(delta.styles);
-    const styles: StyleTable = paneState.lastStyles ? new Map(paneState.lastStyles) : new Map();
+    const baseStyles: StyleTable = paneState.lastStyles ?? new Map();
+    const styleOverlay: StyleTable = new Map();
     const styleIdentity = cloneStyleIdentityState(paneState.styleIdentity);
-    const payloadToCanonical = canonicalizePayloadStyles(payloadStyles, styles, styleIdentity);
+    const payloadToCanonical = canonicalizePayloadStylesWithOverlay(
+      payloadStyles,
+      baseStyles,
+      styleOverlay,
+      styleIdentity
+    );
 
     // Stage dirty row decode without mutating pane caches until validation passes.
     for (const row of delta.dirtyRows) {
@@ -1598,7 +1605,7 @@ export class TerminalConnection {
       }
       const styleIds = collectRowStyleIds(rowCells);
       for (const styleId of styleIds) {
-        if (!styles.has(styleId)) {
+        if (!baseStyles.has(styleId) && !styleOverlay.has(styleId)) {
           deltaLog.warn(`Pane ${paneId}: row ${rowId} references unknown style ${styleId}, requesting resync`);
           this.requestResync(paneId, "style_miss");
           return;
@@ -1728,6 +1735,16 @@ export class TerminalConnection {
       return; // Don't emit corrupted snapshot
     }
     deltaLog.log(`Pane ${paneId}: Built ${fromCache} cached + ${fromDelta} dirty + ${filled} empty rows, ${graphemes.size} graphemes`);
+
+    // Copy-on-write style table merge: avoid cloning the entire map when this
+    // delta introduced no new canonical styles.
+    let styles: StyleTable = baseStyles;
+    if (styleOverlay.size > 0) {
+      styles = new Map(baseStyles);
+      for (const [styleId, style] of styleOverlay) {
+        styles.set(styleId, style);
+      }
+    }
 
     // Validation passed. Commit staged dirty rows and style identity state.
     for (const [rowId, pending] of pendingRows) {

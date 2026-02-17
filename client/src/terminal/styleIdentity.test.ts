@@ -7,6 +7,7 @@ import type { Style, StyleTable } from "../../../protocol/schema/style";
 
 import {
   canonicalizePayloadStyles,
+  canonicalizePayloadStylesWithOverlay,
   createStyleIdentityState,
   pruneUnusedStyles,
   remapCellsToCanonicalStyles,
@@ -97,6 +98,41 @@ describe("style identity canonicalization", () => {
     expect(idA).not.toBe(idB);
     expect(styles.get(idA!)).toEqual(styleA);
     expect(styles.get(idB!)).toEqual(styleB);
+  });
+
+  test("overlay canonicalization writes only incremental styles", () => {
+    const styleA = makeStyle({ fgColor: { tag: ColorTag.PALETTE, index: 2 } });
+    const styleB = makeStyle({ fgColor: { tag: ColorTag.PALETTE, index: 6 } });
+    const baseStyles: StyleTable = new Map([[0, DEFAULT_STYLE]]);
+    const identity = createStyleIdentityState();
+
+    const seed = canonicalizePayloadStyles(
+      new Map([
+        [0, DEFAULT_STYLE],
+        [1, styleA],
+      ]),
+      baseStyles,
+      identity
+    );
+    const styleAId = seed.get(1)!;
+
+    const overlay: StyleTable = new Map();
+    const remap = canonicalizePayloadStylesWithOverlay(
+      new Map([
+        [0, DEFAULT_STYLE],
+        [1, styleA],
+        [2, styleB],
+      ]),
+      baseStyles,
+      overlay,
+      identity
+    );
+
+    expect(remap.get(1)).toBe(styleAId);
+    expect(baseStyles.size).toBe(2); // default + seeded styleA
+    expect(overlay.size).toBe(1);
+    const styleBId = remap.get(2)!;
+    expect(overlay.get(styleBId)).toEqual(styleB);
   });
 
   test("remaps cells and reports missing payload mappings", () => {

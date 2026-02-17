@@ -520,33 +520,26 @@ export function TerminalView({
       mouse.setFocusTarget(imeElement);
     }
 
+    // Use a stable lookup closure that always reads from the latest snapshot ref.
+    mouse.setHyperlinkLookup((x: number, y: number) => {
+      const currentSnapshot = snapshotRef.current;
+      const idx = y * currentSnapshot.cols + x;
+      return currentSnapshot.hyperlinks.get(idx);
+    });
+
     // Update cell dimensions when fonts load
     document.fonts.ready.then(() => {
       mouse.updateCellDimensions();
     });
 
     return () => {
+      mouse.setHyperlinkLookup(null);
       mouse.detach();
+      if (mouseRef.current === mouse) {
+        mouseRef.current = null;
+      }
     };
   }, [paneId, connection]);
-
-  // Update hyperlink lookup when snapshot changes
-  useEffect(() => {
-    const mouse = mouseRef.current;
-    if (!mouse) return;
-
-    // Provide lookup function that maps (x, y) to hyperlink URL
-    mouse.setHyperlinkLookup((x: number, y: number) => {
-      const currentSnapshot = snapshotRef.current;
-      if (!currentSnapshot.hyperlinks) return undefined;
-      const idx = y * currentSnapshot.cols + x;
-      return currentSnapshot.hyperlinks.get(idx);
-    });
-
-    return () => {
-      mouse.setHyperlinkLookup(null);
-    };
-  }, [snapshot.hyperlinks]);
 
   // Measure cell width and keep CSS variable in sync with font changes
   useEffect(() => {

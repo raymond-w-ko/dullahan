@@ -40,19 +40,26 @@ function resolveCursorColor(
   return setting; // Custom color value
 }
 
+function appendClass(base: string, extra: string): string {
+  return base ? `${base} ${extra}` : extra;
+}
+
 /** Build class string for a run, including selection state and bgOverride palette */
 function runClasses(run: StyledRun): string {
   let classes = styleToClassesCached(run.styleId, run.style);
   // Add palette bg class for bgOverride (content-based bg color)
   if (run.bgOverride?.tag === ColorTag.PALETTE) {
-    classes = `${classes} bg${run.bgOverride.index}`.trim();
+    classes = appendClass(classes, `bg${run.bgOverride.index}`);
   }
-  return run.selected ? `${classes} selected`.trim() : classes;
+  return run.selected ? appendClass(classes, "selected") : classes;
 }
 
 function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
   if (!ranges || ranges.length === 0) {
     return [];
+  }
+  if (ranges.length === 1) {
+    return ranges;
   }
   return [...ranges].sort((a, b) => a.start - b.start);
 }
@@ -248,7 +255,7 @@ function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[]
     }
   }
 
-  while (cellPos < cols) {
+  if (cellPos < cols) {
     const remaining = cols - cellPos;
     segments.push({
       text: " ".repeat(remaining),
@@ -261,7 +268,6 @@ function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[]
       startCell: cellPos,
       endCell: cellPos + remaining,
     });
-    cellPos = cols;
   }
 
   return segments;
@@ -333,7 +339,6 @@ export function renderLine(
       cursor.x < segment.endCell;
     if (isCursor) {
       cursorRendered = true;
-      const baseStyle = preserveStyle ? segment.style || {} : {};
       const cursorBg = resolveCursorColor(
         cursorConfig.color,
         segment.styleRef,
@@ -345,12 +350,17 @@ export function renderLine(
         "--term-cursor-fg"
       );
 
-      const cursorInlineStyle: h.JSX.CSSProperties = { ...baseStyle };
-      if (cursorBg) {
-        cursorInlineStyle["--cursor-bg"] = cursorBg;
-      }
-      if (cursorFg && cursorConfig.style === "block") {
-        cursorInlineStyle.color = cursorFg;
+      let cursorInlineStyle: h.JSX.CSSProperties | undefined = preserveStyle
+        ? segment.style
+        : undefined;
+      if (cursorBg || (cursorFg && cursorConfig.style === "block")) {
+        cursorInlineStyle = cursorInlineStyle ? { ...cursorInlineStyle } : {};
+        if (cursorBg) {
+          cursorInlineStyle["--cursor-bg"] = cursorBg;
+        }
+        if (cursorFg && cursorConfig.style === "block") {
+          cursorInlineStyle.color = cursorFg;
+        }
       }
 
       const widthClass = segment.isWide
@@ -359,20 +369,16 @@ export function renderLine(
           ? "single-char"
           : "";
       const classesBase = preserveStyle
-        ? `${cursorClass} ${segment.classes}`.trim()
+        ? appendClass(cursorClass, segment.classes)
         : cursorClass;
-      const classes = [classesBase, widthClass].filter(Boolean).join(" ");
+      const classes = widthClass ? appendClass(classesBase, widthClass) : classesBase;
 
       if (segment.isWide) {
         elements.push(
           <span
             key={`s-${i}-cursor`}
             class={classes}
-            style={
-              Object.keys(cursorInlineStyle).length
-                ? cursorInlineStyle
-                : undefined
-            }
+            style={cursorInlineStyle}
           >
             {segment.text}
           </span>
@@ -401,11 +407,7 @@ export function renderLine(
           <span
             key={`s-${i}-cursor`}
             class={classes}
-            style={
-              Object.keys(cursorInlineStyle).length
-                ? cursorInlineStyle
-                : undefined
-            }
+            style={cursorInlineStyle}
           >
             {cursorChar || " "}
           </span>
@@ -452,10 +454,13 @@ function renderSegmentElement(
     : segment.isSingle
       ? "single-char"
       : "";
-  const baseClasses = [segment.classes, widthClass].filter(Boolean).join(" ");
-  const classes = segment.hyperlink
-    ? `${baseClasses} hyperlink`.trim()
-    : baseClasses;
+  let classes = segment.classes;
+  if (widthClass) {
+    classes = appendClass(classes, widthClass);
+  }
+  if (segment.hyperlink) {
+    classes = appendClass(classes, "hyperlink");
+  }
 
   if (segment.hyperlink) {
     return (

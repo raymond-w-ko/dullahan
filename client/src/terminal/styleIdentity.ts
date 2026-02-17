@@ -140,6 +140,58 @@ export function canonicalizePayloadStyles(
 }
 
 /**
+ * Convert payload-local style IDs into canonical IDs without cloning the full
+ * canonical style table. New or missing canonical styles are written to
+ * `styleOverlay`, while lookups continue to read from `baseStyles`.
+ */
+export function canonicalizePayloadStylesWithOverlay(
+  payloadStyles: StyleTable,
+  baseStyles: StyleTable,
+  styleOverlay: StyleTable,
+  identity: StyleIdentityState,
+): Map<number, number> {
+  if (!baseStyles.has(0) && !styleOverlay.has(0)) {
+    styleOverlay.set(0, payloadStyles.get(0) ?? DEFAULT_STYLE);
+  }
+
+  const payloadToCanonical = new Map<number, number>();
+
+  for (const [payloadId, style] of payloadStyles) {
+    if (payloadId === 0) continue;
+
+    const hash = hashStyle(style);
+    let entries = identity.hashToEntries.get(hash);
+    let canonicalId: number | undefined;
+
+    if (entries) {
+      for (const entry of entries) {
+        if (stylesEqual(entry.style, style)) {
+          canonicalId = entry.canonicalId;
+          break;
+        }
+      }
+    }
+
+    if (canonicalId === undefined) {
+      canonicalId = identity.nextStyleId++;
+      if (!entries) {
+        entries = [];
+        identity.hashToEntries.set(hash, entries);
+      }
+      entries.push({ canonicalId, style });
+      identity.idToHash.set(canonicalId, hash);
+    }
+
+    payloadToCanonical.set(payloadId, canonicalId);
+    if (!baseStyles.has(canonicalId) && !styleOverlay.has(canonicalId)) {
+      styleOverlay.set(canonicalId, style);
+    }
+  }
+
+  return payloadToCanonical;
+}
+
+/**
  * Rewrite decoded cells from payload style IDs to canonical style IDs.
  * Returns number of non-zero style IDs that had no mapping.
  */
