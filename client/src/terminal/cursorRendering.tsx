@@ -3,8 +3,8 @@
 
 import { h } from "preact";
 import {
-  styleToClasses,
-  styleToInline,
+  styleToClassesCached,
+  styleToInlineCached,
   getCellColor,
   colorToCss,
 } from "./terminalStyle";
@@ -42,7 +42,7 @@ function resolveCursorColor(
 
 /** Build class string for a run, including selection state and bgOverride palette */
 function runClasses(run: StyledRun): string {
-  let classes = styleToClasses(run.style);
+  let classes = styleToClassesCached(run.styleId, run.style);
   // Add palette bg class for bgOverride (content-based bg color)
   if (run.bgOverride?.tag === ColorTag.PALETTE) {
     classes = `${classes} bg${run.bgOverride.index}`.trim();
@@ -265,7 +265,7 @@ function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[]
 
 /** Get inline style for a run, including bgOverride RGB colors */
 function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
-  const baseStyle = styleToInline(run.style);
+  const baseStyle = styleToInlineCached(run.styleId, run.style);
   // Add RGB background for bgOverride (content-based bg color)
   if (run.bgOverride?.tag === ColorTag.RGB) {
     const bgCss = colorToCss(run.bgOverride);

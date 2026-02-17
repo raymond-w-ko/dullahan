@@ -19,9 +19,22 @@ interface ThemeColors {
   palette: Array<RgbColor | undefined>;
 }
 
+interface ClassesCacheEntry {
+  styleRef: Style;
+  value: string;
+}
+
+interface InlineCacheEntry {
+  styleRef: Style;
+  themeName: string;
+  value: h.JSX.CSSProperties | undefined;
+}
+
 const FAINT_OPACITY = 0.5;
 
 let cachedTheme: ThemeColors | null = null;
+const classesCache = new Map<number, ClassesCacheEntry>();
+const inlineCache = new Map<number, InlineCacheEntry>();
 
 function parseCssColor(value: string): RgbColor | undefined {
   const trimmed = value.trim().toLowerCase();
@@ -198,8 +211,28 @@ export function styleToClasses(style: Style): string {
   return classes.join(" ");
 }
 
+/**
+ * Convert style to classes with memoization by canonical style ID.
+ * Cache is validated against the current style object reference.
+ */
+export function styleToClassesCached(styleId: number, style: Style): string {
+  const cached = classesCache.get(styleId);
+  if (cached && cached.styleRef === style) {
+    return cached.value;
+  }
+  const value = styleToClasses(style);
+  classesCache.set(styleId, {
+    styleRef: style,
+    value,
+  });
+  return value;
+}
+
 /** Convert style to inline CSS (for RGB colors and inverse with defaults) */
-export function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
+function styleToInlineWithTheme(
+  style: Style,
+  themeOverride?: ThemeColors | null
+): h.JSX.CSSProperties | undefined {
   const css: h.JSX.CSSProperties = {};
   let hasInline = false;
 
@@ -235,7 +268,7 @@ export function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
 
   // Faint: dim foreground only by blending with effective background
   if (style.flags.faint) {
-    const theme = getThemeColors();
+    const theme = themeOverride ?? getThemeColors();
     const termFg = theme?.termFg;
     const termBg = theme?.termBg;
     const fgRgb = resolveRgb(fgColor, theme, termFg);
@@ -264,4 +297,36 @@ export function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
   }
 
   return hasInline ? css : undefined;
+}
+
+/** Convert style to inline CSS (for RGB colors and inverse with defaults) */
+export function styleToInline(style: Style): h.JSX.CSSProperties | undefined {
+  return styleToInlineWithTheme(style);
+}
+
+/**
+ * Convert style to inline CSS with memoization by canonical style ID.
+ * For faint styles, cache key also includes the active theme name.
+ */
+export function styleToInlineCached(
+  styleId: number,
+  style: Style
+): h.JSX.CSSProperties | undefined {
+  const theme = style.flags.faint ? getThemeColors() : null;
+  const themeName = theme?.themeName ?? "";
+  const cached = inlineCache.get(styleId);
+  if (
+    cached &&
+    cached.styleRef === style &&
+    cached.themeName === themeName
+  ) {
+    return cached.value;
+  }
+  const value = styleToInlineWithTheme(style, theme);
+  inlineCache.set(styleId, {
+    styleRef: style,
+    themeName,
+    value,
+  });
+  return value;
 }

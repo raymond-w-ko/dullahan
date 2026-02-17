@@ -9,12 +9,16 @@ import { useStoreSelector, shallowEqual } from "../hooks/useStoreSubscription";
 import { getConnection } from "../store";
 import type { LayoutNode } from "../../../protocol/schema/layout";
 
-/** Generate a key from layout dimensions and window ID to force re-render on changes */
+/** Generate a stable key from layout topology (not dimensions) and window ID. */
 function getLayoutKey(windowId: number, nodes: LayoutNode[]): string {
   const parts: string[] = [`w${windowId}`];
   function collect(ns: LayoutNode[]) {
     for (const n of ns) {
-      parts.push(`${n.width.toFixed(1)}-${n.height.toFixed(1)}`);
+      if (n.type === "pane") {
+        parts.push(`p:${n.paneId ?? "x"}`);
+      } else {
+        parts.push(`c:${n.children.length}`);
+      }
       if (n.type === "container" && n.children) {
         collect(n.children);
       }
@@ -69,7 +73,7 @@ export function TerminalGrid({ windowId }: TerminalGridProps) {
 
   // Use LayoutRenderer if window has a layout tree
   if (window.layout?.nodes) {
-    // Key includes windowId and dimensions to force re-render when switching windows or resetting layout
+    // Key includes window + topology to avoid remounting on size-only updates.
     const layoutKey = getLayoutKey(windowId, window.layout.nodes);
     return (
       <LayoutRenderer
