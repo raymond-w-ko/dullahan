@@ -136,7 +136,9 @@ pub fn printUsage() void {
         \\  dullahan dump-raw                       # Dump raw terminal cells
         \\  dullahan send 1 "echo hello"            # Send to pane 1
         \\  echo "ls -la" | dullahan send 1         # Send from stdin to pane 1
+        \\  dullahan test help                      # Show all test subcommands
         \\  dullahan test keytest-kitty             # Run keyboard tester
+        \\  dullahan test palette-256               # Show full 256-color palette grid
         \\
     , .{});
 }
