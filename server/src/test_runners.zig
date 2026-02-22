@@ -8,6 +8,7 @@
 //!   keytest-bytes   - Byte coverage tester (256-byte grid)
 //!   delta-gen       - Delta sync test data generator
 //!   shell-delta     - Shell delta sync test
+//!   palette-256     - 256-color palette display grid
 
 const std = @import("std");
 const posix = std.posix;
@@ -36,6 +37,7 @@ pub const TestCommand = enum {
     @"toast-test",
     @"progress-test",
     @"sync-test",
+    @"palette-256",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -53,6 +55,7 @@ pub const TestCommand = enum {
             .{ "toast-test", .@"toast-test" },
             .{ "progress-test", .@"progress-test" },
             .{ "sync-test", .@"sync-test" },
+            .{ "palette-256", .@"palette-256" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -73,6 +76,7 @@ pub const TestCommand = enum {
             .@"toast-test" => "Display toast notifications via OSC 9/777",
             .@"progress-test" => "Display progress bar via OSC 9;4",
             .@"sync-test" => "Test synchronized output mode (DECSET 2026)",
+            .@"palette-256" => "Display full 256-color palette grid",
             .help => "Show available test commands",
         };
     }
@@ -96,6 +100,7 @@ pub fn printTestUsage() void {
         \\  toast-test        Display toast notifications via OSC 9/777
         \\  progress-test     Display progress bar via OSC 9;4
         \\  sync-test         Test synchronized output mode (DECSET 2026)
+        \\  palette-256       Display full 256-color palette grid
         \\  help              Show this help
         \\
         \\Examples:
@@ -109,6 +114,7 @@ pub fn printTestUsage() void {
         \\  dullahan test toast-test            # Test toast notifications
         \\  dullahan test progress-test         # Test progress bar
         \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
+        \\  dullahan test palette-256           # Display the full 256-color palette
         \\
     ;
     std.debug.print("{s}", .{usage});
@@ -130,6 +136,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"toast-test" => runToastTest(),
         .@"progress-test" => runProgressTest(),
         .@"sync-test" => runSyncTest(),
+        .@"palette-256" => runPalette256Test(),
         .help => printTestUsage(),
     }
 }
@@ -2187,4 +2194,106 @@ fn runSyncTest() void {
         \\  printf '\e[?2026h'; echo "Should appear after 1s timeout"
         \\
     ) catch {};
+}
+
+// =============================================================================
+// 256-Color Palette Test
+// =============================================================================
+
+/// Display the full 256-color palette in a readable grid.
+/// Prints 16 colors per row with both foreground and background swatches.
+fn runPalette256Test() void {
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\256-Color Palette Test
+        \\======================
+        \\
+        \\This prints all ANSI 256 colors in 16 columns.
+        \\Each cell shows:
+        \\  - background swatch with index label
+        \\  - foreground sample in that color
+        \\
+        \\Legend per cell:
+        \\  BG[NNN] FG[NNN]
+        \\
+    ) catch {};
+
+    var row_start: u16 = 0;
+    while (row_start < 256) : (row_start += 16) {
+        var col: u16 = 0;
+        while (col < 16) : (col += 1) {
+            const idx: u16 = row_start + col;
+            const fg_idx: u16 = if (paletteIndexIsLight(@intCast(idx))) 0 else 15;
+
+            var cell_buf: [96]u8 = undefined;
+            const cell = std.fmt.bufPrint(
+                &cell_buf,
+                "\x1b[48;5;{d}m\x1b[38;5;{d}m BG[{d:0>3}] \x1b[0m \x1b[38;5;{d}mFG[{d:0>3}]\x1b[0m  ",
+                .{ idx, fg_idx, idx, idx, idx },
+            ) catch continue;
+            _ = posix.write(stdout_fd, cell) catch {};
+        }
+        _ = posix.write(stdout_fd, "\n") catch {};
+    }
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Done.
+        \\Tip: run with different client themes to validate generated palette changes.
+        \\
+    ) catch {};
+}
+
+fn paletteIndexIsLight(idx: u8) bool {
+    const rgb = paletteIndexToRgb(idx);
+    // Relative luminance approximation tuned for terminal readability.
+    const lum = 0.2126 * @as(f32, @floatFromInt(rgb.r)) +
+        0.7152 * @as(f32, @floatFromInt(rgb.g)) +
+        0.0722 * @as(f32, @floatFromInt(rgb.b));
+    return lum >= 140.0;
+}
+
+const RgbU8 = struct { r: u8, g: u8, b: u8 };
+
+fn paletteIndexToRgb(idx: u8) RgbU8 {
+    // xterm base16 palette used by palette.css.
+    const base16 = [_]RgbU8{
+        .{ .r = 0, .g = 0, .b = 0 },
+        .{ .r = 205, .g = 0, .b = 0 },
+        .{ .r = 0, .g = 205, .b = 0 },
+        .{ .r = 205, .g = 205, .b = 0 },
+        .{ .r = 0, .g = 0, .b = 238 },
+        .{ .r = 205, .g = 0, .b = 205 },
+        .{ .r = 0, .g = 205, .b = 205 },
+        .{ .r = 229, .g = 229, .b = 229 },
+        .{ .r = 127, .g = 127, .b = 127 },
+        .{ .r = 255, .g = 0, .b = 0 },
+        .{ .r = 0, .g = 255, .b = 0 },
+        .{ .r = 255, .g = 255, .b = 0 },
+        .{ .r = 92, .g = 92, .b = 255 },
+        .{ .r = 255, .g = 0, .b = 255 },
+        .{ .r = 0, .g = 255, .b = 255 },
+        .{ .r = 255, .g = 255, .b = 255 },
+    };
+
+    if (idx < 16) return base16[idx];
+
+    if (idx < 232) {
+        const cube = idx - 16;
+        const r: u8 = cube / 36;
+        const g: u8 = (cube % 36) / 6;
+        const b: u8 = cube % 6;
+        const level = [_]u8{ 0, 95, 135, 175, 215, 255 };
+        return .{
+            .r = level[r],
+            .g = level[g],
+            .b = level[b],
+        };
+    }
+
+    const gray = @as(u8, 8 + 10 * (idx - 232));
+    return .{ .r = gray, .g = gray, .b = gray };
 }
