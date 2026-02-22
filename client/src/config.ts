@@ -7,6 +7,7 @@
  */
 
 import { debug } from "./debug";
+import { applyGeneratedPaletteFromTheme } from "./themePalette";
 
 const configLog = debug.category('config');
 const LINE_HEIGHT_STEP = 0.25;
@@ -31,6 +32,7 @@ function normalizeLineHeight(value: number, fontSize: number): number {
 export interface ConfigSchema {
   // Theme
   theme: string;
+  paletteGenerate: boolean;
   
   // Layout
   spacing: 'compact' | 'comfortable';
@@ -78,6 +80,7 @@ export interface ConfigSchema {
 export const DEFAULTS: ConfigSchema = {
   // Theme
   theme: 'atom-one-dark',
+  paletteGenerate: true,
   
   // Layout
   spacing: 'compact',
@@ -297,6 +300,9 @@ export function applyToCSS(): void {
   
   // Cursor
   root.style.setProperty('--term-cursor-opacity', String(get('cursorOpacity')));
+
+  // Theme-derived palette
+  applyGeneratedPaletteFromTheme(get('paletteGenerate'));
 }
 
 /**

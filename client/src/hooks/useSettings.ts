@@ -9,6 +9,7 @@ import { debug } from "../debug";
 // Settings managed by SettingsModal (subset of ConfigSchema)
 export interface SettingsState {
   theme: string;
+  paletteGenerate: boolean;
   spacing: "compact" | "comfortable";
   fontSize: number;
   fontFamily: string;
@@ -29,6 +30,7 @@ export interface SettingsState {
 
 // Keys that require CSS reapplication after change
 const CSS_KEYS = new Set<keyof SettingsState>([
+  "paletteGenerate",
   "spacing",
   "fontSize",
   "fontFamily",
@@ -57,6 +59,7 @@ export function useSettings() {
   const settingsLog = useRef(debug.category("config"));
   const [settings, setSettings] = useState<SettingsState>(() => ({
     theme: config.get("theme"),
+    paletteGenerate: config.get("paletteGenerate"),
     spacing: config.get("spacing"),
     fontSize: config.get("fontSize"),
     fontFamily: config.get("fontFamily"),
@@ -81,13 +84,15 @@ export function useSettings() {
       // Update local state
       setSettings((prev) => ({ ...prev, [key]: value }));
 
+      if (key === "theme") {
+        document.querySelector(".app")?.setAttribute("data-theme", value as string);
+      }
+
       // Persist to config (type assertion needed for cross-interface assignment)
       config.set(key as ConfigKey, value as ConfigSchema[ConfigKey]);
 
       // Handle side effects
-      if (key === "theme") {
-        document.querySelector(".app")?.setAttribute("data-theme", value as string);
-      } else if (CSS_KEYS.has(key)) {
+      if (key === "theme" || CSS_KEYS.has(key)) {
         config.applyToCSS();
       }
     },

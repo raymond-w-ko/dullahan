@@ -153,6 +153,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               </select>
             </label>
 
+            <label class="settings-field settings-field--checkbox">
+              <input
+                type="checkbox"
+                checked={settings.paletteGenerate}
+                onChange={(e) => setSetting("paletteGenerate", inputChecked(e))}
+              />
+              <span class="settings-label">Generate 256-color palette from theme</span>
+            </label>
+
             <label class="settings-field">
               <span class="settings-label">Font Size (px)</span>
               <input
