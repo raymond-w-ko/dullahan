@@ -2,13 +2,7 @@
 //!
 //! Standalone test tools integrated into the main binary.
 //! Run with: dullahan test <subcommand>
-//!
-//! Available tests:
-//!   keytest-kitty   - Kitty keyboard protocol tester
-//!   keytest-bytes   - Byte coverage tester (256-byte grid)
-//!   delta-gen       - Delta sync test data generator
-//!   shell-delta     - Shell delta sync test
-//!   palette-256     - 256-color palette display grid
+//! Use `dullahan test help` for the current subcommand list.
 
 const std = @import("std");
 const posix = std.posix;
@@ -83,27 +77,16 @@ pub const TestCommand = enum {
 };
 
 pub fn printTestUsage() void {
-    const usage =
-        \\Usage: dullahan test <SUBCOMMAND>
-        \\
-        \\Test Commands:
-        \\  keytest-kitty     Kitty keyboard protocol tester (ESC twice to exit)
-        \\  keytest-bytes     Byte coverage tester - 256-byte grid (press 'q' to exit)
-        \\  delta-gen         Generate delta sync test fixtures
-        \\  shell-delta       Shell delta sync test
-        \\  osc52-set         Send OSC 52 SET sequence (run in terminal pane)
-        \\  osc52-get         Send OSC 52 GET sequence (run in terminal pane)
-        \\  osc52-interactive Interactive clipboard tester (run in terminal pane)
-        \\  grapheme-test     Display grapheme clusters (emoji, combining marks)
-        \\  grapheme-debug    Debug grapheme detection in VT emulator
-        \\  hyperlink-test    Display OSC 8 hyperlinks for testing
-        \\  toast-test        Display toast notifications via OSC 9/777
-        \\  progress-test     Display progress bar via OSC 9;4
-        \\  sync-test         Test synchronized output mode (DECSET 2026)
-        \\  palette-256       Display full 256-color palette grid
-        \\  help              Show this help
+    std.debug.print("Usage: dullahan test <SUBCOMMAND>\n\n", .{});
+    std.debug.print("Test Commands:\n", .{});
+    inline for (std.meta.fields(TestCommand)) |field| {
+        const cmd: TestCommand = @enumFromInt(field.value);
+        std.debug.print("  {s:<17} {s}\n", .{ field.name, cmd.description() });
+    }
+    std.debug.print(
         \\
         \\Examples:
+        \\  dullahan test help                  # Show all test subcommands
         \\  dullahan test keytest-kitty         # Test keyboard input with Kitty protocol
         \\  dullahan test osc52-set c hello     # Set clipboard 'c' to "hello"
         \\  dullahan test osc52-set p primary   # Set primary selection to "primary"
@@ -116,8 +99,7 @@ pub fn printTestUsage() void {
         \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
         \\  dullahan test palette-256           # Display the full 256-color palette
         \\
-    ;
-    std.debug.print("{s}", .{usage});
+    , .{});
 }
 
 /// Run the specified test command

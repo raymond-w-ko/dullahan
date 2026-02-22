@@ -132,8 +132,10 @@ pub fn printUsage() void {
         \\  dullahan serve --tls-cert=cert.pem --tls-key=key.pem  # Start HTTPS server
         \\  dullahan panes                          # List pane IDs: "0 1 2"
         \\  dullahan windows                        # List windows with panes (JSON)
+        \\  dullahan help                           # Show IPC command help from server
         \\  dullahan dump                           # Dump terminal state (compact)
         \\  dullahan dump-raw                       # Dump raw terminal cells
+        \\  dullahan debug-log list                 # List debug log categories
         \\  dullahan send 1 "echo hello"            # Send to pane 1
         \\  echo "ls -la" | dullahan send 1         # Send from stdin to pane 1
         \\  dullahan test help                      # Show all test subcommands
