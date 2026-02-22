@@ -73,7 +73,7 @@ themes:
 	@if [ ! -d deps/themes/ghostty ]; then \
 		echo "Downloading Ghostty themes..."; \
 		mkdir -p deps/themes; \
-		curl -sL "https://deps.files.ghostty.org/ghostty-themes-release-20251222-150520-0add1e1.tgz" | tar xz -C deps/themes; \
+		curl -sL "https://deps.files.ghostty.org/ghostty-themes-release-20260216-151611-fc73ce3.tgz" | tar xz -C deps/themes; \
 	fi
 	bun scripts/generate-themes.ts
 
