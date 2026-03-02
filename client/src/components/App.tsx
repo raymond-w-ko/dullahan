@@ -2,7 +2,7 @@
 // Initializes connection and renders terminal grid
 
 import { h } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect } from "preact/hooks";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { TerminalGrid } from "./TerminalGrid";
 import { SettingsModal } from "./SettingsModal";
@@ -17,6 +17,7 @@ import {
   disconnectConnection,
   setSettingsOpen,
   setFullscreenPane,
+  openLogoContextMenu,
   requestMaster,
 } from "../store";
 import * as config from "../config";
@@ -32,6 +33,7 @@ export function App() {
     activeWindowId,
     latency,
     fullscreenPaneId,
+    layoutDividerEnabled,
   } = useStoreSelector(
     (store) => ({
       connected: store.connected,
@@ -43,12 +45,10 @@ export function App() {
       activeWindowId: store.activeWindowId,
       latency: store.latency,
       fullscreenPaneId: store.fullscreenPaneId,
+      layoutDividerEnabled: store.layoutDividerEnabled,
     }),
     shallowEqual
   );
-  const dividerHoldTimeoutRef = useRef<number | null>(null);
-  const dividerHoldAwaitingReleaseRef = useRef(false);
-  const dividerHoldHeldRef = useRef(false);
 
   // Initialize connection on mount
   useEffect(() => {
@@ -70,67 +70,18 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [fullscreenPaneId]);
 
-  // Toggle layout dividers after holding Meta for ~3 seconds
+  // Sync resize-handle visibility with document class
   useEffect(() => {
-    const toggleDividers = () => {
-      document.body.classList.toggle("layout-divider-enabled");
-    };
-
-    const clearTimer = () => {
-      if (dividerHoldTimeoutRef.current !== null) {
-        window.clearTimeout(dividerHoldTimeoutRef.current);
-        dividerHoldTimeoutRef.current = null;
-      }
-    };
-
-    const isModifierHeld = (e: KeyboardEvent) => e.metaKey;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isModifierHeld(e)) return;
-
-      dividerHoldHeldRef.current = true;
-      if (
-        dividerHoldAwaitingReleaseRef.current ||
-        dividerHoldTimeoutRef.current !== null ||
-        e.repeat
-      ) {
-        return;
-      }
-
-      dividerHoldTimeoutRef.current = window.setTimeout(() => {
-        dividerHoldTimeoutRef.current = null;
-        if (!dividerHoldHeldRef.current) return;
-        toggleDividers();
-        dividerHoldAwaitingReleaseRef.current = true;
-      }, 2000);
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== "Meta") return;
-      dividerHoldHeldRef.current = isModifierHeld(e);
-      if (!dividerHoldHeldRef.current) {
-        clearTimer();
-        dividerHoldAwaitingReleaseRef.current = false;
-      }
-    };
-
-    const handleBlur = () => {
-      dividerHoldHeldRef.current = false;
-      dividerHoldAwaitingReleaseRef.current = false;
-      clearTimer();
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    window.addEventListener("keyup", handleKeyUp, true);
-    window.addEventListener("blur", handleBlur);
-
+    document.body.classList.toggle("layout-divider-enabled", layoutDividerEnabled);
     return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      window.removeEventListener("keyup", handleKeyUp, true);
-      window.removeEventListener("blur", handleBlur);
-      clearTimer();
+      document.body.classList.remove("layout-divider-enabled");
     };
-  }, []);
+  }, [layoutDividerEnabled]);
+
+  const handleLogoContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    openLogoContextMenu(e.clientX, e.clientY);
+  };
 
   return (
     <div class="app" data-theme={theme}>
@@ -149,7 +100,11 @@ export function App() {
       <ClipboardBar />
 
       <aside class="bottombar">
-        <div class="bottombar-logo" title="Dullahan">
+        <div
+          class="bottombar-logo"
+          title="Dullahan (right-click for options)"
+          onContextMenu={handleLogoContextMenu}
+        >
           D
         </div>
         <WindowSwitcher />

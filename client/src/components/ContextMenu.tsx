@@ -11,9 +11,16 @@ import {
   closeContextMenu,
   closeWindow,
   setWindowLayout,
+  setLayoutDividerEnabled,
   swapPanes,
 } from "../store";
-import type { WindowContextMenuState, PaneContextMenuState, HiddenPanesPickerState, WindowState } from "../store";
+import type {
+  WindowContextMenuState,
+  PaneContextMenuState,
+  HiddenPanesPickerState,
+  LogoContextMenuState,
+  WindowState,
+} from "../store";
 import type { LayoutTemplate } from "../terminal/connection";
 import type { LayoutNode } from "../../../protocol/schema/layout";
 import { countPanes } from "../../../protocol/schema/layout";
@@ -371,6 +378,29 @@ function HiddenPickerContent({ menu }: { menu: HiddenPanesPickerState }) {
   );
 }
 
+/** Logo context menu content - app-level actions */
+function LogoMenuContent({ menu }: { menu: LogoContextMenuState }) {
+  void menu;
+  const { layoutDividerEnabled } = useStoreSelector(
+    (store) => ({
+      layoutDividerEnabled: store.layoutDividerEnabled,
+    }),
+    shallowEqual
+  );
+
+  const handleToggleResizeHandles = () => {
+    setLayoutDividerEnabled(!layoutDividerEnabled);
+  };
+
+  return (
+    <button class="context-menu-item" onClick={handleToggleResizeHandles}>
+      <span class="context-menu-item-label">
+        {layoutDividerEnabled ? "Hide pane resize handles" : "Show pane resize handles"}
+      </span>
+    </button>
+  );
+}
+
 export function ContextMenu() {
   const contextMenu = useStoreSelector((store) => store.contextMenu);
 
@@ -449,6 +479,9 @@ export function ContextMenu() {
       break;
     case "hidden_picker":
       content = <HiddenPickerContent menu={contextMenu} />;
+      break;
+    case "logo":
+      content = <LogoMenuContent menu={contextMenu} />;
       break;
   }
 

@@ -88,8 +88,21 @@ export interface HiddenPanesPickerState {
   windowId: number;
 }
 
+/** Context menu state for Dullahan logo in bottom bar */
+export interface LogoContextMenuState {
+  kind: "logo";
+  /** X position in viewport pixels */
+  x: number;
+  /** Y position in viewport pixels */
+  y: number;
+}
+
 /** Union of all context menu states */
-export type ContextMenuState = WindowContextMenuState | PaneContextMenuState | HiddenPanesPickerState;
+export type ContextMenuState =
+  | WindowContextMenuState
+  | PaneContextMenuState
+  | HiddenPanesPickerState
+  | LogoContextMenuState;
 
 export interface Store {
   // Connection state
@@ -124,6 +137,7 @@ export interface Store {
   toasts: ToastNotification[]; // Active toast notifications
   progress: ProgressState | null; // Active progress bar
   contextMenu: ContextMenuState | null; // Context menu state
+  layoutDividerEnabled: boolean; // Whether pane resize handles are visible
 
   // Config (mirrored from config module for reactivity)
   theme: string;
@@ -239,6 +253,7 @@ const store: Store = {
   toasts: [],
   progress: null,
   contextMenu: null,
+  layoutDividerEnabled: false,
 
   theme: config.get("theme") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
@@ -588,6 +603,12 @@ export function openHiddenPanesPicker(windowId: number, x: number, y: number) {
   notify();
 }
 
+/** Open logo context menu (right-click on Dullahan logo) */
+export function openLogoContextMenu(x: number, y: number) {
+  store.contextMenu = { kind: "logo", x, y };
+  notify();
+}
+
 export function closeContextMenu() {
   store.contextMenu = null;
   notify();
@@ -601,6 +622,16 @@ export function setWindowLayout(windowId: number, templateId: string) {
 /** Swap two panes' positions in a window */
 export function swapPanes(windowId: number, paneId1: number, paneId2: number) {
   store.connection?.swapPanes(windowId, paneId1, paneId2);
+  closeContextMenu();
+}
+
+/** Show/hide pane resize handles */
+export function setLayoutDividerEnabled(enabled: boolean) {
+  if (store.layoutDividerEnabled === enabled) {
+    closeContextMenu();
+    return;
+  }
+  store.layoutDividerEnabled = enabled;
   closeContextMenu();
 }
 
