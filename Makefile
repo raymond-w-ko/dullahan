@@ -1,4 +1,4 @@
-.PHONY: all build clean dev prod server client fmt themes theme-db dist install coverage coverage-server coverage-client
+.PHONY: all build clean dev prod server client fmt themes theme-db update-themes update-ghostty dist install coverage coverage-server coverage-client
 
 all: build
 
@@ -70,17 +70,19 @@ install: dist
 # =============================================================================
 
 themes:
-	@if [ ! -d deps/themes/ghostty ]; then \
-		echo "Downloading Ghostty themes..."; \
-		mkdir -p deps/themes; \
-		curl -sL "https://deps.files.ghostty.org/ghostty-themes-release-20260216-151611-fc73ce3.tgz" | tar xz -C deps/themes; \
-	fi
 	bun scripts/generate-themes.ts
 
 # Generate server-side theme database (Zig source file)
 # This embeds all Ghostty theme colors into the server binary for O(1) lookups
 theme-db: themes
 	bun scripts/generate-theme-db.ts
+
+update-themes:
+	bun scripts/update-themes.ts
+	$(MAKE) theme-db
+
+update-ghostty:
+	./scripts/update-ghostty.sh
 
 clean:
 	cd server && rm -rf zig-out .zig-cache

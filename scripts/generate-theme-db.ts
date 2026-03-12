@@ -11,8 +11,8 @@
 
 import { readdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
+import { ensureThemeSourceDir, loadThemeManifest, themeToCssSelector } from "./theme-source";
 
-const THEMES_DIR = "deps/themes/ghostty";
 const OUTPUT_FILE = "server/src/theme_db.zig";
 
 interface ThemeColors {
@@ -35,15 +35,6 @@ function parseHexColor(color: string): [number, number, number] | null {
     parseInt(match[2]!, 16),
     parseInt(match[3]!, 16),
   ];
-}
-
-/** Convert theme name to CSS selector (same as generate-themes.ts) */
-function themeToCssSelector(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/\+/g, "-plus")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 /** Parse a Ghostty theme file */
@@ -147,12 +138,13 @@ function formatPalette(palette: ([number, number, number] | null)[]): string {
 }
 
 /** Generate Zig source file */
-function generateZigSource(themes: ThemeColors[]): string {
+function generateZigSource(themes: ThemeColors[], releaseTag: string): string {
   const lines: string[] = [];
 
   lines.push("//! Auto-generated theme database from Ghostty themes");
   lines.push("//! Do not edit manually. Run: bun scripts/generate-theme-db.ts");
   lines.push("//!");
+  lines.push(`//! Release: ${releaseTag}`);
   lines.push(`//! Theme count: ${themes.length}`);
   lines.push("");
   lines.push("const std = @import(\"std\");");
@@ -252,16 +244,19 @@ function generateZigSource(themes: ThemeColors[]): string {
 }
 
 async function main() {
-  console.log(`Reading themes from ${THEMES_DIR}...`);
+  const manifest = await loadThemeManifest();
+  const { themeDir } = await ensureThemeSourceDir(manifest);
 
-  const files = await readdir(THEMES_DIR);
+  console.log(`Reading themes from ${themeDir} (${manifest.releaseTag})...`);
+
+  const files = await readdir(themeDir);
   console.log(`Found ${files.length} theme files`);
 
   const themes: ThemeColors[] = [];
 
   for (const file of files.sort()) {
     try {
-      const content = await readFile(join(THEMES_DIR, file), "utf-8");
+      const content = await readFile(join(themeDir, file), "utf-8");
       const theme = parseTheme(file, content);
       if (theme) {
         themes.push(theme);
@@ -273,7 +268,7 @@ async function main() {
 
   console.log(`Parsed ${themes.length} themes successfully`);
 
-  const zigSource = generateZigSource(themes);
+  const zigSource = generateZigSource(themes, manifest.releaseTag);
   await writeFile(OUTPUT_FILE, zigSource);
 
   console.log(`Written ${OUTPUT_FILE}`);

@@ -8,8 +8,8 @@
 
 import { readdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
+import { ensureThemeSourceDir, loadThemeManifest, themeToCssSelector } from "./theme-source";
 
-const THEMES_DIR = "deps/themes/ghostty";
 const OUTPUT_FILE = "client/src/themes.css";
 
 interface Theme {
@@ -72,17 +72,6 @@ function parseTheme(name: string, content: string): Theme {
   return theme;
 }
 
-function themeToCssSelector(name: string): string {
-  // Convert theme name to valid CSS selector
-  // "Catppuccin Mocha" -> "catppuccin-mocha"
-  // "Dracula+" -> "dracula-plus"
-  return name
-    .toLowerCase()
-    .replace(/\+/g, "-plus")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
 function themeToCSS(theme: Theme): string {
   const selector = themeToCssSelector(theme.name);
   const vars: string[] = [];
@@ -108,9 +97,12 @@ function themeToCSS(theme: Theme): string {
 }
 
 async function main() {
-  console.log(`Reading themes from ${THEMES_DIR}...`);
-  
-  const files = await readdir(THEMES_DIR);
+  const manifest = await loadThemeManifest();
+  const { themeDir } = await ensureThemeSourceDir(manifest);
+
+  console.log(`Reading themes from ${themeDir} (${manifest.releaseTag})...`);
+
+  const files = await readdir(themeDir);
   console.log(`Found ${files.length} theme files`);
 
   const themes: Theme[] = [];
@@ -118,7 +110,7 @@ async function main() {
 
   for (const file of files.sort()) {
     try {
-      const content = await readFile(join(THEMES_DIR, file), "utf-8");
+      const content = await readFile(join(themeDir, file), "utf-8");
       const theme = parseTheme(file, content);
       themes.push(theme);
       themeIndex.push({
@@ -137,6 +129,7 @@ async function main() {
  * Ghostty Themes - Auto-generated
  * 
  * Generated from ${themes.length} themes
+ * Release: ${manifest.releaseTag}
  * Run: bun scripts/generate-themes.ts
  * 
  * Usage: Add data-theme="theme-name" to your terminal container

@@ -41,7 +41,7 @@ Templates in `~/.config/dullahan/layouts.json`. LayoutNode: `container` (childre
 cd client && bun install && bun run build|dev|serve|typecheck
 
 # Make
-make build|server|client|dist|install|themes|theme-db|coverage|fmt|dev|prod|clean
+make build|server|client|dist|install|themes|theme-db|update-themes|update-ghostty|coverage|fmt|dev|prod|clean
 
 # Server IPC (auto-spawns server)
 ./zig-out/bin/dullahan ping|status|quit|help
@@ -91,9 +91,22 @@ log.log('msg');  // ✓ categorized — never console.log
 ```
 
 ### Theming
-453 Ghostty themes. `make themes` (CSS), `make theme-db` (Zig). Apply: `data-theme="dracula"`.
+Pinned Ghostty theme release. `make themes` (CSS), `make theme-db` (Zig), `make update-themes` (refresh pin + regenerate). Apply: `data-theme="dracula"`.
 CSS vars: `--term-bg/fg`, `--term-cursor-bg/fg`, `--term-selection-bg/fg`, `--c0`–`--c15`
 **Always use palette:** `var(--c1)` red, `var(--c2)` green, `var(--c3)` yellow, `var(--c4)` blue, `var(--c8)` dim. Never hardcode colors.
+
+Theme update flow:
+- Source of truth: `scripts/theme-release.json`
+- Refresh pin: `make update-themes`
+- Regenerate from pinned release: `make theme-db` or `make build`
+- Extracted sources live under `deps/themes/releases/<release-tag>/ghostty`
+- Old mutable `deps/themes/ghostty` is not the build input anymore; stale files there must not matter
+
+Ghostty update flow:
+- Refresh dep pin: `make update-ghostty`
+- Source of truth: `server/build.zig.zon`
+- Reference checkout: `deps/ghostty/`
+- Verify after bump: `cd server && zig build test && cd ../client && bun run typecheck && cd .. && make build`
 
 When changing the default theme/fallback colors, update all of these in one pass:
 - `client/src/config.ts` (`DEFAULTS.theme`)

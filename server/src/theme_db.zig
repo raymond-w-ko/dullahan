@@ -1,6 +1,7 @@
 //! Auto-generated theme database from Ghostty themes
 //! Do not edit manually. Run: bun scripts/generate-theme-db.ts
 //!
+//! Release: release-20260216-151611-fc73ce3
 //! Theme count: 463
 
 const std = @import("std");
