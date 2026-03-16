@@ -58,6 +58,7 @@ pub const layout_db = @import("layout_db.zig");
 
 // Test runners (integrated test commands)
 pub const test_runners = @import("test_runners.zig");
+pub const test_diagnostics = @import("test_diagnostics.zig");
 
 // Ensure all tests from submodules are run
 test {

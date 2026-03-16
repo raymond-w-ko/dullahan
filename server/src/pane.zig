@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const builtin = @import("builtin");
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
 const osc = ghostty.osc;
@@ -1989,6 +1990,19 @@ test "OSC 52 clipboard GET" {
     try std.testing.expect(!pane.hasClipboardGet());
 }
 
+test "OSC 52 clipboard GET waits for the final terminator across chunks" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    try pane.feed("\x1b]52;c;");
+    try std.testing.expect(!pane.hasClipboardGet());
+    try std.testing.expect(!pane.hasClipboardSet());
+
+    try pane.feed("?\x1b\\");
+    try std.testing.expect(pane.hasClipboardGet());
+    try std.testing.expectEqual(@as(u8, 'c'), pane.getClipboardGetKind().?);
+}
+
 test "OSC 52 clipboard with default kind" {
     var pane = try Pane.init(std.testing.allocator, .{});
     defer pane.deinit();
@@ -2097,6 +2111,185 @@ test "OSC 133 shell integration command_end with exit code" {
     try std.testing.expectEqual(ShellIntegrationEvent.Kind.command_end, event_d_no_code.kind);
     try std.testing.expect(event_d_no_code.exit_code == null);
     pane.clearShellEvent();
+}
+
+fn readAvailableFromSlave(allocator: std.mem.Allocator, pty: *Pty) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, 0);
+    errdefer out.deinit(allocator);
+
+    var poll_fds = [_]posix.pollfd{.{
+        .fd = pty.slave,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    }};
+    const ready = try posix.poll(&poll_fds, 25);
+    if (ready == 0 or (poll_fds[0].revents & posix.POLL.IN) == 0) {
+        return out.toOwnedSlice(allocator);
+    }
+
+    var buf: [256]u8 = undefined;
+    while (true) {
+        const n = posix.read(pty.slave, &buf) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try out.appendSlice(allocator, buf[0..n]);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn attachResponsePipe(pane: *Pane) !void {
+    if (pane.pty != null) return error.AlreadyHasPty;
+
+    const fds = try posix.pipe();
+    errdefer {
+        posix.close(fds[0]);
+        posix.close(fds[1]);
+    }
+
+    const flags = try posix.fcntl(fds[0], posix.F.GETFL, 0);
+    const o_nonblock: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+    _ = try posix.fcntl(fds[0], posix.F.SETFL, flags | o_nonblock);
+
+    pane.pty = .{
+        .master = fds[1],
+        .slave = fds[0],
+    };
+}
+
+test "OSC color queries preserve BEL and ST terminators" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+    try attachResponsePipe(&pane);
+
+    try pane.feed("\x1b]11;?\x07");
+    const bel_response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(bel_response);
+    try std.testing.expect(std.mem.startsWith(u8, bel_response, "\x1b]11;rgb:"));
+    try std.testing.expect(std.mem.endsWith(u8, bel_response, "\x07"));
+
+    try pane.feed("\x1b]10;?\x1b\\");
+    const st_response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(st_response);
+    try std.testing.expect(std.mem.startsWith(u8, st_response, "\x1b]10;rgb:"));
+    try std.testing.expect(std.mem.endsWith(u8, st_response, "\x1b\\"));
+
+    try pane.feed("\x1b]12;?\x07");
+    const cursor_response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(cursor_response);
+    try std.testing.expect(std.mem.startsWith(u8, cursor_response, "\x1b]12;rgb:"));
+    try std.testing.expect(std.mem.endsWith(u8, cursor_response, "\x07"));
+}
+
+test "split query sequences do not emit early and still respond when completed" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+    try attachResponsePipe(&pane);
+
+    try pane.feed("\x1b]11;");
+    const partial_response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(partial_response);
+    try std.testing.expectEqual(@as(usize, 0), partial_response.len);
+    try std.testing.expect(!pane.hasBell());
+    try std.testing.expect(pane.getTitle() == null);
+
+    try pane.feed("?\x07");
+    const completed_response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(completed_response);
+    try std.testing.expect(std.mem.startsWith(u8, completed_response, "\x1b]11;rgb:"));
+    try std.testing.expect(std.mem.endsWith(u8, completed_response, "\x07"));
+}
+
+test "DA and DSR queries route through the single parser" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+    try attachResponsePipe(&pane);
+
+    try pane.feed("\x1b[c");
+    const da1 = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(da1);
+    try std.testing.expectEqualStrings("\x1b[?62;22;52c", da1);
+
+    try pane.feed("\x1b[>c");
+    const da2 = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(da2);
+    try std.testing.expectEqualStrings("\x1b[>1;10;0c", da2);
+
+    try pane.feed("\x1b[5n");
+    const dsr_status = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(dsr_status);
+    try std.testing.expectEqualStrings("\x1b[0n", dsr_status);
+
+    try pane.feed("\x1b[6n");
+    const dsr_cursor = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(dsr_cursor);
+    try std.testing.expectEqualStrings("\x1b[1;1R", dsr_cursor);
+}
+
+test "split title sequence with BEL terminator updates title without triggering bell" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    try pane.feed("\x1b]2;Build");
+    try std.testing.expect(!pane.hasTitleChanged());
+    try std.testing.expect(!pane.hasBell());
+
+    try pane.feed(" Status\x07");
+    try std.testing.expect(pane.hasTitleChanged());
+    try std.testing.expectEqualStrings("Build Status", pane.getTitle().?);
+    try std.testing.expect(!pane.hasBell());
+}
+
+test "OSC 52 responses are written back to the terminal byte-for-byte" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+    try attachResponsePipe(&pane);
+
+    pane.sendClipboardResponse('c', "SGVsbG8=");
+    const response = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(response);
+
+    try std.testing.expectEqualStrings("\x1b]52;c;SGVsbG8=\x1b\\", response);
+}
+
+test "OSC 9 and OSC 777 notifications are captured" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    try pane.feed("\x1b]9;Hello from OSC 9!\x07");
+    try std.testing.expect(pane.hasNotification());
+    const osc9 = pane.getNotification().?;
+    try std.testing.expect(osc9.title == null);
+    try std.testing.expectEqualStrings("Hello from OSC 9!", osc9.body);
+    pane.clearNotification();
+
+    try pane.feed("\x1b]777;notify;Build Status;Compiling source files...\x07");
+    try std.testing.expect(pane.hasNotification());
+    const osc777 = pane.getNotification().?;
+    try std.testing.expectEqualStrings("Build Status", osc777.title.?);
+    try std.testing.expectEqualStrings("Compiling source files...", osc777.body);
+}
+
+test "OSC 9;4 progress reports update only when a sequence completes" {
+    var pane = try Pane.init(std.testing.allocator, .{});
+    defer pane.deinit();
+
+    try pane.feed("\x1b]9;4;1;25\x07");
+    try std.testing.expect(pane.hasProgressChanged());
+    const progress_set = pane.getProgress();
+    try std.testing.expectEqual(@as(u8, 1), progress_set.state);
+    try std.testing.expectEqual(@as(u8, 25), progress_set.value);
+    pane.clearProgressChanged();
+
+    try pane.feed("\x1b]9;4;3");
+    try std.testing.expect(!pane.hasProgressChanged());
+
+    try pane.feed("\x07");
+    try std.testing.expect(pane.hasProgressChanged());
+    const progress_partial = pane.getProgress();
+    try std.testing.expectEqual(@as(u8, 3), progress_partial.state);
+    try std.testing.expectEqual(@as(u8, 0), progress_partial.value);
 }
 
 test "shell pane respawns with same shell after child exits" {

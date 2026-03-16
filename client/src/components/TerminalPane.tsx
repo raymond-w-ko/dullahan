@@ -10,6 +10,7 @@ import {
   usePaneStoreSelector,
   shallowEqual,
 } from "../hooks/useStoreSubscription";
+import { resolveRenderedCursorStyle } from "../terminal/cursorStyle";
 import {
   setPaneDimensions,
   setBellActive,
@@ -180,6 +181,9 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
 
   const displayDims = dimensions && dimensions.cols > 0 ? dimensions : { cols: 80, rows: 24 };
   const isFocused = focusedPaneId === paneId;
+  const renderedCursorStyle = snapshot
+    ? resolveRenderedCursorStyle(cursorStyle, snapshot.cursor.style)
+    : cursorStyle;
 
   return (
     <div
@@ -232,7 +236,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
           <TerminalView
             paneId={paneId}
             snapshot={snapshot}
-            cursorStyle={cursorStyle}
+            cursorStyle={renderedCursorStyle}
             cursorColor={cursorColor}
             cursorText={cursorText}
             cursorBlink={cursorBlink}

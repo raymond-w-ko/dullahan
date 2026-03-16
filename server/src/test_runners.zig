@@ -12,7 +12,12 @@ const builtin = @import("builtin");
 const Pane = @import("pane.zig").Pane;
 const Pty = @import("pty.zig").Pty;
 const paths = @import("paths.zig");
+const pty_log = @import("pty_log.zig");
 const snapshot = @import("snapshot.zig");
+const dlog = @import("dlog.zig");
+const test_diagnostics = @import("test_diagnostics.zig");
+const query_trace_runner = @import("query_trace_runner.zig");
+const single_parser_matrix = @import("single_parser_matrix.zig");
 
 const log = std.log.scoped(.test_runners);
 
@@ -32,6 +37,8 @@ pub const TestCommand = enum {
     @"progress-test",
     @"sync-test",
     @"palette-256",
+    @"single-parser-diag",
+    @"single-parser-matrix",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -50,6 +57,8 @@ pub const TestCommand = enum {
             .{ "progress-test", .@"progress-test" },
             .{ "sync-test", .@"sync-test" },
             .{ "palette-256", .@"palette-256" },
+            .{ "single-parser-diag", .@"single-parser-diag" },
+            .{ "single-parser-matrix", .@"single-parser-matrix" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -71,6 +80,8 @@ pub const TestCommand = enum {
             .@"progress-test" => "Display progress bar via OSC 9;4",
             .@"sync-test" => "Test synchronized output mode (DECSET 2026)",
             .@"palette-256" => "Display full 256-color palette grid",
+            .@"single-parser-diag" => "Emit reusable single-parser diagnostics artifacts",
+            .@"single-parser-matrix" => "Run the single-parser compatibility scenario matrix",
             .help => "Show available test commands",
         };
     }
@@ -98,6 +109,8 @@ pub fn printTestUsage() void {
         \\  dullahan test progress-test         # Test progress bar
         \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
         \\  dullahan test palette-256           # Display the full 256-color palette
+        \\  dullahan test single-parser-diag    # Emit reusable diagnostics artifacts
+        \\  dullahan test single-parser-matrix  # Run the single-parser compatibility matrix
         \\
     , .{});
 }
@@ -119,6 +132,8 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"progress-test" => runProgressTest(),
         .@"sync-test" => runSyncTest(),
         .@"palette-256" => runPalette256Test(),
+        .@"single-parser-diag" => try runSingleParserDiag(allocator),
+        .@"single-parser-matrix" => try single_parser_matrix.run(allocator),
         .help => printTestUsage(),
     }
 }
@@ -181,6 +196,147 @@ fn runKeytestKitty() !void {
     }
 
     _ = posix.write(stdout_fd, "\nBye!\n") catch {};
+}
+
+fn runSingleParserDiag(allocator: std.mem.Allocator) !void {
+    try query_trace_runner.run(allocator);
+}
+
+fn runSingleParserDiagSmoke(allocator: std.mem.Allocator) ![]u8 {
+    return query_trace_runner.runSmoke(allocator);
+}
+
+test "single-parser diagnostics smoke creates reusable artifacts" {
+    const artifact_dir = try runSingleParserDiagSmoke(std.testing.allocator);
+    defer std.testing.allocator.free(artifact_dir);
+
+    const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
+    defer std.testing.allocator.free(manifest_path);
+    const server_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/server.log", .{artifact_dir});
+    defer std.testing.allocator.free(server_log_path);
+    const pty_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
+    defer std.testing.allocator.free(pty_log_path);
+    const first_request_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/01-osc11-bel-request.bin", .{artifact_dir});
+    defer std.testing.allocator.free(first_request_path);
+    const first_response_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/01-osc11-bel-response.bin", .{artifact_dir});
+    defer std.testing.allocator.free(first_response_path);
+
+    var manifest_file = try std.fs.openFileAbsolute(manifest_path, .{});
+    manifest_file.close();
+    var server_log_file = try std.fs.openFileAbsolute(server_log_path, .{});
+    server_log_file.close();
+    var pty_log_file = try std.fs.openFileAbsolute(pty_log_path, .{});
+    pty_log_file.close();
+    var request_file = try std.fs.openFileAbsolute(first_request_path, .{});
+    request_file.close();
+    var response_file = try std.fs.openFileAbsolute(first_response_path, .{});
+    response_file.close();
+}
+
+fn appendSharedServerLog(line: []const u8) !void {
+    try paths.ensureTempDir();
+    var file = try std.fs.createFileAbsolute(paths.StaticPaths.log(), .{ .truncate = false });
+    defer file.close();
+    try file.seekFromEnd(0);
+    var buf: [512]u8 = undefined;
+    const payload = try std.fmt.bufPrint(&buf, "[diag] {s}\n", .{line});
+    try file.writeAll(payload);
+}
+
+fn captureParserExchange(
+    allocator: std.mem.Allocator,
+    harness: *test_diagnostics.Harness,
+    pane: *Pane,
+    label: []const u8,
+    request: []const u8,
+) !void {
+    try harness.recordRequest(label, request);
+    try pane.feed(request);
+
+    const response = try readAvailableFd(allocator, pane.pty.?.slave, 25);
+    defer allocator.free(response);
+    if (response.len == 0) return error.NoResponse;
+
+    try harness.recordResponse(label, response);
+
+    if (pane.getTitle()) |title| {
+        try harness.recordTrace("pane-title", title);
+    }
+    if (pane.hasBell()) {
+        try harness.recordTrace("pane-bell", label);
+        pane.clearBell();
+    }
+    if (pane.hasClipboardSet()) {
+        if (pane.getClipboardSet()) |op| {
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "kind={c} len={d}", .{ op.kind, op.data.len }) catch "clipboard-set";
+            try harness.recordTrace("clipboard-set", msg);
+        }
+        pane.clearClipboardSet();
+    }
+    if (pane.hasClipboardGet()) {
+        if (pane.getClipboardGetKind()) |kind| {
+            var msg_buf: [32]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "kind={c}", .{kind}) catch "clipboard-get";
+            try harness.recordTrace("clipboard-get", msg);
+        }
+        pane.clearClipboardGet();
+    }
+    if (pane.hasShellEvent()) {
+        if (pane.getShellEvent()) |event| {
+            try harness.recordTrace("shell-event", @tagName(event.kind));
+        }
+        pane.clearShellEvent();
+    }
+}
+
+fn setNonBlocking(fd: posix.fd_t) !void {
+    const flags = try posix.fcntl(fd, posix.F.GETFL, 0);
+    const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+    _ = try posix.fcntl(fd, posix.F.SETFL, flags | O_NONBLOCK);
+}
+
+fn setRawMode(fd: posix.fd_t) !void {
+    const original = try posix.tcgetattr(fd);
+    var raw = original;
+    raw.lflag.ICANON = false;
+    raw.lflag.ECHO = false;
+    raw.lflag.ISIG = false;
+    raw.lflag.IEXTEN = false;
+    raw.iflag.IXON = false;
+    raw.iflag.ICRNL = false;
+    raw.cc[@intFromEnum(posix.V.MIN)] = 0;
+    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    try posix.tcsetattr(fd, .NOW, raw);
+}
+
+fn readAvailableFd(allocator: std.mem.Allocator, fd: posix.fd_t, timeout_ms: i32) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, 0);
+    errdefer out.deinit(allocator);
+
+    var poll_fds = [_]posix.pollfd{
+        .{
+            .fd = fd,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+
+    const ready = try posix.poll(&poll_fds, timeout_ms);
+    if (ready == 0 or (poll_fds[0].revents & posix.POLL.IN) == 0) {
+        return out.toOwnedSlice(allocator);
+    }
+
+    var buf: [512]u8 = undefined;
+    while (true) {
+        const n = posix.read(fd, &buf) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => return err,
+        };
+        if (n == 0) break;
+        try out.appendSlice(allocator, buf[0..n]);
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 fn kittyParseAndPrint(fd: posix.fd_t, buf: []const u8) void {
@@ -485,29 +641,29 @@ var bytes_warning_len: usize = 0;
 
 const key_hints = [256][]const u8{
     // 0x00-0x0F
-    "^@", "^A", "^B", "^C", "^D", "^E", "^F", "^G",
-    "^H", "Tab", "^J", "^K", "^L", "Ret", "^N", "^O",
+    "^@",  "^A",  "^B",  "^C",  "^D",  "^E",  "^F",  "^G",
+    "^H",  "Tab", "^J",  "^K",  "^L",  "Ret", "^N",  "^O",
     // 0x10-0x1F
-    "^P", "^Q", "^R", "^S", "^T", "^U", "^V", "^W",
-    "^X", "^Y", "^Z", "Esc", "^\\", "^]", "^^", "^_",
+    "^P",  "^Q",  "^R",  "^S",  "^T",  "^U",  "^V",  "^W",
+    "^X",  "^Y",  "^Z",  "Esc", "^\\", "^]",  "^^",  "^_",
     // 0x20-0x2F (printable)
-    "Spc", "!", "\"", "#", "$", "%", "&", "'",
-    "(", ")", "*", "+", ",", "-", ".", "/",
+    "Spc", "!",   "\"",  "#",   "$",   "%",   "&",   "'",
+    "(",   ")",   "*",   "+",   ",",   "-",   ".",   "/",
     // 0x30-0x3F
-    "0", "1", "2", "3", "4", "5", "6", "7",
-    "8", "9", ":", ";", "<", "=", ">", "?",
+    "0",   "1",   "2",   "3",   "4",   "5",   "6",   "7",
+    "8",   "9",   ":",   ";",   "<",   "=",   ">",   "?",
     // 0x40-0x4F
-    "@", "A", "B", "C", "D", "E", "F", "G",
-    "H", "I", "J", "K", "L", "M", "N", "O",
+    "@",   "A",   "B",   "C",   "D",   "E",   "F",   "G",
+    "H",   "I",   "J",   "K",   "L",   "M",   "N",   "O",
     // 0x50-0x5F
-    "P", "Q", "R", "S", "T", "U", "V", "W",
-    "X", "Y", "Z", "[", "\\", "]", "^", "_",
+    "P",   "Q",   "R",   "S",   "T",   "U",   "V",   "W",
+    "X",   "Y",   "Z",   "[",   "\\",  "]",   "^",   "_",
     // 0x60-0x6F
-    "`", "a", "b", "c", "d", "e", "f", "g",
-    "h", "i", "j", "k", "l", "m", "n", "o",
+    "`",   "a",   "b",   "c",   "d",   "e",   "f",   "g",
+    "h",   "i",   "j",   "k",   "l",   "m",   "n",   "o",
     // 0x70-0x7F
-    "p", "q", "r", "s", "t", "u", "v", "w",
-    "x", "y", "z", "{", "|", "}", "~", "Del",
+    "p",   "q",   "r",   "s",   "t",   "u",   "v",   "w",
+    "x",   "y",   "z",   "{",   "|",   "}",   "~",   "Del",
     // 0x80-0xFF (extended)
     "x80", "x81", "x82", "x83", "x84", "x85", "x86", "x87",
     "x88", "x89", "x8A", "x8B", "x8C", "x8D", "x8E", "x8F",

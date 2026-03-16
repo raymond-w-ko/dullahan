@@ -86,7 +86,12 @@ pub const Pty = struct {
     }
 
     pub fn deinit(self: *Pty) void {
-        _ = posix.system.close(self.master);
+        if (self.master >= 0) {
+            _ = posix.system.close(self.master);
+        }
+        if (self.slave >= 0 and self.slave != self.master) {
+            _ = posix.system.close(self.slave);
+        }
         self.* = undefined;
     }
 
