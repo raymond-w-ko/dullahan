@@ -46,6 +46,7 @@ cert/
 # beads internal sync files
 .beads/.sync.lock
 .beads/sync_base.jsonl
+.beads/.br_history/
 
 # Dependency source checkouts (for reference only)
 deps/
