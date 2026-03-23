@@ -51,8 +51,19 @@ pub const Handler = struct {
         self.apc.deinit();
     }
 
-    /// Main VT event handler - called by ghostty-vt for each parsed action
+    /// Main VT event handler - called by ghostty-vt for each parsed action.
+    /// ghostty's stream now expects handlers to be infallible.
     pub fn vt(
+        self: *Handler,
+        comptime action: StreamAction.Tag,
+        value: StreamAction.Value(action),
+    ) void {
+        self.vtFallible(action, value) catch |err| {
+            log.warn("error handling VT action action={} err={}", .{ action, err });
+        };
+    }
+
+    inline fn vtFallible(
         self: *Handler,
         comptime action: StreamAction.Tag,
         value: StreamAction.Value(action),

@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .ghostty = .{
-            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#8dde340f88d87bf1fa83cbbd312cf7962eaf284b",
-            .hash = "ghostty-1.3.0-5UdBC3cG-gRSX9VsZ2vWJ-SGbNIzZ5GTLVuyfFTDbPEV",
+            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#374ed2721462ba2a9aaa8c6872a8c56eb4568b90",
+            .hash = "ghostty-1.3.2-dev-5UdBC-EHAAVmmjTeC_tc_EeWOP_Uus4U_JfMHVf2AIFE",
         },
         .@"zig-msgpack" = .{
             .url = "git+https://github.com/zigcc/zig-msgpack#47c15d217efebd17a585dd04125f9b6b6f659d5a",

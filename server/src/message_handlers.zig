@@ -768,7 +768,10 @@ fn handleMouse(el: *EventLoop, mouse_msg: ParsedMouse) void {
 
     // Check if this event type should be reported
     const is_motion = std.mem.eql(u8, mouse_msg.state, "move");
-    if (is_motion and !mouse_events.motion()) {
+    if (is_motion and switch (mouse_events) {
+        .button, .any => false,
+        else => true,
+    }) {
         log.debug("Mouse motion ignored (mode={s})", .{@tagName(mouse_events)});
         return;
     }

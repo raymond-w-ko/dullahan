@@ -18,11 +18,11 @@ const pty_log = @import("pty_log.zig");
 
 /// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
 /// Re-exported from ghostty for use by event_loop.zig
-pub const MouseEvents = Terminal.MouseEvents;
+pub const MouseEvents = @TypeOf(@as(Terminal, undefined).flags.mouse_event);
 
 /// Mouse encoding formats (DECSET 1005, 1006, 1015, 1016)
 /// Re-exported from ghostty for use by event_loop.zig
-pub const MouseFormat = Terminal.MouseFormat;
+pub const MouseFormat = @TypeOf(@as(Terminal, undefined).flags.mouse_format);
 const snapshot = @import("snapshot.zig");
 const process = @import("process.zig");
 const dlog = @import("dlog.zig");
@@ -386,7 +386,7 @@ pub const Pane = struct {
             const handler = stream_handler.Handler.init(&self.terminal, self);
             self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
         }
-        try self.vt_stream.?.nextSlice(data);
+        self.vt_stream.?.nextSlice(data);
 
         // Collect dirty rows
         self.collectDirtyRows();
@@ -436,7 +436,7 @@ pub const Pane = struct {
             const handler = stream_handler.Handler.init(&self.terminal, self);
             self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
         }
-        try self.vt_stream.?.nextSlice(data);
+        self.vt_stream.?.nextSlice(data);
 
         // Check for screen switch (primary <-> alternate)
         // Row IDs are completely different between screens, so clients need full resync
@@ -1493,7 +1493,10 @@ pub const Pane = struct {
     /// Check if mouse motion events should be reported.
     /// True for modes 1002 (button) and 1003 (any).
     pub fn wantsMouseMotion(self: *const Pane) bool {
-        return self.terminal.flags.mouse_event.motion();
+        return switch (self.terminal.flags.mouse_event) {
+            .button, .any => true,
+            else => false,
+        };
     }
 
     // ========================================================================
