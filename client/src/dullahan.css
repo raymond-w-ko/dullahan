@@ -701,6 +701,7 @@ body.layout-resizing-vertical * {
 
 .terminal-titlebar {
   display: flex;
+  flex-wrap: nowrap;
   justify-content: space-between;
   align-items: center;
   padding: 0;
@@ -709,11 +710,16 @@ body.layout-resizing-vertical * {
   line-height: var(--term-line-height);
   height: var(--term-line-height);
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .terminal-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 500;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pane-id-bubble {
@@ -737,6 +743,7 @@ body.layout-resizing-vertical * {
   font-family: var(--term-font);
   margin-left: auto;
   margin-right: 1rem;
+  white-space: nowrap;
 }
 
 .terminal-size {
