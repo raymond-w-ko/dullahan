@@ -752,22 +752,21 @@ body.layout-resizing-vertical * {
 }
 
 .pane-resync {
+  appearance: none;
   background: none;
-  border: 1px solid color-mix(in srgb, var(--term-fg) 60%, transparent);
+  border: 0;
   color: var(--term-fg);
-  font-size: calc(var(--term-font-size) * 0.6);
+  font-size: 0.8rem;
   line-height: 1;
   cursor: pointer;
-  padding: 0.1rem 0.1rem;
+  padding: 0;
   margin-left: 0.75rem;
-  border-radius: 3px;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s;
   white-space: nowrap;
 }
 
 .pane-resync:hover {
   color: var(--c3);
-  border-color: var(--c3);
 }
 
 .pane-resync:disabled {

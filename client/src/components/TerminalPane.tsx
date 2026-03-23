@@ -216,9 +216,10 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
           class="pane-resync"
           onClick={handleResyncClick}
           disabled={!connection?.isConnected}
+          aria-label="Request a full snapshot resync for this pane"
           title="Request a full snapshot resync for this pane"
         >
-          request full snapshot
+          ↻
         </button>
         {!isReadOnly && connection?.isMaster && (
           <button
