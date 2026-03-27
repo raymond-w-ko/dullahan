@@ -111,8 +111,18 @@ describe("parseKeybind", () => {
       expect(keybind.key).toBe("PageUp");
     });
 
+    test("pgup alias", () => {
+      const keybind = parseKeybind("pgup");
+      expect(keybind.key).toBe("PageUp");
+    });
+
     test("page_down", () => {
       const keybind = parseKeybind("page_down");
+      expect(keybind.key).toBe("PageDown");
+    });
+
+    test("pgdn alias", () => {
+      const keybind = parseKeybind("pgdn");
       expect(keybind.key).toBe("PageDown");
     });
 

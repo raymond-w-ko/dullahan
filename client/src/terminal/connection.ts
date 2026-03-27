@@ -490,6 +490,30 @@ function getClientId(): string {
   return clientId;
 }
 
+function isModifierOnlyKey(code: string): boolean {
+  return (
+    code === "ControlLeft" ||
+    code === "ControlRight" ||
+    code === "ShiftLeft" ||
+    code === "ShiftRight" ||
+    code === "AltLeft" ||
+    code === "AltRight" ||
+    code === "MetaLeft" ||
+    code === "MetaRight" ||
+    code === "CapsLock" ||
+    code === "NumLock"
+  );
+}
+
+function shouldAutoFollowOnKeyInput(message: KeyMessage): boolean {
+  return (
+    message.state === "down" &&
+    !isModifierOnlyKey(message.code) &&
+    message.key !== "Dead" &&
+    message.key !== "Unidentified"
+  );
+}
+
 export class TerminalConnection {
   private ws: WebSocket | null = null;
   private url: string;
@@ -1099,6 +1123,7 @@ export class TerminalConnection {
    */
   sendKey(message: KeyMessage): void {
     if (!this.isMaster) return;
+    this.maybeScrollToBottomOnInput(message.paneId, shouldAutoFollowOnKeyInput(message));
     this.flushCoalescedInput();
     this.send(message);
   }
@@ -1109,6 +1134,7 @@ export class TerminalConnection {
    */
   sendText(message: TextMessage): void {
     if (!this.isMaster) return;
+    this.maybeScrollToBottomOnInput(message.paneId, message.data.length > 0);
     this.flushCoalescedInput();
     this.send(message);
   }
@@ -1313,6 +1339,21 @@ export class TerminalConnection {
       paneState.autoFollowInFlight = false;
     }
     this.queueScroll(paneId, delta);
+  }
+
+  private maybeScrollToBottomOnInput(paneId: number, shouldFollow: boolean): void {
+    if (!shouldFollow) {
+      return;
+    }
+
+    const paneState = this.getPaneState(paneId);
+    if (paneState.followTail) {
+      return;
+    }
+
+    paneState.followTail = true;
+    paneState.autoFollowInFlight = false;
+    this.queueScroll(paneId, 999999);
   }
 
   /**

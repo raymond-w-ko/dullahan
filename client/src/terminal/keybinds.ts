@@ -42,8 +42,10 @@ const KEY_MAP: Record<string, string> = {
   right: "ArrowRight",
   page_up: "PageUp",
   pageup: "PageUp",
+  pgup: "PageUp",
   page_down: "PageDown",
   pagedown: "PageDown",
+  pgdn: "PageDown",
   home: "Home",
   end: "End",
 

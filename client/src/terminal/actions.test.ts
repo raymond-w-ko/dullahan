@@ -3,7 +3,12 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { canPerformAction, type ActionContext, type TerminalAction } from "./actions";
+import {
+  canPerformAction,
+  executeAction,
+  type ActionContext,
+  type TerminalAction,
+} from "./actions";
 
 /**
  * Create a mock ActionContext for testing.
@@ -11,6 +16,7 @@ import { canPerformAction, type ActionContext, type TerminalAction } from "./act
 function createMockContext(overrides: Partial<ActionContext> = {}): ActionContext {
   return {
     paneId: 1,
+    getViewportRows: () => 24,
     sendText: () => {},
     sendScroll: () => {},
     getSelection: () => null,
@@ -145,5 +151,39 @@ describe("canPerformAction", () => {
         expect(canPerformAction(action, ctx)).toBe(true);
       });
     }
+  });
+});
+
+describe("executeAction", () => {
+  test("scroll_page_* uses live pane height", async () => {
+    const calls: Array<{ paneId: number; lines: number }> = [];
+    const ctx = createMockContext({
+      getViewportRows: () => 37,
+      sendScroll: (paneId, lines) => calls.push({ paneId, lines }),
+    });
+
+    await executeAction({ type: "scroll", direction: "up", amount: "page" }, ctx);
+    await executeAction({ type: "scroll", direction: "down", amount: "page" }, ctx);
+
+    expect(calls).toEqual([
+      { paneId: 1, lines: -37 },
+      { paneId: 1, lines: 37 },
+    ]);
+  });
+
+  test("scroll_half_page_* uses half the pane height", async () => {
+    const calls: Array<{ paneId: number; lines: number }> = [];
+    const ctx = createMockContext({
+      getViewportRows: () => 9,
+      sendScroll: (paneId, lines) => calls.push({ paneId, lines }),
+    });
+
+    await executeAction({ type: "scroll", direction: "up", amount: "half_page" }, ctx);
+    await executeAction({ type: "scroll", direction: "down", amount: "half_page" }, ctx);
+
+    expect(calls).toEqual([
+      { paneId: 1, lines: -4 },
+      { paneId: 1, lines: 4 },
+    ]);
   });
 });

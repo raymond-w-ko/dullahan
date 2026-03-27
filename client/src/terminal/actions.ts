@@ -130,6 +130,9 @@ export interface ActionContext {
   /** Current pane ID */
   paneId: number;
 
+  /** Current viewport rows for this pane */
+  getViewportRows: () => number;
+
   /** Send text to the server (as keyboard input) */
   sendText: (text: string) => void;
 
@@ -376,18 +379,18 @@ async function handlePaste(ctx: ActionContext): Promise<void> {
 
 function handleScroll(action: ScrollAction, ctx: ActionContext): void {
   let lines: number;
+  const viewportRows = Math.max(1, ctx.getViewportRows());
 
   switch (action.amount) {
     case "line":
       lines = action.direction === "up" ? -1 : 1;
       break;
     case "half_page":
-      // Assume ~12 lines for half page (24 row terminal)
-      lines = action.direction === "up" ? -12 : 12;
+      lines = Math.max(1, Math.floor(viewportRows / 2));
+      lines = action.direction === "up" ? -lines : lines;
       break;
     case "page":
-      // Assume ~24 lines for full page
-      lines = action.direction === "up" ? -24 : 24;
+      lines = action.direction === "up" ? -viewportRows : viewportRows;
       break;
     case "top":
       lines = -999999; // Scroll to very top

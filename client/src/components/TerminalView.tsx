@@ -38,9 +38,9 @@ import {
   type StyledRun,
 } from "../terminal/cellRendering";
 import { renderLine } from "../terminal/cursorRendering";
-import { SCROLL } from "../constants";
 import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
+import { normalizeWheelDeltaToRows } from "../terminal/wheel";
 import type { SelectionBounds } from "../../../protocol/schema/messages";
 
 const MAX_IMAGE_PASTE_BYTES = 32 * 1024 * 1024;
@@ -275,6 +275,8 @@ export function TerminalView({
   const mouseRef = useRef<MouseHandler | null>(null);
   const rowRunsCacheRef = useRef<Map<bigint, RowRunsCacheEntry>>(new Map());
   const rowRunsClockRef = useRef(0);
+  const wheelRemainderRef = useRef(0);
+  const rowHeightPxRef = useRef(16);
   const lastRenderedGenRef = useRef<number | null>(null);
   const lastAppliedDeltaInvalidationGenRef = useRef<number | null>(null);
   const lineRenderStateRef = useRef<LineRenderState>({
@@ -325,6 +327,7 @@ export function TerminalView({
     // Create action context for keybind execution
     const actionContext: ActionContext = {
       paneId,
+      getViewportRows: () => snapshotRef.current.rows,
       sendText: (text: string) => {
         if (connection?.isConnected) {
           connection.sendText({
@@ -490,14 +493,27 @@ export function TerminalView({
       e.preventDefault();
       if (!connection?.isConnected) return;
 
-      // Convert wheel delta to rows
-      const delta = Math.sign(e.deltaY) * SCROLL.ROWS_PER_TICK;
-      connection.sendScroll(paneId, delta);
+      const { rows, remainder } = normalizeWheelDeltaToRows({
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        viewportRows: snapshotRef.current.rows,
+        rowHeightPx: rowHeightPxRef.current,
+        remainder: wheelRemainderRef.current,
+      });
+      wheelRemainderRef.current = remainder;
+
+      if (rows !== 0) {
+        connection.sendScroll(paneId, rows);
+      }
     },
     [connection, paneId]
   );
 
   // Attach wheel handler (even for read-only panes - they can still scroll)
+  useEffect(() => {
+    wheelRemainderRef.current = 0;
+  }, [paneId]);
+
   useEffect(() => {
     const el = terminalRef.current;
     if (!el) return;
@@ -590,6 +606,9 @@ export function TerminalView({
       const rect = measure.getBoundingClientRect();
       if (rect.width > 0) {
         el.style.setProperty("--cell-width", `${rect.width}px`);
+      }
+      if (rect.height > 0) {
+        rowHeightPxRef.current = rect.height;
       }
     };
 

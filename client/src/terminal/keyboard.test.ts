@@ -51,6 +51,7 @@ function createMockActionContext(): ActionContext & {
   return {
     calls,
     paneId: 1,
+    getViewportRows: () => 24,
     sendText: (text: string) => {
       calls.push({ action: "sendText", args: text });
     },
