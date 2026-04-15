@@ -3,6 +3,7 @@
 //! Automatically detects if Tailscale is available and gets the IPv4 address.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const log = std.log.scoped(.tailscale);
 
@@ -41,9 +42,15 @@ const TIMEOUT_MS = 500;
 /// Try to get Tailscale IP using a specific executable path
 /// Times out after 500ms to avoid blocking server startup
 fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?TailscaleInfo {
+    const executable_path = resolveExecutable(allocator, tailscale_path) orelse {
+        log.debug("Tailscale executable not found: {s}", .{tailscale_path});
+        return null;
+    };
+    defer allocator.free(executable_path);
+
     // Use spawn + poll to implement timeout (Child.run has no timeout support)
     var child = std.process.Child.init(
-        &.{ tailscale_path, "ip", "-4" },
+        &.{ executable_path, "ip", "-4" },
         allocator,
     );
     child.stdout_behavior = .Pipe;
@@ -63,7 +70,7 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
     const ready = std.posix.poll(&poll_fds, TIMEOUT_MS) catch |e| {
         log.debug("Poll failed for {s}: {}", .{ tailscale_path, e });
         _ = child.kill() catch {};
-        _ = child.wait() catch {};
+        _ = waitChildOrReap(&child) catch {};
         return null;
     };
 
@@ -71,7 +78,7 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
         // Timeout - tailscale is hanging
         log.debug("{s} timed out after {}ms", .{ tailscale_path, TIMEOUT_MS });
         _ = child.kill() catch {};
-        _ = child.wait() catch {};
+        _ = waitChildOrReap(&child) catch {};
         return null;
     }
 
@@ -80,12 +87,12 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
     const n = child.stdout.?.read(&buf) catch |e| {
         log.debug("Failed to read stdout from {s}: {}", .{ tailscale_path, e });
         _ = child.kill() catch {};
-        _ = child.wait() catch {};
+        _ = waitChildOrReap(&child) catch {};
         return null;
     };
 
     // Wait for process to complete
-    const term = child.wait() catch |e| {
+    const term = waitChildOrReap(&child) catch |e| {
         log.debug("Failed to wait for {s}: {}", .{ tailscale_path, e });
         return null;
     };
@@ -122,6 +129,70 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
     };
 }
 
+fn resolveExecutable(allocator: std.mem.Allocator, executable: []const u8) ?[]u8 {
+    if (std.mem.indexOfScalar(u8, executable, '/') != null) {
+        if (std.fs.path.isAbsolute(executable)) {
+            std.fs.accessAbsolute(executable, .{}) catch return null;
+        } else {
+            std.fs.cwd().access(executable, .{}) catch return null;
+        }
+        return allocator.dupe(u8, executable) catch null;
+    }
+
+    const path_env = std.process.getEnvVarOwned(allocator, "PATH") catch return null;
+    defer allocator.free(path_env);
+
+    var dirs = std.mem.splitScalar(u8, path_env, std.fs.path.delimiter);
+    while (dirs.next()) |dir| {
+        const search_dir = if (dir.len == 0) "." else dir;
+
+        const path = std.fs.path.join(allocator, &.{ search_dir, executable }) catch continue;
+        std.fs.cwd().access(path, .{}) catch {
+            allocator.free(path);
+            continue;
+        };
+        return path;
+    }
+
+    return null;
+}
+
+fn waitChildOrReap(child: *std.process.Child) !std.process.Child.Term {
+    return child.wait() catch |e| {
+        reapAfterWaitError(child);
+        closeChildPipes(child);
+        return e;
+    };
+}
+
+fn reapAfterWaitError(child: *std.process.Child) void {
+    switch (builtin.os.tag) {
+        .windows, .wasi => return,
+        else => {},
+    }
+
+    const c = @cImport({
+        @cInclude("sys/wait.h");
+    });
+    var status: c_int = 0;
+    _ = c.waitpid(child.id, &status, 0);
+}
+
+fn closeChildPipes(child: *std.process.Child) void {
+    if (child.stdin) |*stdin| {
+        stdin.close();
+        child.stdin = null;
+    }
+    if (child.stdout) |*stdout| {
+        stdout.close();
+        child.stdout = null;
+    }
+    if (child.stderr) |*stderr| {
+        stderr.close();
+        child.stderr = null;
+    }
+}
+
 /// Basic IPv4 validation (contains dots and digits only)
 fn isValidIpv4(s: []const u8) bool {
     if (s.len < 7 or s.len > 15) return false; // "1.1.1.1" to "255.255.255.255"
@@ -146,4 +217,25 @@ test "isValidIpv4" {
     try testing.expect(!isValidIpv4("localhost"));
     try testing.expect(!isValidIpv4("1.2.3")); // missing octet
     try testing.expect(!isValidIpv4("1.2.3.4.5")); // too many octets
+}
+
+test "waitChildOrReap reaps child after spawn failure" {
+    switch (builtin.os.tag) {
+        .windows, .wasi => return,
+        else => {},
+    }
+
+    var child = std.process.Child.init(&.{"/__dullahan_missing_tailscale_child__"}, std.testing.allocator);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    try child.spawn();
+
+    const pid = child.id;
+    try std.testing.expectError(error.FileNotFound, waitChildOrReap(&child));
+
+    const c = @cImport({
+        @cInclude("sys/wait.h");
+    });
+    var status: c_int = 0;
+    try std.testing.expectEqual(@as(c_int, -1), c.waitpid(pid, &status, c.WNOHANG));
 }
