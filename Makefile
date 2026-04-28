@@ -2,6 +2,15 @@
 
 all: build
 
+ZIG_0152_HOME := $(HOME)/zig-x86_64-linux-0.15.2
+ZIG_0152_BIN := $(ZIG_0152_HOME)/bin
+
+ifneq ($(wildcard $(ZIG_0152_BIN)),)
+install: export PATH := $(ZIG_0152_BIN):$(PATH)
+else ifneq ($(wildcard $(ZIG_0152_HOME)/zig),)
+install: export PATH := $(ZIG_0152_HOME):$(PATH)
+endif
+
 # =============================================================================
 # Debug builds (default)
 # =============================================================================
