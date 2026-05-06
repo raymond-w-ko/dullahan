@@ -2,6 +2,7 @@
 zig-cache/
 zig-out/
 .zig-cache/
+server/zig-pkg/
 
 # Node.js
 node_modules/
