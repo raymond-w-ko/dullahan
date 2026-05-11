@@ -2,13 +2,39 @@
 
 all: build
 
-ZIG_0152_HOME := $(HOME)/zig-x86_64-linux-0.15.2
+UNAME_S := $(shell uname -s)
+HAS_NIX := $(shell command -v nix-shell >/dev/null 2>&1 && echo 1)
+HAS_NIX_DARWIN := $(shell command -v darwin-rebuild >/dev/null 2>&1 && echo 1)
+ZIG_0152_HOME := $(firstword $(wildcard $(HOME)/zig-*-0.15.2) $(HOME)/zig-x86_64-linux-0.15.2)
 ZIG_0152_BIN := $(ZIG_0152_HOME)/bin
+NIX_ZIG_0152_EXPR := 'with import <nixpkgs> {}; mkShell { packages = [ ((callPackage $(CURDIR)/scripts/nix/zig {})."0.15") ]; }'
 
-ifneq ($(wildcard $(ZIG_0152_BIN)),)
-install: export PATH := $(ZIG_0152_BIN):$(PATH)
+ifeq ($(UNAME_S),Darwin)
+ifneq ($(HAS_NIX),)
+ifneq ($(HAS_NIX_DARWIN),)
+RUN_ZIG = nix-shell -E $(NIX_ZIG_0152_EXPR) --run 'env NIX_CFLAGS_COMPILE= zig
+RUN_ZIG_END = '
+endif
+endif
+endif
+
+ifeq ($(RUN_ZIG),)
+ifneq ($(HAS_NIX),)
+ifeq ($(UNAME_S),Linux)
+RUN_ZIG = nix-shell -p zig_0_15 --run 'env NIX_CFLAGS_COMPILE= zig
+RUN_ZIG_END = '
+endif
+endif
+endif
+
+ifeq ($(RUN_ZIG),)
+ifneq ($(wildcard $(ZIG_0152_BIN)/zig),)
+RUN_ZIG = PATH="$(ZIG_0152_BIN):$(PATH)" zig
 else ifneq ($(wildcard $(ZIG_0152_HOME)/zig),)
-install: export PATH := $(ZIG_0152_HOME):$(PATH)
+RUN_ZIG = PATH="$(ZIG_0152_HOME):$(PATH)" zig
+else
+RUN_ZIG = zig
+endif
 endif
 
 # =============================================================================
@@ -18,7 +44,7 @@ endif
 build: server client
 
 server: theme-db
-	cd server && zig build
+	cd server && $(RUN_ZIG) build$(RUN_ZIG_END)
 
 client: themes
 	cd client && bun run build
@@ -42,7 +68,7 @@ dist-client-assets: themes
 
 # Build server with embedded client assets (includes theme-db for OSC color queries)
 dist-server-embedded: theme-db
-	cd server && zig build -Doptimize=ReleaseFast
+	cd server && $(RUN_ZIG) build -Doptimize=ReleaseFast$(RUN_ZIG_END)
 	@mkdir -p dist
 	cp server/zig-out/bin/dullahan dist/
 	git checkout server/src/embedded_assets.zig 2>/dev/null || true
@@ -99,7 +125,7 @@ clean:
 	rm -rf dist coverage
 
 fmt:
-	zig fmt server/src/
+	$(RUN_ZIG) fmt server/src/$(RUN_ZIG_END)
 
 # =============================================================================
 # Test coverage
@@ -113,7 +139,7 @@ coverage: coverage-server coverage-client
 
 coverage-server:
 	@echo "=== Server Test Coverage (Module-level) ==="
-	@cd server && zig build test-bin -Doptimize=Debug
+	@cd server && $(RUN_ZIG) build test-bin -Doptimize=Debug$(RUN_ZIG_END)
 	@server/zig-out/bin/test 2>&1 | awk -F'[. ]' ' \
 		/^[0-9]+\/[0-9]+.*\.test\..*\.\.\./ { \
 			for (i=1; i<=NF; i++) { \
