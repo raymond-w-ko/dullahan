@@ -7,7 +7,7 @@ import { debug } from "../debug";
 
 const imeLog = debug.category('ime');
 const clipboardLog = debug.category('clipboard');
-import { useRef, useEffect, useCallback, useMemo } from "preact/hooks";
+import { useRef, useEffect, useCallback, useMemo, useState } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
 import { IMEHandler, createIMEHandler } from "../terminal/ime";
@@ -40,6 +40,7 @@ import {
 import { renderLine } from "../terminal/cursorRendering";
 import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
+import type { TerminalImagePlacement } from "../../../protocol/schema/messages";
 import { normalizeWheelDeltaToRows } from "../terminal/wheel";
 import type { SelectionBounds } from "../../../protocol/schema/messages";
 
@@ -165,6 +166,156 @@ const HIDDEN_CURSOR: CursorState = {
   visible: false,
   blink: true,
 };
+
+function rawImageBlob(
+  bytes: ArrayBuffer,
+  format: string,
+  width: number,
+  height: number
+): Blob {
+  if (width <= 0 || height <= 0) {
+    throw new Error("raw image missing dimensions");
+  }
+
+  const raw = new Uint8ClampedArray(bytes);
+  const pixelCount = width * height;
+  let rgba: Uint8ClampedArray;
+
+  if (format === "rgba") {
+    if (raw.length !== pixelCount * 4) {
+      throw new Error("bad RGBA image length");
+    }
+    rgba = raw;
+  } else if (format === "rgb") {
+    if (raw.length !== pixelCount * 3) {
+      throw new Error("bad RGB image length");
+    }
+    rgba = new Uint8ClampedArray(pixelCount * 4);
+    for (let src = 0, dst = 0; src < raw.length; src += 3, dst += 4) {
+      rgba[dst] = raw[src]!;
+      rgba[dst + 1] = raw[src + 1]!;
+      rgba[dst + 2] = raw[src + 2]!;
+      rgba[dst + 3] = 255;
+    }
+  } else {
+    throw new Error(`unsupported raw image format ${format}`);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("canvas unavailable");
+  }
+  const imageDataArray: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(rgba.length);
+  imageDataArray.set(rgba);
+  ctx.putImageData(new ImageData(imageDataArray, width, height), 0, 0);
+
+  const dataUrl = canvas.toDataURL("image/png");
+  const comma = dataUrl.indexOf(",");
+  const binary = atob(dataUrl.slice(comma + 1));
+  const png = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    png[i] = binary.charCodeAt(i);
+  }
+  return new Blob([png], { type: "image/png" });
+}
+
+interface TerminalImageProps {
+  image: TerminalImagePlacement;
+  authToken?: string;
+}
+
+function TerminalImage({ image, authToken }: TerminalImageProps) {
+  const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setState("loading");
+    setSrc(null);
+
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+
+    fetch(image.url, { headers })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`image fetch ${response.status}`);
+        }
+        const contentType = response.headers.get("content-type") ?? "";
+        if (contentType.startsWith("image/")) {
+          return response.blob();
+        }
+        const format = response.headers.get("x-dullahan-image-format") ?? image.format;
+        const width = Number(response.headers.get("x-dullahan-image-width") ?? image.imageWidth);
+        const height = Number(response.headers.get("x-dullahan-image-height") ?? image.imageHeight);
+        return response.arrayBuffer().then((bytes) => rawImageBlob(bytes, format, width, height));
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          debug.category("snapshot").warn("Terminal image fetch failed:", err);
+          setState("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [image.url, authToken]);
+
+  const style = {
+    left: `calc(${image.viewportCol} * var(--cell-width, 1ch) + ${image.xOffset ?? 0}px)`,
+    top: `calc(${image.viewportRow} * var(--term-line-height) + ${image.yOffset ?? 0}px)`,
+    width: `calc(${image.gridCols} * var(--cell-width, 1ch))`,
+    height: `calc(${image.gridRows} * var(--term-line-height))`,
+    zIndex: image.z >= 0 ? 4 : 1,
+  };
+  const cropsImage =
+    image.imageWidth > 0 &&
+    image.imageHeight > 0 &&
+    (image.sourceX !== 0 ||
+      image.sourceY !== 0 ||
+      image.sourceWidth !== image.imageWidth ||
+      image.sourceHeight !== image.imageHeight);
+  const imgStyle = cropsImage
+    ? {
+        position: "absolute",
+        left: `${-(image.sourceX / image.sourceWidth) * 100}%`,
+        top: `${-(image.sourceY / image.sourceHeight) * 100}%`,
+        width: `${(image.imageWidth / image.sourceWidth) * 100}%`,
+        height: `${(image.imageHeight / image.sourceHeight) * 100}%`,
+      }
+    : undefined;
+
+  return (
+    <div class={`terminal-image terminal-image--${state}`} style={style}>
+      {src && (
+        <img
+          src={src}
+          alt=""
+          draggable={false}
+          style={imgStyle}
+          onLoad={() => setState("loaded")}
+          onError={() => setState("error")}
+        />
+      )}
+      {state === "loading" && <span class="terminal-image-spinner" />}
+    </div>
+  );
+}
 
 interface TerminalRowProps {
   runs: StyledRun[];
@@ -854,6 +1005,7 @@ export function TerminalView({
   const isScrolledUp =
     snapshot.scrollback.viewportTop < snapshot.scrollback.totalRows - rows;
   const hasVisibleCursor = isActive && cursor.visible;
+  const imagePlacements = snapshot.images ?? [];
 
   return (
     <pre
@@ -864,6 +1016,17 @@ export function TerminalView({
       {isScrolledUp && (
         <div class="scrollback-indicator">
           {snapshot.scrollback.totalRows - snapshot.scrollback.viewportTop - rows} lines above
+        </div>
+      )}
+      {imagePlacements.length > 0 && (
+        <div class="terminal-image-layer" aria-hidden="true">
+          {imagePlacements.map((image) => (
+            <TerminalImage
+              key={`${image.imageKey}:${image.placementId}:${image.generation}`}
+              image={image}
+              authToken={connection?.authToken ?? undefined}
+            />
+          ))}
         </div>
       )}
       {lines.map((runs, y) => {

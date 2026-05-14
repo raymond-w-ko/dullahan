@@ -70,6 +70,7 @@ import type {
   ScrollbackInfo,
   SelectionBounds,
   ShellIntegrationMessage,
+  TerminalImagePlacement,
 } from "../../../protocol/schema/messages";
 
 const INVALID_ROW_ID = 0xffffffffffffffffn;
@@ -85,6 +86,7 @@ export type {
   DeltaUpdate,
   ScrollbackInfo,
   SelectionBounds,
+  TerminalImagePlacement,
   GraphemeTable,
   HyperlinkTable,
 };
@@ -186,6 +188,7 @@ export interface TerminalSnapshot {
   hyperlinks: HyperlinkTable; // Hyperlink data for OSC 8 links
   viewportRows?: Array<TerminalViewportRow | null>; // Row-oriented data for render hot path
   selection?: SelectionBounds; // Current selection (if any)
+  images?: TerminalImagePlacement[]; // Kitty graphics placements
 }
 
 export interface TerminalViewportRow {
@@ -946,6 +949,7 @@ export class TerminalConnection {
           hyperlinks,
           viewportRows,
           selection: msg.selection,
+          images: msg.images ?? [],
         };
 
         // Save for delta merging
@@ -1950,6 +1954,7 @@ export class TerminalConnection {
       rowIds,
       viewportRows,
       selection: delta.selection,
+      images: delta.images ?? [],
     });
     this.maybeFollowViewportTail(paneId, paneState, snapshot.scrollback, delta.rows);
 
