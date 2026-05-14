@@ -15,6 +15,7 @@ const Window = window_mod.Window;
 const LayoutNode = window_mod.LayoutNode;
 const layout_db = @import("layout_db.zig");
 const terminal = @import("terminal.zig");
+const images = @import("images.zig");
 const ghostty = @import("ghostty-vt");
 const Page = ghostty.page.Page;
 const Cell = ghostty.page.Cell;
@@ -704,6 +705,9 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
+    // Kitty graphics placement manifest. Image bytes are fetched over HTTP.
+    try images.putManifest(allocator, &payload, pane);
+
     // Terminal title (if set)
     if (pane.getTitle()) |title| {
         try payload.mapPut("title", try msgpack.Payload.strToPayload(title, allocator));
@@ -1142,6 +1146,9 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
 
     const row_ids_bytes = std.mem.sliceAsBytes(row_ids);
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
+
+    // Kitty graphics placement manifest. Image bytes are fetched over HTTP.
+    try images.putManifest(allocator, &payload, pane);
 
     log.debug("Delta: {d} dirty rows, {d} row IDs ({d} bytes), first rowId={d}", .{
         row_payloads.items.len,

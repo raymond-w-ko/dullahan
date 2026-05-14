@@ -317,6 +317,31 @@ export interface SelectionBounds {
   isRectangle: boolean;
 }
 
+export interface TerminalImagePlacement {
+  imageKey: string;
+  url: string;
+  paneId: number;
+  imageId: number;
+  placementId: number;
+  viewportCol: number;
+  viewportRow: number;
+  gridCols: number;
+  gridRows: number;
+  imageWidth: number;
+  imageHeight: number;
+  pixelWidth: number;
+  pixelHeight: number;
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  xOffset?: number;
+  yOffset?: number;
+  z: number;
+  format: string;
+  generation: number;
+}
+
 /**
  * Normalize selection bounds so start is always before end.
  *
@@ -360,6 +385,7 @@ export interface BinarySnapshot {
   rowIds: Uint8Array; // Packed u64 row IDs (little-endian)
   graphemes?: Uint8Array; // Grapheme cluster data for multi-codepoint characters
   hyperlinks?: Uint8Array; // Hyperlink data for OSC 8 links
+  images?: TerminalImagePlacement[]; // Kitty graphics placements
   selection?: SelectionBounds; // Current selection (if any)
 }
 
@@ -385,6 +411,7 @@ export interface BinaryDelta {
   }>;
   rowIds: Uint8Array; // Packed u64 row IDs for viewport (little-endian)
   styles: Uint8Array; // Raw style bytes for dirty rows
+  images?: TerminalImagePlacement[]; // Kitty graphics placements
   selection?: SelectionBounds; // Current selection (if any)
 }
 

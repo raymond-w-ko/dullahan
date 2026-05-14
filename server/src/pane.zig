@@ -211,6 +211,7 @@ pub const Pane = struct {
             .cols = opts.cols,
             .rows = opts.rows,
             .default_modes = default_modes,
+            .kitty_image_storage_limit = constants.images.kitty_storage_limit,
         });
 
         // Enable LNM (Line Feed/New Line Mode) so \n does CR+LF

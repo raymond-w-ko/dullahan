@@ -108,6 +108,7 @@ pub const EventLoop = struct {
         no_delta: bool,
         auth_store: ws_proxy.AuthStore,
     ) EventLoop {
+        http_server.setPaneRegistry(session.pane_registry);
         var layouts = layout_db.LayoutDb.init(allocator);
         layouts.load() catch |e| {
             logRecoverable("load layouts", e);

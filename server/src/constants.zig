@@ -91,6 +91,12 @@ pub const upload = struct {
     pub const max_image_paste_bytes: usize = 32 * 1024 * 1024;
 };
 
+/// Terminal image support limits.
+pub const images = struct {
+    /// Per-pane Kitty graphics storage cap.
+    pub const kitty_storage_limit: usize = 32 * 1024 * 1024;
+};
+
 /// Default terminal colors for OSC 10/11 queries.
 /// Values match dullahan.css base theme (One Dark style).
 pub const colors = struct {

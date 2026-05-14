@@ -11,6 +11,8 @@ const paths = @import("paths.zig");
 const websocket = @import("websocket.zig");
 const embedded_assets = @import("embedded_assets.zig");
 const tls_wrapper = @import("tls_wrapper.zig");
+const images = @import("images.zig");
+const PaneRegistry = @import("pane_registry.zig").PaneRegistry;
 
 const log = std.log.scoped(.http);
 
@@ -298,6 +300,22 @@ fn isUploadAuthorized(request: *const Request) bool {
     return std.mem.eql(u8, token, tokens.?.master);
 }
 
+fn isReadAuthorized(request: *const Request) bool {
+    var tokens_buf: [256]u8 = undefined;
+    const tokens = readTokensFile(paths.StaticPaths.tokens(), &tokens_buf) catch return false;
+    if (tokens == null) return true;
+
+    const auth = request.getHeader("authorization") orelse return false;
+    if (auth.len < 8) return false;
+    if (!std.ascii.eqlIgnoreCase(auth[0..7], "Bearer ")) return false;
+
+    const token = std.mem.trim(u8, auth[7..], " \t");
+    if (token.len == 0) return false;
+
+    return std.mem.eql(u8, token, tokens.?.master) or
+        std.mem.eql(u8, token, tokens.?.view);
+}
+
 const PendingStream = union(enum) {
     plain: std.net.Stream,
     tls_handshake: tls_wrapper.TlsHandshake,
@@ -493,6 +511,7 @@ pub const Server = struct {
     port: u16,
     static_dir: ?[]const u8,
     tls_context: ?*tls_wrapper.TlsContext,
+    pane_registry: ?*PaneRegistry = null,
     pending: std.ArrayListUnmanaged(PendingConn) = .{},
     ready_ws: std.ArrayListUnmanaged(websocket.Connection) = .{},
 
@@ -544,6 +563,10 @@ pub const Server = struct {
         self.ready_ws.deinit(self.allocator);
 
         self.listener.deinit();
+    }
+
+    pub fn setPaneRegistry(self: *Server, pane_registry: *PaneRegistry) void {
+        self.pane_registry = pane_registry;
     }
 
     /// Check if TLS is enabled
@@ -1017,6 +1040,10 @@ pub const Server = struct {
             self.handleImageUploadAndClose(idx, request, body);
             return;
         }
+        if (std.mem.startsWith(u8, req_path, "/api/images/")) {
+            self.handleTerminalImageAndClose(idx, request, req_path);
+            return;
+        }
 
         const response = self.buildStaticFileResponse(request.path, request) catch {
             const fallback = self.buildErrorResponse() catch {
@@ -1025,6 +1052,77 @@ pub const Server = struct {
             };
             self.queuePendingHttpResponse(idx, fallback);
             return;
+        };
+        self.queuePendingHttpResponse(idx, response);
+    }
+
+    fn handleTerminalImageAndClose(self: *Server, idx: usize, request: *const Request, req_path: []const u8) void {
+        if (!std.mem.eql(u8, request.method, "GET")) {
+            self.respondAndClose(idx, "405 Method Not Allowed", "Method Not Allowed");
+            return;
+        }
+        if (!isReadAuthorized(request)) {
+            self.respondAndClose(idx, "401 Unauthorized", "Unauthorized");
+            return;
+        }
+
+        const rest = req_path["/api/images/".len..];
+        const slash = std.mem.indexOfScalar(u8, rest, '/') orelse {
+            self.respondAndClose(idx, "400 Bad Request", "Bad image path");
+            return;
+        };
+        const pane_id = std.fmt.parseInt(u16, rest[0..slash], 10) catch {
+            self.respondAndClose(idx, "400 Bad Request", "Bad pane id");
+            return;
+        };
+        const image_key = rest[slash + 1 ..];
+        if (image_key.len == 0 or std.mem.indexOf(u8, image_key, "..") != null) {
+            self.respondAndClose(idx, "400 Bad Request", "Bad image key");
+            return;
+        }
+
+        const registry = self.pane_registry orelse {
+            self.respondAndClose(idx, "404 Not Found", "Pane registry unavailable");
+            return;
+        };
+        const pane = registry.get(pane_id) orelse {
+            self.respondAndClose(idx, "404 Not Found", "Pane not found");
+            return;
+        };
+        const image_response = images.getImageResponse(pane, image_key) orelse {
+            self.respondAndClose(idx, "404 Not Found", "Image not found");
+            return;
+        };
+        if (image_response.mime_type.len == 0) {
+            self.respondAndClose(idx, "415 Unsupported Media Type", "Unsupported image format");
+            return;
+        }
+
+        const owned = self.allocator.dupe(u8, image_response.data) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to copy image");
+            return;
+        };
+        errdefer self.allocator.free(owned);
+
+        var width_buf: [32]u8 = undefined;
+        var height_buf: [32]u8 = undefined;
+        const width = std.fmt.bufPrint(&width_buf, "{d}", .{image_response.width}) catch "0";
+        const height = std.fmt.bufPrint(&height_buf, "{d}", .{image_response.height}) catch "0";
+
+        const response = PendingResponse{
+            .header = self.buildResponseHeader("200 OK", &.{
+                .{ "Content-Type", image_response.mime_type },
+                .{ "Cache-Control", "no-store" },
+                .{ "X-Dullahan-Image-Format", image_response.format },
+                .{ "X-Dullahan-Image-Width", width },
+                .{ "X-Dullahan-Image-Height", height },
+            }, image_response.data.len) catch {
+                self.closeAndRemovePending(idx);
+                return;
+            },
+            .body = .{
+                .owned_bytes = .{ .data = owned },
+            },
         };
         self.queuePendingHttpResponse(idx, response);
     }

@@ -15,6 +15,7 @@ pub const cli = @import("cli.zig");
 pub const http = @import("http.zig");
 pub const websocket = @import("websocket.zig");
 pub const snapshot = @import("snapshot.zig");
+pub const images = @import("images.zig");
 
 // Session/Window/Pane hierarchy
 pub const Session = @import("session.zig").Session;
