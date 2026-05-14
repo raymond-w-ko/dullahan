@@ -891,10 +891,13 @@ body.layout-resizing-vertical * {
 }
 
 .terminal-line {
-  position: relative;
-  z-index: 2;
   height: var(--term-line-height);
   white-space: pre;
+}
+
+.terminal > .terminal-line {
+  position: relative;
+  z-index: 2;
 }
 
 .terminal-line span {
