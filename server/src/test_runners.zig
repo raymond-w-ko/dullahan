@@ -2400,6 +2400,66 @@ fn firstArg(args: ?[]const u8) []const u8 {
     return it.next() orelse "/tmp/dullahan-image-test.png";
 }
 
+fn writeAllFd(fd: posix.fd_t, bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const written = try posix.write(fd, bytes[offset..]);
+        if (written == 0) return error.WriteFailed;
+        offset += written;
+    }
+}
+
+fn kittyImageChunkHeader(buf: []u8, first: bool, more: bool) ![]const u8 {
+    if (first) {
+        return std.fmt.bufPrint(
+            buf,
+            "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1{s};",
+            .{if (more) ",m=1" else ""},
+        );
+    }
+
+    return std.fmt.bufPrint(
+        buf,
+        "\x1b_Ga=t,q=1{s};",
+        .{if (more) ",m=1" else ""},
+    );
+}
+
+fn writeKittyImageChunks(fd: posix.fd_t, encoded: []const u8) !void {
+    const chunk_size = 4096;
+    var offset: usize = 0;
+
+    while (offset < encoded.len) {
+        const end = @min(offset + chunk_size, encoded.len);
+        const more = end < encoded.len;
+
+        var header_buf: [160]u8 = undefined;
+        const header = try kittyImageChunkHeader(&header_buf, offset == 0, more);
+
+        try writeAllFd(fd, header);
+        try writeAllFd(fd, encoded[offset..end]);
+        try writeAllFd(fd, "\x1b\\");
+
+        offset = end;
+    }
+}
+
+test "kitty image chunk headers" {
+    var buf: [160]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1,m=1;",
+        try kittyImageChunkHeader(&buf, true, true),
+    );
+    try std.testing.expectEqualStrings(
+        "\x1b_Ga=t,q=1,m=1;",
+        try kittyImageChunkHeader(&buf, false, true),
+    );
+    try std.testing.expectEqualStrings(
+        "\x1b_Ga=t,q=1;",
+        try kittyImageChunkHeader(&buf, false, false),
+    );
+}
+
 fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const path = firstArg(args);
     const stdout_fd = posix.STDOUT_FILENO;
@@ -2424,11 +2484,7 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         \\
     ) catch {};
 
-    var header_buf: [128]u8 = undefined;
-    const header = try std.fmt.bufPrint(&header_buf, "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1;", .{});
-    _ = posix.write(stdout_fd, header) catch {};
-    _ = posix.write(stdout_fd, encoded) catch {};
-    _ = posix.write(stdout_fd, "\x1b\\") catch {};
+    try writeKittyImageChunks(stdout_fd, encoded);
 
     _ = posix.write(stdout_fd,
         \\
