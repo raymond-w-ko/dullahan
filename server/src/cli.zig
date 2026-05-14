@@ -23,6 +23,7 @@ pub const CliArgs = struct {
     serve: bool = false,
     no_spawn: bool = false,
     test_command: ?test_runners.TestCommand = null,
+    test_args: ?[]const u8 = null,
     tls_cert: ?[]const u8 = null, // TLS certificate path (enables HTTPS/WSS)
     tls_key: ?[]const u8 = null, // TLS private key path
     background: bool = false, // Run server in background (daemonize)
@@ -45,6 +46,14 @@ pub const CliArgs = struct {
                 if (arg_iter.next()) |test_arg| {
                     if (test_runners.TestCommand.fromString(test_arg)) |cmd| {
                         args.test_command = cmd;
+                        var data_parts: std.ArrayListUnmanaged([]const u8) = .{};
+                        defer data_parts.deinit(allocator);
+                        while (arg_iter.next()) |data_arg| {
+                            data_parts.append(allocator, data_arg) catch {};
+                        }
+                        if (data_parts.items.len > 0) {
+                            args.test_args = std.mem.join(allocator, " ", data_parts.items) catch null;
+                        }
                     } else {
                         // Unknown test command, show help
                         args.test_command = .help;

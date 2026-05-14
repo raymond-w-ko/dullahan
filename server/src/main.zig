@@ -81,7 +81,7 @@ pub fn main() !void {
 
     if (args.test_command) |test_cmd| {
         // Run test utility
-        test_runners.runTest(allocator, test_cmd) catch |e| {
+        test_runners.runTest(allocator, test_cmd, args.test_args) catch |e| {
             std.debug.print("Test error: {}\n", .{e});
             std.process.exit(1);
         };

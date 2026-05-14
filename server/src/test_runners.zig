@@ -37,6 +37,7 @@ pub const TestCommand = enum {
     @"progress-test",
     @"sync-test",
     @"palette-256",
+    @"image-test",
     @"single-parser-diag",
     @"single-parser-matrix",
     help,
@@ -57,6 +58,7 @@ pub const TestCommand = enum {
             .{ "progress-test", .@"progress-test" },
             .{ "sync-test", .@"sync-test" },
             .{ "palette-256", .@"palette-256" },
+            .{ "image-test", .@"image-test" },
             .{ "single-parser-diag", .@"single-parser-diag" },
             .{ "single-parser-matrix", .@"single-parser-matrix" },
             .{ "help", .help },
@@ -80,6 +82,7 @@ pub const TestCommand = enum {
             .@"progress-test" => "Display progress bar via OSC 9;4",
             .@"sync-test" => "Test synchronized output mode (DECSET 2026)",
             .@"palette-256" => "Display full 256-color palette grid",
+            .@"image-test" => "Display PNG via Kitty graphics protocol",
             .@"single-parser-diag" => "Emit reusable single-parser diagnostics artifacts",
             .@"single-parser-matrix" => "Run the single-parser compatibility scenario matrix",
             .help => "Show available test commands",
@@ -109,6 +112,7 @@ pub fn printTestUsage() void {
         \\  dullahan test progress-test         # Test progress bar
         \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
         \\  dullahan test palette-256           # Display the full 256-color palette
+        \\  dullahan test image-test /tmp/dullahan-image-test.png
         \\  dullahan test single-parser-diag    # Emit reusable diagnostics artifacts
         \\  dullahan test single-parser-matrix  # Run the single-parser compatibility matrix
         \\
@@ -116,7 +120,7 @@ pub fn printTestUsage() void {
 }
 
 /// Run the specified test command
-pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
+pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand, args: ?[]const u8) !void {
     switch (cmd) {
         .@"keytest-kitty" => try runKeytestKitty(),
         .@"keytest-bytes" => try runKeytestBytes(),
@@ -132,6 +136,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand) !void {
         .@"progress-test" => runProgressTest(),
         .@"sync-test" => runSyncTest(),
         .@"palette-256" => runPalette256Test(),
+        .@"image-test" => try runImageTest(allocator, args),
         .@"single-parser-diag" => try runSingleParserDiag(allocator),
         .@"single-parser-matrix" => try single_parser_matrix.run(allocator),
         .help => printTestUsage(),
@@ -2381,6 +2386,54 @@ fn runPalette256Test() void {
         \\
         \\Done.
         \\Tip: run with different client themes to validate generated palette changes.
+        \\
+    ) catch {};
+}
+
+// =============================================================================
+// Kitty Graphics Image Tester
+// =============================================================================
+
+fn firstArg(args: ?[]const u8) []const u8 {
+    const raw = args orelse return "/tmp/dullahan-image-test.png";
+    var it = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+    return it.next() orelse "/tmp/dullahan-image-test.png";
+}
+
+fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
+    const path = firstArg(args);
+    const stdout_fd = posix.STDOUT_FILENO;
+
+    const data = std.fs.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024) catch |e| {
+        std.debug.print("image-test: failed to read {s}: {}\n", .{ path, e });
+        std.debug.print("Try: wget -O /tmp/dullahan-image-test.png https://upload.wikimedia.org/wikipedia/commons/3/3f/PNG_icon.png\n", .{});
+        return e;
+    };
+    defer allocator.free(data);
+
+    const encoded_len = std.base64.standard.Encoder.calcSize(data.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, data);
+
+    _ = posix.write(stdout_fd,
+        \\Dullahan Kitty Image Test
+        \\=========================
+        \\
+        \\Text before image. The image should occupy the next 20x10 cells.
+        \\
+    ) catch {};
+
+    var header_buf: [128]u8 = undefined;
+    const header = try std.fmt.bufPrint(&header_buf, "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1;", .{});
+    _ = posix.write(stdout_fd, header) catch {};
+    _ = posix.write(stdout_fd, encoded) catch {};
+    _ = posix.write(stdout_fd, "\x1b\\") catch {};
+
+    _ = posix.write(stdout_fd,
+        \\
+        \\
+        \\Text after image. Resize and scroll to verify cell-relative placement.
         \\
     ) catch {};
 }
