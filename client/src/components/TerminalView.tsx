@@ -42,6 +42,7 @@ import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
 import type { TerminalImagePlacement } from "../../../protocol/schema/messages";
 import { normalizeWheelDeltaToRows } from "../terminal/wheel";
+import { resolveTerminalImageZIndex } from "../terminal/imageZIndex";
 import type { SelectionBounds } from "../../../protocol/schema/messages";
 
 const MAX_IMAGE_PASTE_BYTES = 32 * 1024 * 1024;
@@ -233,7 +234,7 @@ function TerminalImage({ image, authToken }: TerminalImageProps) {
     top: `calc(${image.viewportRow} * var(--term-line-height) + ${image.yOffset ?? 0}px)`,
     width: `calc(${image.gridCols} * var(--cell-width, 1ch))`,
     height: `calc(${image.gridRows} * var(--term-line-height))`,
-    zIndex: image.z >= 0 ? 4 : 1,
+    zIndex: resolveTerminalImageZIndex(image.z),
   };
   const cropsImage =
     image.imageWidth > 0 &&
