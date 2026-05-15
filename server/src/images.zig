@@ -171,9 +171,9 @@ fn bmpFromRaw(
         src += bpp;
         dst += 4;
     }) {
-        out[dst] = data[src + 2];
+        out[dst] = data[src];
         out[dst + 1] = data[src + 1];
-        out[dst + 2] = data[src];
+        out[dst + 2] = data[src + 2];
         out[dst + 3] = if (format == .rgba) data[src + 3] else 255;
     }
 
@@ -422,9 +422,9 @@ test "raw RGB image response is served as BMP" {
     defer std.testing.allocator.free(bmp);
     try std.testing.expectEqualStrings("BM", bmp[0..2]);
     try std.testing.expectEqual(@as(usize, 126), bmp.len);
-    try std.testing.expectEqual(@as(u8, 0), bmp[122]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[122]);
     try std.testing.expectEqual(@as(u8, 0), bmp[123]);
-    try std.testing.expectEqual(@as(u8, 255), bmp[124]);
+    try std.testing.expectEqual(@as(u8, 0), bmp[124]);
     try std.testing.expectEqual(@as(u8, 255), bmp[125]);
 }
 
@@ -434,8 +434,8 @@ test "raw RGBA image response preserves alpha in BMP" {
     defer std.testing.allocator.free(bmp);
     try std.testing.expectEqualStrings("BM", bmp[0..2]);
     try std.testing.expectEqual(@as(usize, 126), bmp.len);
-    try std.testing.expectEqual(@as(u8, 0), bmp[122]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[122]);
     try std.testing.expectEqual(@as(u8, 0), bmp[123]);
-    try std.testing.expectEqual(@as(u8, 255), bmp[124]);
+    try std.testing.expectEqual(@as(u8, 0), bmp[124]);
     try std.testing.expectEqual(@as(u8, 128), bmp[125]);
 }

@@ -2527,6 +2527,12 @@ fn writeBlankLines(fd: posix.fd_t, count: usize) !void {
     for (0..count) |_| try writeAllFd(fd, "\n");
 }
 
+fn writeCursorRows(fd: posix.fd_t, rows: u32, comptime direction: u8) !void {
+    var buf: [32]u8 = undefined;
+    const bytes = try std.fmt.bufPrint(&buf, "\x1b[{d}{c}", .{ rows, direction });
+    try writeAllFd(fd, bytes);
+}
+
 fn fillRgbTestPattern(data: []u8, width: usize, height: usize, seed_data: []const u8) void {
     for (0..height) |y| {
         for (0..width) |x| {
@@ -2645,7 +2651,6 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         \\Overlap. Expected: translucent PNG on top of raw RGB in same cell region.
         \\
     );
-    try writeAllFd(stdout_fd, "\x1b[s");
     try writeRawImage(allocator, stdout_fd, rgb_data, .{
         .format = .rgb,
         .width = image_width,
@@ -2656,7 +2661,7 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         .rows = rows,
         .z = 0,
     });
-    try writeAllFd(stdout_fd, "\x1b[u");
+    try writeCursorRows(stdout_fd, rows, 'A');
     try writeEncodedImage(stdout_fd, alpha_png_b64, .{
         .format = .png,
         .image_id = 6,
@@ -2665,6 +2670,7 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         .rows = rows,
         .z = 1,
     });
+    try writeCursorRows(stdout_fd, rows, 'B');
     try writeBlankLines(stdout_fd, rows + 2);
 
     try writeAllFd(stdout_fd,
