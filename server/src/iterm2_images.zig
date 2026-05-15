@@ -101,9 +101,33 @@ pub const Store = struct {
     total_bytes: usize = 0,
 
     pub fn deinit(self: *Store, allocator: std.mem.Allocator, terminal: *Terminal) void {
-        for (self.entries.items) |*entry| entry.deinit(allocator, terminal);
-        self.entries.deinit(allocator);
+        self.clearAll(allocator, terminal);
         self.* = .{};
+    }
+
+    pub fn clearAll(self: *Store, allocator: std.mem.Allocator, terminal: *Terminal) void {
+        for (self.entries.items) |*entry| entry.deinit(allocator, terminal);
+        self.entries.clearAndFree(allocator);
+        self.total_bytes = 0;
+    }
+
+    pub fn clearScreen(
+        self: *Store,
+        allocator: std.mem.Allocator,
+        terminal: *Terminal,
+        screen_key: ScreenKey,
+    ) void {
+        var i: usize = 0;
+        while (i < self.entries.items.len) {
+            if (self.entries.items[i].anchor.screen_key != screen_key) {
+                i += 1;
+                continue;
+            }
+
+            var old = self.entries.orderedRemove(i);
+            self.total_bytes -= old.data.len;
+            old.deinit(allocator, terminal);
+        }
     }
 
     pub fn addImageAtCursor(

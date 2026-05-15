@@ -574,6 +574,12 @@ test "kitty rgba transmit and display produces manifest entry" {
 const test_iterm2_png_b64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
+fn feedTestIterm2Image(pane: *Pane) !void {
+    try pane.feed("\x1b]1337;File=inline=1;width=2;height=1;preserveAspectRatio=0:");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x1b\\");
+}
+
 test "iterm2 single file ST anchors after preceding text and serves png" {
     const allocator = std.testing.allocator;
     var pane = try Pane.init(allocator, .{ .id = 12, .cols = 80, .rows = 24 });
@@ -630,5 +636,41 @@ test "iterm2 invalid image payloads are ignored" {
     try pane.feed("\x1b]1337;File=inline=1;size=1;width=2;height=1:");
     try pane.feed(test_iterm2_png_b64);
     try pane.feed("\x07");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+}
+
+test "iterm2 images are cleared by erase display complete" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 15, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try feedTestIterm2Image(&pane);
+    try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
+
+    try pane.feed("\x1b[H\x1b[2J");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+}
+
+test "iterm2 images are cleared by common clear sequence" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 16, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try feedTestIterm2Image(&pane);
+    try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
+
+    try pane.feed("\x1b[H\x1b[2J\x1b[3J");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+}
+
+test "iterm2 images are cleared by full reset" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 17, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try feedTestIterm2Image(&pane);
+    try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
+
+    try pane.feed("\x1bc");
     try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
 }

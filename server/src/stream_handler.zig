@@ -139,9 +139,15 @@ pub const Handler = struct {
             },
             .erase_display_below => self.terminal.eraseDisplay(.below, value),
             .erase_display_above => self.terminal.eraseDisplay(.above, value),
-            .erase_display_complete => self.terminal.eraseDisplay(.complete, value),
+            .erase_display_complete => {
+                self.pane.clearIterm2ImagesForActiveScreen();
+                self.terminal.eraseDisplay(.complete, value);
+            },
             .erase_display_scrollback => self.terminal.eraseDisplay(.scrollback, value),
-            .erase_display_scroll_complete => self.terminal.eraseDisplay(.scroll_complete, value),
+            .erase_display_scroll_complete => {
+                self.pane.clearIterm2ImagesForActiveScreen();
+                self.terminal.eraseDisplay(.scroll_complete, value);
+            },
             .erase_line_right => self.terminal.eraseLine(.right, value),
             .erase_line_left => self.terminal.eraseLine(.left, value),
             .erase_line_complete => self.terminal.eraseLine(.complete, value),
@@ -201,7 +207,10 @@ pub const Handler = struct {
             },
             .active_status_display => self.terminal.status_display = value,
             .decaln => try self.terminal.decaln(),
-            .full_reset => self.terminal.fullReset(),
+            .full_reset => {
+                self.pane.clearIterm2ImagesAllScreens();
+                self.terminal.fullReset();
+            },
             .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
             .end_hyperlink => self.terminal.screens.active.endHyperlink(),
             .mouse_shape => self.terminal.mouse_shape = value,

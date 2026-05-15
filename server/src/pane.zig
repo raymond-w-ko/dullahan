@@ -500,6 +500,18 @@ pub const Pane = struct {
         }
     }
 
+    pub fn clearIterm2ImagesForActiveScreen(self: *Pane) void {
+        self.iterm2_image_store.clearScreen(
+            self.allocator,
+            &self.terminal,
+            self.terminal.screens.active_key,
+        );
+    }
+
+    pub fn clearIterm2ImagesAllScreens(self: *Pane) void {
+        self.iterm2_image_store.clearAll(self.allocator, &self.terminal);
+    }
+
     /// Collect dirty row IDs from ghostty's dirty tracking into our dirty_rows set.
     /// Clears ghostty's dirty flags after collecting.
     fn collectDirtyRows(self: *Pane) void {
