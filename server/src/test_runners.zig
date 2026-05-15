@@ -2661,7 +2661,8 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         .rows = rows,
         .z = 0,
     });
-    try writeCursorRows(stdout_fd, rows, 'A');
+    try writeAllFd(stdout_fd, "\r");
+    try writeCursorRows(stdout_fd, rows - 1, 'A');
     try writeEncodedImage(stdout_fd, alpha_png_b64, .{
         .format = .png,
         .image_id = 6,
@@ -2670,7 +2671,6 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         .rows = rows,
         .z = 1,
     });
-    try writeCursorRows(stdout_fd, rows, 'B');
     try writeBlankLines(stdout_fd, rows + 2);
 
     try writeAllFd(stdout_fd,
