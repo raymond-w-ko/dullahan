@@ -21,6 +21,7 @@ import type {
   CursorState,
   ScrollbackInfo,
   SelectionBounds,
+  TerminalImagePlacement,
   BinarySnapshot,
   BinaryDelta,
   TitleMessage,
@@ -525,6 +526,34 @@ describe("Server → Client Messages", () => {
       };
 
       expect(msg.altScreen).toBe(true);
+    });
+
+    test("snapshot image placement can identify iTerm2 protocol", () => {
+      const image: TerminalImagePlacement = {
+        imageKey: "iterm2-1-1-png-1x1-a",
+        url: "/api/images/1/iterm2-1-1-png-1x1-a",
+        protocol: "iterm2",
+        paneId: 1,
+        imageId: 1,
+        placementId: 1,
+        viewportCol: 0,
+        viewportRow: 0,
+        gridCols: 20,
+        gridRows: 8,
+        imageWidth: 1,
+        imageHeight: 1,
+        pixelWidth: 160,
+        pixelHeight: 128,
+        sourceX: 0,
+        sourceY: 0,
+        sourceWidth: 1,
+        sourceHeight: 1,
+        z: 0,
+        format: "png",
+        generation: 1,
+      };
+
+      expect(image.protocol).toBe("iterm2");
     });
   });
 

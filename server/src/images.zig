@@ -1,8 +1,9 @@
-//! Kitty graphics image manifest and HTTP helpers.
+//! Terminal image manifest and HTTP helpers.
 
 const std = @import("std");
 const msgpack = @import("msgpack");
 const Pane = @import("pane.zig").Pane;
+const iterm2_images = @import("iterm2_images.zig");
 const png_decoder = @import("png_decoder.zig");
 const png_encoder = @import("png_encoder.zig");
 
@@ -180,6 +181,16 @@ pub fn getImageResponse(
     pane: *Pane,
     image_key: []const u8,
 ) ?ImageResponse {
+    if (pane.iterm2_image_store.getImageResponse(pane.id, image_key)) |response| {
+        return .{
+            .data = response.data,
+            .mime_type = response.mime_type,
+            .format = response.format,
+            .width = response.width,
+            .height = response.height,
+        };
+    }
+
     const key = parseImageKey(image_key) orelse return null;
     if (key.pane_id != pane.id) return null;
 
@@ -267,6 +278,7 @@ pub fn putManifest(
         try list.append(allocator, .{
             .image_key = image_key,
             .url = url,
+            .protocol = "kitty",
             .pane_id = pane.id,
             .image_id = entry.key_ptr.image_id,
             .placement_id = entry.key_ptr.placement_id.id,
@@ -290,6 +302,8 @@ pub fn putManifest(
         });
     }
 
+    try appendIterm2Manifest(allocator, &list, pane);
+
     defer for (list.items) |entry| {
         allocator.free(entry.image_key);
         allocator.free(entry.url);
@@ -303,6 +317,7 @@ pub fn putManifest(
         errdefer item.free(allocator);
         try item.mapPut("imageKey", try msgpack.Payload.strToPayload(entry.image_key, allocator));
         try item.mapPut("url", try msgpack.Payload.strToPayload(entry.url, allocator));
+        try item.mapPut("protocol", try msgpack.Payload.strToPayload(entry.protocol, allocator));
         try item.mapPut("paneId", .{ .uint = entry.pane_id });
         try item.mapPut("imageId", .{ .uint = entry.image_id });
         try item.mapPut("placementId", .{ .uint = entry.placement_id });
@@ -331,6 +346,7 @@ pub fn putManifest(
 pub const ManifestEntry = struct {
     image_key: []const u8,
     url: []const u8,
+    protocol: []const u8,
     pane_id: u16,
     image_id: u32,
     placement_id: u32,
@@ -352,6 +368,58 @@ pub const ManifestEntry = struct {
     format: []const u8,
     generation: u64,
 };
+
+fn appendIterm2Manifest(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayListUnmanaged(ManifestEntry),
+    pane: *Pane,
+) !void {
+    for (pane.iterm2_image_store.entries.items) |*entry| {
+        const point = iterm2_images.pointFromAnchor(
+            &pane.terminal,
+            entry.anchor,
+            entry.grid_rows,
+            pane.rows,
+        ) orelse continue;
+        if (!point.visible) continue;
+
+        const image_key = try iterm2_images.allocImageKey(allocator, pane.id, entry);
+        errdefer allocator.free(image_key);
+
+        const url = try std.fmt.allocPrint(
+            allocator,
+            "/api/images/{d}/{s}",
+            .{ pane.id, image_key },
+        );
+        errdefer allocator.free(url);
+
+        try list.append(allocator, .{
+            .image_key = image_key,
+            .url = url,
+            .protocol = "iterm2",
+            .pane_id = pane.id,
+            .image_id = entry.id,
+            .placement_id = entry.placement_id,
+            .viewport_col = point.col,
+            .viewport_row = point.row,
+            .grid_cols = entry.grid_cols,
+            .grid_rows = entry.grid_rows,
+            .image_width = entry.natural_width,
+            .image_height = entry.natural_height,
+            .pixel_width = entry.pixel_width,
+            .pixel_height = entry.pixel_height,
+            .source_x = 0,
+            .source_y = 0,
+            .source_width = entry.natural_width,
+            .source_height = entry.natural_height,
+            .x_offset = 0,
+            .y_offset = 0,
+            .z = 0,
+            .format = entry.mime.formatString(),
+            .generation = entry.generation,
+        });
+    }
+}
 
 fn manifestLessThan(_: void, lhs: ManifestEntry, rhs: ManifestEntry) bool {
     if (lhs.z != rhs.z) return lhs.z < rhs.z;
@@ -393,15 +461,24 @@ fn testManifestEntry(key: []const u8, z: i32, col: i32, image_id: u32, placement
     return .{
         .image_key = key,
         .url = "",
-        .pane_id = 1, .image_id = image_id, .placement_id = placement_id,
+        .protocol = "kitty",
+        .pane_id = 1,
+        .image_id = image_id,
+        .placement_id = placement_id,
         .viewport_col = col,
         .viewport_row = 1,
-        .grid_cols = 1, .grid_rows = 1,
-        .image_width = 1, .image_height = 1,
-        .pixel_width = 1, .pixel_height = 1,
-        .source_x = 0, .source_y = 0,
-        .source_width = 1, .source_height = 1,
-        .x_offset = 0, .y_offset = 0,
+        .grid_cols = 1,
+        .grid_rows = 1,
+        .image_width = 1,
+        .image_height = 1,
+        .pixel_width = 1,
+        .pixel_height = 1,
+        .source_x = 0,
+        .source_y = 0,
+        .source_width = 1,
+        .source_height = 1,
+        .x_offset = 0,
+        .y_offset = 0,
         .z = z,
         .format = "rgba",
         .generation = 1,
@@ -492,4 +569,66 @@ test "kitty rgba transmit and display produces manifest entry" {
     const decoded = try png_decoder.decodePng(allocator, response.data);
     defer allocator.free(decoded.data);
     try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 128 }, decoded.data);
+}
+
+const test_iterm2_png_b64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+
+test "iterm2 single file ST anchors after preceding text and serves png" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 12, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("A\x1b]1337;File=inline=1;width=2;height=1;preserveAspectRatio=0:");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x1b\\B");
+
+    try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), pane.terminal.screens.active.cursor.y);
+    try std.testing.expectEqual(@as(usize, 2), pane.terminal.screens.active.cursor.x);
+
+    const entry = &pane.iterm2_image_store.entries.items[0];
+    try std.testing.expectEqual(@as(u32, 2), entry.grid_cols);
+    try std.testing.expectEqual(@as(u32, 1), entry.grid_rows);
+    const point = iterm2_images.pointFromAnchor(&pane.terminal, entry.anchor, entry.grid_rows, pane.rows).?;
+    try std.testing.expectEqual(@as(i32, 1), point.col);
+    try std.testing.expectEqual(@as(i32, 0), point.row);
+
+    const key = try iterm2_images.allocImageKey(allocator, pane.id, entry);
+    defer allocator.free(key);
+    const response = getImageResponse(allocator, &pane, key).?;
+    try std.testing.expectEqualStrings("image/png", response.mime_type);
+    try std.testing.expectEqualStrings("png", response.format);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", response.data[0..8]);
+}
+
+test "iterm2 multipart image creates one placement" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 13, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");
+    try pane.feed("\x1b]1337;FilePart=");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x07");
+    try pane.feed("\x1b]1337;FileEnd\x07");
+
+    try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
+    const entry = pane.iterm2_image_store.entries.items[0];
+    try std.testing.expectEqual(@as(u32, 3), entry.grid_cols);
+    try std.testing.expectEqual(@as(u32, 2), entry.grid_rows);
+}
+
+test "iterm2 invalid image payloads are ignored" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 14, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b]1337;File=inline=1;width=2;height=1:not-base64\x07");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+
+    try pane.feed("\x1b]1337;File=inline=1;size=1;width=2;height=1:");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x07");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
 }

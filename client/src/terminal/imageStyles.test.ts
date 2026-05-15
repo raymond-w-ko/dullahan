@@ -9,6 +9,7 @@ function image(overrides: Partial<TerminalImagePlacement> = {}): TerminalImagePl
   return {
     imageKey: "1-1-rgba-10x10-a",
     url: "/api/images/1/1-1-rgba-10x10-a",
+    protocol: "kitty",
     paneId: 1,
     imageId: 1,
     placementId: 1,

@@ -155,7 +155,7 @@ pub fn run(allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
     const seed_data = std.fs.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024) catch |e| {
-        std.debug.print("image-test: failed to read {s}: {}\n", .{ path, e });
+        std.debug.print("kitty-image-test: failed to read {s}: {}\n", .{ path, e });
         std.debug.print("Try: wget -O /tmp/dullahan-image-test.png https://upload.wikimedia.org/wikipedia/commons/3/3f/PNG_icon.png\n", .{});
         return e;
     };

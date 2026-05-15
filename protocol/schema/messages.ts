@@ -320,6 +320,7 @@ export interface SelectionBounds {
 export interface TerminalImagePlacement {
   imageKey: string;
   url: string;
+  protocol?: "kitty" | "iterm2";
   paneId: number;
   imageId: number;
   placementId: number;
@@ -385,7 +386,7 @@ export interface BinarySnapshot {
   rowIds: Uint8Array; // Packed u64 row IDs (little-endian)
   graphemes?: Uint8Array; // Grapheme cluster data for multi-codepoint characters
   hyperlinks?: Uint8Array; // Hyperlink data for OSC 8 links
-  images?: TerminalImagePlacement[]; // Kitty graphics placements
+  images?: TerminalImagePlacement[]; // Terminal image placements
   selection?: SelectionBounds; // Current selection (if any)
 }
 
@@ -411,7 +412,7 @@ export interface BinaryDelta {
   }>;
   rowIds: Uint8Array; // Packed u64 row IDs for viewport (little-endian)
   styles: Uint8Array; // Raw style bytes for dirty rows
-  images?: TerminalImagePlacement[]; // Kitty graphics placements
+  images?: TerminalImagePlacement[]; // Terminal image placements
   selection?: SelectionBounds; // Current selection (if any)
 }
 

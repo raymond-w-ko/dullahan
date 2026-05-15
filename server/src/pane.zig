@@ -14,6 +14,7 @@ const device_status = ghostty.device_status;
 const Pty = @import("pty.zig").Pty;
 const constants = @import("constants.zig");
 const stream_handler = @import("stream_handler.zig");
+const iterm2_images = @import("iterm2_images.zig");
 const pty_log = @import("pty_log.zig");
 
 /// Mouse event reporting modes (DECSET 9, 1000, 1002, 1003)
@@ -120,6 +121,12 @@ pub const Pane = struct {
     /// terminal-modifying events to the Terminal (like readonly does).
     /// Lazily initialized on first feed() because we need a stable pointer to the Pane.
     vt_stream: ?stream_handler.Stream = null,
+
+    /// iTerm2 OSC 1337 inline image storage.
+    iterm2_image_store: iterm2_images.Store = .{},
+
+    /// Pre-ghostty OSC 1337 image capture parser.
+    iterm2_image_parser: iterm2_images.Parser = .{},
 
     /// Terminal title set by OSC 0/2 escape sequences
     /// Shells use this to show working directory, command, etc.
@@ -266,6 +273,9 @@ pub const Pane = struct {
             stream.deinit();
         }
 
+        self.iterm2_image_parser.deinit(self.allocator, &self.terminal);
+        self.iterm2_image_store.deinit(self.allocator, &self.terminal);
+
         // Free title if allocated
         if (self.title) |t| {
             self.allocator.free(t);
@@ -382,12 +392,8 @@ pub const Pane = struct {
     /// Write directly to terminal buffer (no PTY required).
     /// Used for virtual panes like debug output that have no shell.
     pub fn feedDirect(self: *Pane, data: []const u8) !void {
-        // Lazily initialize VT stream with our custom handler
-        if (self.vt_stream == null) {
-            const handler = stream_handler.Handler.init(&self.terminal, self);
-            self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
-        }
-        self.vt_stream.?.nextSlice(data);
+        self.ensureVtStream();
+        try self.feedTerminalBytes(data);
 
         // Collect dirty rows
         self.collectDirtyRows();
@@ -433,11 +439,8 @@ pub const Pane = struct {
         // The handler receives fully-parsed events from ghostty-vt, eliminating the
         // dual-parser architecture that caused state desync issues.
         // Lazily initialize on first use (see comment on vt_stream field)
-        if (self.vt_stream == null) {
-            const handler = stream_handler.Handler.init(&self.terminal, self);
-            self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
-        }
-        self.vt_stream.?.nextSlice(data);
+        self.ensureVtStream();
+        try self.feedTerminalBytes(data);
 
         // Check for screen switch (primary <-> alternate)
         // Row IDs are completely different between screens, so clients need full resync
@@ -475,6 +478,26 @@ pub const Pane = struct {
 
         // Increment generation to signal clients need update
         self.generation +%= 1;
+    }
+
+    fn ensureVtStream(self: *Pane) void {
+        if (self.vt_stream != null) return;
+        const handler = stream_handler.Handler.init(&self.terminal, self);
+        self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
+    }
+
+    fn feedTerminalBytes(self: *Pane, data: []const u8) !void {
+        if (self.vt_stream) |*stream| {
+            try self.iterm2_image_parser.process(
+                self.allocator,
+                &self.iterm2_image_store,
+                &self.terminal,
+                stream,
+                data,
+                self.id,
+                self.generation +% 1,
+            );
+        }
     }
 
     /// Collect dirty row IDs from ghostty's dirty tracking into our dirty_rows set.

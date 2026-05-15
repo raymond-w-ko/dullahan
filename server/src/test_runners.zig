@@ -18,7 +18,8 @@ const dlog = @import("dlog.zig");
 const test_diagnostics = @import("test_diagnostics.zig");
 const query_trace_runner = @import("query_trace_runner.zig");
 const single_parser_matrix = @import("single_parser_matrix.zig");
-const image_test = @import("image_test.zig");
+const kitty_image_test = @import("image_test.zig");
+const iterm2_image_test = @import("iterm2_image_test.zig");
 
 const log = std.log.scoped(.test_runners);
 
@@ -38,7 +39,8 @@ pub const TestCommand = enum {
     @"progress-test",
     @"sync-test",
     @"palette-256",
-    @"image-test",
+    @"kitty-image-test",
+    @"iterm2-image-test",
     @"single-parser-diag",
     @"single-parser-matrix",
     help,
@@ -59,7 +61,8 @@ pub const TestCommand = enum {
             .{ "progress-test", .@"progress-test" },
             .{ "sync-test", .@"sync-test" },
             .{ "palette-256", .@"palette-256" },
-            .{ "image-test", .@"image-test" },
+            .{ "kitty-image-test", .@"kitty-image-test" },
+            .{ "iterm2-image-test", .@"iterm2-image-test" },
             .{ "single-parser-diag", .@"single-parser-diag" },
             .{ "single-parser-matrix", .@"single-parser-matrix" },
             .{ "help", .help },
@@ -83,7 +86,8 @@ pub const TestCommand = enum {
             .@"progress-test" => "Display progress bar via OSC 9;4",
             .@"sync-test" => "Test synchronized output mode (DECSET 2026)",
             .@"palette-256" => "Display full 256-color palette grid",
-            .@"image-test" => "Display PNG via Kitty graphics protocol",
+            .@"kitty-image-test" => "Display images via Kitty graphics protocol",
+            .@"iterm2-image-test" => "Display images via iTerm2 OSC 1337 protocol",
             .@"single-parser-diag" => "Emit reusable single-parser diagnostics artifacts",
             .@"single-parser-matrix" => "Run the single-parser compatibility scenario matrix",
             .help => "Show available test commands",
@@ -113,7 +117,8 @@ pub fn printTestUsage() void {
         \\  dullahan test progress-test         # Test progress bar
         \\  dullahan test sync-test             # Test synchronized output (DECSET 2026)
         \\  dullahan test palette-256           # Display the full 256-color palette
-        \\  dullahan test image-test /tmp/dullahan-image-test.png
+        \\  dullahan test kitty-image-test /tmp/dullahan-image-test.png
+        \\  dullahan test iterm2-image-test /tmp/dullahan-image-test.png
         \\  dullahan test single-parser-diag    # Emit reusable diagnostics artifacts
         \\  dullahan test single-parser-matrix  # Run the single-parser compatibility matrix
         \\
@@ -137,7 +142,8 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand, args: ?[]const u8
         .@"progress-test" => runProgressTest(),
         .@"sync-test" => runSyncTest(),
         .@"palette-256" => runPalette256Test(),
-        .@"image-test" => try image_test.run(allocator, args),
+        .@"kitty-image-test" => try kitty_image_test.run(allocator, args),
+        .@"iterm2-image-test" => try iterm2_image_test.run(allocator, args),
         .@"single-parser-diag" => try runSingleParserDiag(allocator),
         .@"single-parser-matrix" => try single_parser_matrix.run(allocator),
         .help => printTestUsage(),

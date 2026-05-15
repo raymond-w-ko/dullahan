@@ -193,7 +193,7 @@ export interface TerminalSnapshot {
   hyperlinks: HyperlinkTable; // Hyperlink data for OSC 8 links
   viewportRows?: Array<TerminalViewportRow | null>; // Row-oriented data for render hot path
   selection?: SelectionBounds; // Current selection (if any)
-  images?: TerminalImagePlacement[]; // Kitty graphics placements
+  images?: TerminalImagePlacement[]; // Terminal image placements
 }
 
 export interface TerminalViewportRow {

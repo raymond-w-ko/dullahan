@@ -705,7 +705,7 @@ pub fn generateBinarySnapshot(allocator: std.mem.Allocator, pane: *Pane) ![]u8 {
     const row_ids_bytes = std.mem.sliceAsBytes(cells_and_styles.row_ids);
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
-    // Kitty graphics placement manifest. Image bytes are fetched over HTTP.
+    // Terminal image placement manifest. Image bytes are fetched over HTTP.
     try images.putManifest(allocator, &payload, pane);
 
     // Terminal title (if set)
@@ -1147,7 +1147,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     const row_ids_bytes = std.mem.sliceAsBytes(row_ids);
     try payload.mapPut("rowIds", try msgpack.Payload.binToPayload(row_ids_bytes, allocator));
 
-    // Kitty graphics placement manifest. Image bytes are fetched over HTTP.
+    // Terminal image placement manifest. Image bytes are fetched over HTTP.
     try images.putManifest(allocator, &payload, pane);
 
     log.debug("Delta: {d} dirty rows, {d} row IDs ({d} bytes), first rowId={d}", .{

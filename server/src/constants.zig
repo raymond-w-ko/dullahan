@@ -95,6 +95,12 @@ pub const upload = struct {
 pub const images = struct {
     /// Per-pane Kitty graphics storage cap.
     pub const kitty_storage_limit: usize = 32 * 1024 * 1024;
+
+    /// Per-pane iTerm2 inline image storage cap.
+    pub const iterm2_storage_limit: usize = 32 * 1024 * 1024;
+
+    /// Maximum captured OSC 1337 sequence before it is dropped.
+    pub const iterm2_osc_sequence_limit: usize = 48 * 1024 * 1024;
 };
 
 /// Default terminal colors for OSC 10/11 queries.
