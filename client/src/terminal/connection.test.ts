@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { TerminalConnection } from "./connection";
+import { readSnappyLength, TerminalConnection } from "./connection";
 import type { KeyMessage } from "./keyboard";
 import type { TextMessage } from "../../../protocol/schema/messages";
 
@@ -129,5 +129,17 @@ describe("TerminalConnection input tail-follow", () => {
       [message],
     ]);
     expect(paneState.followTail).toBe(true);
+  });
+});
+
+describe("readSnappyLength", () => {
+  test("decodes snappy varint lengths without signed bitwise overflow", () => {
+    expect(readSnappyLength(new Uint8Array([0x80, 0x80, 0x80, 0x01]))).toBe(2_097_152);
+  });
+
+  test("rejects frames that would overgrow the wasm decompressor", () => {
+    expect(() => readSnappyLength(new Uint8Array([0x80, 0x80, 0x80, 0x08]))).toThrow(
+      "Snappy message too large"
+    );
   });
 });

@@ -167,61 +167,6 @@ const HIDDEN_CURSOR: CursorState = {
   blink: true,
 };
 
-function rawImageBlob(
-  bytes: ArrayBuffer,
-  format: string,
-  width: number,
-  height: number
-): Blob {
-  if (width <= 0 || height <= 0) {
-    throw new Error("raw image missing dimensions");
-  }
-
-  const raw = new Uint8ClampedArray(bytes);
-  const pixelCount = width * height;
-  let rgba: Uint8ClampedArray;
-
-  if (format === "rgba") {
-    if (raw.length !== pixelCount * 4) {
-      throw new Error("bad RGBA image length");
-    }
-    rgba = raw;
-  } else if (format === "rgb") {
-    if (raw.length !== pixelCount * 3) {
-      throw new Error("bad RGB image length");
-    }
-    rgba = new Uint8ClampedArray(pixelCount * 4);
-    for (let src = 0, dst = 0; src < raw.length; src += 3, dst += 4) {
-      rgba[dst] = raw[src]!;
-      rgba[dst + 1] = raw[src + 1]!;
-      rgba[dst + 2] = raw[src + 2]!;
-      rgba[dst + 3] = 255;
-    }
-  } else {
-    throw new Error(`unsupported raw image format ${format}`);
-  }
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("canvas unavailable");
-  }
-  const imageDataArray: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(rgba.length);
-  imageDataArray.set(rgba);
-  ctx.putImageData(new ImageData(imageDataArray, width, height), 0, 0);
-
-  const dataUrl = canvas.toDataURL("image/png");
-  const comma = dataUrl.indexOf(",");
-  const binary = atob(dataUrl.slice(comma + 1));
-  const png = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    png[i] = binary.charCodeAt(i);
-  }
-  return new Blob([png], { type: "image/png" });
-}
-
 interface TerminalImageProps {
   image: TerminalImagePlacement;
   authToken?: string;
@@ -251,10 +196,7 @@ function TerminalImage({ image, authToken }: TerminalImageProps) {
         if (contentType.startsWith("image/")) {
           return response.blob();
         }
-        const format = response.headers.get("x-dullahan-image-format") ?? image.format;
-        const width = Number(response.headers.get("x-dullahan-image-width") ?? image.imageWidth);
-        const height = Number(response.headers.get("x-dullahan-image-height") ?? image.imageHeight);
-        return response.arrayBuffer().then((bytes) => rawImageBlob(bytes, format, width, height));
+        throw new Error(`unsupported image content type ${contentType || "unknown"}`);
       })
       .then((blob) => {
         if (cancelled) return;

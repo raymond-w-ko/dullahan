@@ -17,17 +17,22 @@ import { decode } from "@msgpack/msgpack";
 import { snappyUncompress } from "hysnappy";
 import { v4 as uuidv4 } from "uuid";
 
+const MAX_DECOMPRESSED_MESSAGE_BYTES = 8 * 1024 * 1024;
+
 /**
  * Read varint-encoded uncompressed length from Snappy data.
  * Snappy format: varint length prefix followed by compressed blocks.
  */
-function readSnappyLength(data: Uint8Array): number {
+export function readSnappyLength(data: Uint8Array): number {
   let result = 0;
   let shift = 0;
   const maxBytes = Math.min(data.length, 5);
   for (let i = 0; i < maxBytes; i++) {
     const byte = data[i]!;
-    result |= (byte & 0x7f) << shift;
+    result += (byte & 0x7f) * 2 ** shift;
+    if (result > MAX_DECOMPRESSED_MESSAGE_BYTES) {
+      throw new Error(`Snappy message too large: ${result} bytes`);
+    }
     if ((byte & 0x80) === 0) {
       return result;
     }
@@ -776,8 +781,12 @@ export class TerminalConnection {
         if (event.data instanceof ArrayBuffer) {
           // Check compression header byte
           const data = new Uint8Array(event.data);
-          const isCompressed = data[0] === 1;
-          const payload = data.slice(1);
+          const header = data[0];
+          if (header !== 0 && header !== 1) {
+            throw new Error(`Invalid binary message compression header: ${header}`);
+          }
+          const isCompressed = header === 1;
+          const payload = data.subarray(1);
           
           // Decompress if needed, then decode msgpack
           const decompressed = isCompressed

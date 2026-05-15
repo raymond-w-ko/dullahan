@@ -127,7 +127,7 @@ pub fn getImageResponse(pane: *Pane, image_key: []const u8) ?ImageResponse {
     if (format != .png) {
         return .{
             .data = image.data,
-            .mime_type = "application/octet-stream",
+            .mime_type = "",
             .format = imageFormatString(format),
             .width = image.width,
             .height = image.height,
