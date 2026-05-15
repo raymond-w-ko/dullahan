@@ -2409,12 +2409,12 @@ fn writeAllFd(fd: posix.fd_t, bytes: []const u8) !void {
     }
 }
 
-fn kittyImageChunkHeader(buf: []u8, first: bool, more: bool) ![]const u8 {
+fn kittyImageChunkHeader(buf: []u8, first: bool, more: bool, width: usize, height: usize) ![]const u8 {
     if (first) {
         return std.fmt.bufPrint(
             buf,
-            "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1{s};",
-            .{if (more) ",m=1" else ""},
+            "\x1b_Ga=T,t=d,f=24,s={d},v={d},i=1,p=1,c=20,r=10,q=1{s};",
+            .{ width, height, if (more) ",m=1" else "" },
         );
     }
 
@@ -2425,7 +2425,7 @@ fn kittyImageChunkHeader(buf: []u8, first: bool, more: bool) ![]const u8 {
     );
 }
 
-fn writeKittyImageChunks(fd: posix.fd_t, encoded: []const u8) !void {
+fn writeKittyImageChunks(fd: posix.fd_t, encoded: []const u8, width: usize, height: usize) !void {
     const chunk_size = 4096;
     var offset: usize = 0;
 
@@ -2434,7 +2434,7 @@ fn writeKittyImageChunks(fd: posix.fd_t, encoded: []const u8) !void {
         const more = end < encoded.len;
 
         var header_buf: [160]u8 = undefined;
-        const header = try kittyImageChunkHeader(&header_buf, offset == 0, more);
+        const header = try kittyImageChunkHeader(&header_buf, offset == 0, more, width, height);
 
         try writeAllFd(fd, header);
         try writeAllFd(fd, encoded[offset..end]);
@@ -2447,16 +2447,16 @@ fn writeKittyImageChunks(fd: posix.fd_t, encoded: []const u8) !void {
 test "kitty image chunk headers" {
     var buf: [160]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "\x1b_Ga=T,t=d,f=100,i=1,p=1,c=20,r=10,q=1,m=1;",
-        try kittyImageChunkHeader(&buf, true, true),
+        "\x1b_Ga=T,t=d,f=24,s=240,v=120,i=1,p=1,c=20,r=10,q=1,m=1;",
+        try kittyImageChunkHeader(&buf, true, true, 240, 120),
     );
     try std.testing.expectEqualStrings(
         "\x1b_Ga=t,q=1,m=1;",
-        try kittyImageChunkHeader(&buf, false, true),
+        try kittyImageChunkHeader(&buf, false, true, 240, 120),
     );
     try std.testing.expectEqualStrings(
         "\x1b_Ga=t,q=1;",
-        try kittyImageChunkHeader(&buf, false, false),
+        try kittyImageChunkHeader(&buf, false, false, 240, 120),
     );
 }
 
@@ -2464,12 +2464,26 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const path = firstArg(args);
     const stdout_fd = posix.STDOUT_FILENO;
 
-    const data = std.fs.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024) catch |e| {
+    const seed_data = std.fs.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024) catch |e| {
         std.debug.print("image-test: failed to read {s}: {}\n", .{ path, e });
         std.debug.print("Try: wget -O /tmp/dullahan-image-test.png https://upload.wikimedia.org/wikipedia/commons/3/3f/PNG_icon.png\n", .{});
         return e;
     };
+    defer allocator.free(seed_data);
+
+    const image_width = 240;
+    const image_height = 120;
+    const data = try allocator.alloc(u8, image_width * image_height * 3);
     defer allocator.free(data);
+    for (0..image_height) |y| {
+        for (0..image_width) |x| {
+            const i = (y * image_width + x) * 3;
+            const seed = seed_data[(x + y * image_width) % seed_data.len];
+            data[i] = @intCast((x * 255) / (image_width - 1));
+            data[i + 1] = @intCast((y * 255) / (image_height - 1));
+            data[i + 2] = seed;
+        }
+    }
 
     const encoded_len = std.base64.standard.Encoder.calcSize(data.len);
     const encoded = try allocator.alloc(u8, encoded_len);
@@ -2484,7 +2498,7 @@ fn runImageTest(allocator: std.mem.Allocator, args: ?[]const u8) !void {
         \\
     ) catch {};
 
-    try writeKittyImageChunks(stdout_fd, encoded);
+    try writeKittyImageChunks(stdout_fd, encoded, image_width, image_height);
 
     _ = posix.write(stdout_fd,
         \\

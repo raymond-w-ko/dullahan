@@ -1089,10 +1089,11 @@ pub const Server = struct {
             self.respondAndClose(idx, "404 Not Found", "Pane not found");
             return;
         };
-        const image_response = images.getImageResponse(pane, image_key) orelse {
+        const image_response = images.getImageResponse(self.allocator, pane, image_key) orelse {
             self.respondAndClose(idx, "404 Not Found", "Image not found");
             return;
         };
+        defer if (image_response.owned) self.allocator.free(image_response.data);
         if (image_response.mime_type.len == 0) {
             self.respondAndClose(idx, "415 Unsupported Media Type", "Unsupported image format");
             return;

@@ -21,6 +21,7 @@ pub const ImageResponse = struct {
     format: []const u8,
     width: u32,
     height: u32,
+    owned: bool = false,
 };
 
 fn imageFormat(format: anytype) ImageFormat {
@@ -115,7 +116,62 @@ fn parseImageKey(raw: []const u8) ?struct { pane_id: u16, image_id: u32, data_le
     };
 }
 
-pub fn getImageResponse(pane: *Pane, image_key: []const u8) ?ImageResponse {
+fn putLe(comptime T: type, out: []u8, value: T) void {
+    std.mem.writeInt(T, out[0..@sizeOf(T)], value, .little);
+}
+
+fn bmpFromRaw(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+) ![]u8 {
+    const bpp: usize = switch (format) {
+        .rgb => 3,
+        .rgba => 4,
+        else => return error.UnsupportedFormat,
+    };
+    const pixel_count = @as(usize, width) * @as(usize, height);
+    if (data.len != pixel_count * bpp) return error.InvalidData;
+
+    const pixel_bytes = pixel_count * 4;
+    const total_len = 14 + 40 + pixel_bytes;
+    const out = try allocator.alloc(u8, total_len);
+    errdefer allocator.free(out);
+    @memset(out, 0);
+
+    out[0] = 'B';
+    out[1] = 'M';
+    putLe(u32, out[2..6], @intCast(total_len));
+    putLe(u32, out[10..14], 54);
+    putLe(u32, out[14..18], 40);
+    putLe(i32, out[18..22], @intCast(width));
+    putLe(i32, out[22..26], -@as(i32, @intCast(height)));
+    putLe(u16, out[26..28], 1);
+    putLe(u16, out[28..30], 32);
+    putLe(u32, out[34..38], @intCast(pixel_bytes));
+
+    var src: usize = 0;
+    var dst: usize = 54;
+    while (src < data.len) : ({
+        src += bpp;
+        dst += 4;
+    }) {
+        out[dst] = data[src + 2];
+        out[dst + 1] = data[src + 1];
+        out[dst + 2] = data[src];
+        out[dst + 3] = if (format == .rgba) data[src + 3] else 255;
+    }
+
+    return out;
+}
+
+pub fn getImageResponse(
+    allocator: std.mem.Allocator,
+    pane: *Pane,
+    image_key: []const u8,
+) ?ImageResponse {
     const key = parseImageKey(image_key) orelse return null;
     if (key.pane_id != pane.id) return null;
 
@@ -125,12 +181,23 @@ pub fn getImageResponse(pane: *Pane, image_key: []const u8) ?ImageResponse {
 
     const format = imageFormat(image.format);
     if (format != .png) {
+        const bmp = bmpFromRaw(allocator, image.data, format, image.width, image.height) catch |err| {
+            log.warn("failed to encode raw image as BMP: {}", .{err});
+            return .{
+                .data = image.data,
+                .mime_type = "",
+                .format = imageFormatString(format),
+                .width = image.width,
+                .height = image.height,
+            };
+        };
         return .{
-            .data = image.data,
-            .mime_type = "",
+            .data = bmp,
+            .mime_type = "image/bmp",
             .format = imageFormatString(format),
             .width = image.width,
             .height = image.height,
+            .owned = true,
         };
     }
 
@@ -273,4 +340,34 @@ test "parse image key" {
     try std.testing.expectEqual(@as(u32, 42), key.image_id);
     try std.testing.expectEqual(@as(usize, 1024), key.data_len);
     try std.testing.expect(parseImageKey("bad") == null);
+}
+
+test "kitty rgb transmit and display produces manifest entry" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 9, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b_Ga=T,t=d,f=24,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
+    try pane.feed("/wAA");
+    try pane.feed("\x1b\\");
+
+    const storage = &pane.terminal.screens.active.kitty_images;
+    try std.testing.expectEqual(@as(usize, 1), storage.images.count());
+    try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try putManifest(allocator, &payload, &pane);
+}
+
+test "raw RGB image response is served as BMP" {
+    const data = [_]u8{ 255, 0, 0 };
+    const bmp = try bmpFromRaw(std.testing.allocator, &data, .rgb, 1, 1);
+    defer std.testing.allocator.free(bmp);
+    try std.testing.expectEqualStrings("BM", bmp[0..2]);
+    try std.testing.expectEqual(@as(usize, 58), bmp.len);
+    try std.testing.expectEqual(@as(u8, 0), bmp[54]);
+    try std.testing.expectEqual(@as(u8, 0), bmp[55]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[56]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[57]);
 }
