@@ -4,6 +4,7 @@ const std = @import("std");
 const msgpack = @import("msgpack");
 const Pane = @import("pane.zig").Pane;
 const png_decoder = @import("png_decoder.zig");
+const png_encoder = @import("png_encoder.zig");
 
 const log = std.log.scoped(.image);
 
@@ -46,6 +47,21 @@ fn imageFormatString(format: ImageFormat) []const u8 {
     };
 }
 
+fn imageFormatFromString(raw: []const u8) ?ImageFormat {
+    inline for (@typeInfo(ImageFormat).@"enum".fields) |field| {
+        if (std.mem.eql(u8, raw, field.name)) return @enumFromInt(field.value);
+    }
+    return null;
+}
+
+fn rawPngFormat(format: ImageFormat) ?png_encoder.RawFormat {
+    return switch (format) {
+        .rgb => .rgb,
+        .rgba => .rgba,
+        else => null,
+    };
+}
+
 fn pointFromPlacement(
     pane: *Pane,
     placement: anytype,
@@ -75,138 +91,88 @@ fn pointFromPlacement(
     };
 }
 
-fn writeImageKey(writer: anytype, pane_id: u16, image_id: u32, data_len: usize) !void {
-    try writer.print("{d}-{d}-{d}", .{ pane_id, image_id, data_len });
-}
-
-pub fn appendImageKey(
-    allocator: std.mem.Allocator,
-    out: *std.ArrayListUnmanaged(u8),
+const ImageKey = struct {
     pane_id: u16,
     image_id: u32,
-    data_len: usize,
-) ![]const u8 {
-    const start = out.items.len;
-    try writeImageKey(out.writer(allocator), pane_id, image_id, data_len);
-    return out.items[start..];
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    content_hash: u64,
+};
+
+fn imageContentHash(data: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, data);
+}
+
+fn writeImageKey(
+    writer: anytype,
+    pane_id: u16,
+    image_id: u32,
+    format: ImageFormat,
+    width: u32,
+    height: u32,
+    data: []const u8,
+) !void {
+    try writer.print(
+        "{d}-{d}-{s}-{d}x{d}-{x}",
+        .{ pane_id, image_id, imageFormatString(format), width, height, imageContentHash(data) },
+    );
 }
 
 pub fn allocImageKey(
     allocator: std.mem.Allocator,
     pane_id: u16,
     image_id: u32,
-    data_len: usize,
+    raw_format: anytype,
+    width: u32,
+    height: u32,
+    data: []const u8,
 ) ![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
     errdefer out.deinit(allocator);
-    try writeImageKey(out.writer(allocator), pane_id, image_id, data_len);
+    try writeImageKey(out.writer(allocator), pane_id, image_id, imageFormat(raw_format), width, height, data);
     return out.toOwnedSlice(allocator);
 }
 
-fn parseImageKey(raw: []const u8) ?struct { pane_id: u16, image_id: u32, data_len: usize } {
+fn parseImageKey(raw: []const u8) ?ImageKey {
     var it = std.mem.splitScalar(u8, raw, '-');
     const pane_str = it.next() orelse return null;
     const image_str = it.next() orelse return null;
-    const len_str = it.next() orelse return null;
+    const format_str = it.next() orelse return null;
+    const dimensions_str = it.next() orelse return null;
+    const hash_str = it.next() orelse return null;
     if (it.next() != null) return null;
+
+    var dimensions = std.mem.splitScalar(u8, dimensions_str, 'x');
+    const width_str = dimensions.next() orelse return null;
+    const height_str = dimensions.next() orelse return null;
+    if (dimensions.next() != null) return null;
 
     return .{
         .pane_id = std.fmt.parseInt(u16, pane_str, 10) catch return null,
         .image_id = std.fmt.parseInt(u32, image_str, 10) catch return null,
-        .data_len = std.fmt.parseInt(usize, len_str, 10) catch return null,
+        .format = imageFormatFromString(format_str) orelse return null,
+        .width = std.fmt.parseInt(u32, width_str, 10) catch return null,
+        .height = std.fmt.parseInt(u32, height_str, 10) catch return null,
+        .content_hash = std.fmt.parseInt(u64, hash_str, 16) catch return null,
     };
 }
 
-fn writePngChunk(
-    out: *std.ArrayListUnmanaged(u8),
-    allocator: std.mem.Allocator,
-    chunk_type: *const [4]u8,
-    data: []const u8,
-) !void {
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
-    try out.appendSlice(allocator, &len_buf);
-    try out.appendSlice(allocator, chunk_type);
-    try out.appendSlice(allocator, data);
-
-    var crc_data = try allocator.alloc(u8, chunk_type.len + data.len);
-    defer allocator.free(crc_data);
-    @memcpy(crc_data[0..chunk_type.len], chunk_type);
-    @memcpy(crc_data[chunk_type.len..], data);
-    var crc_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &crc_buf, std.hash.crc.Crc32.hash(crc_data), .big);
-    try out.appendSlice(allocator, &crc_buf);
-}
-
-fn pngFromRaw(
-    allocator: std.mem.Allocator,
-    data: []const u8,
+fn keyMatches(
+    key: ImageKey,
+    pane_id: u16,
+    image_id: u32,
     format: ImageFormat,
     width: u32,
     height: u32,
-) ![]u8 {
-    const bpp: usize = switch (format) {
-        .rgb => 3,
-        .rgba => 4,
-        else => return error.UnsupportedFormat,
-    };
-    const pixel_count = @as(usize, width) * @as(usize, height);
-    if (data.len != pixel_count * bpp) return error.InvalidData;
-
-    const row_len = 1 + @as(usize, width) * 4;
-    const filtered = try allocator.alloc(u8, row_len * @as(usize, height));
-    defer allocator.free(filtered);
-
-    for (0..@as(usize, height)) |y| {
-        const row_start = y * row_len;
-        filtered[row_start] = 0;
-        for (0..@as(usize, width)) |x| {
-            const src = (y * @as(usize, width) + x) * bpp;
-            const dst = row_start + 1 + x * 4;
-            filtered[dst] = data[src];
-            filtered[dst + 1] = data[src + 1];
-            filtered[dst + 2] = data[src + 2];
-            filtered[dst + 3] = if (format == .rgba) data[src + 3] else 255;
-        }
-    }
-
-    var zlib: std.ArrayListUnmanaged(u8) = .{};
-    defer zlib.deinit(allocator);
-    try zlib.appendSlice(allocator, &.{ 0x78, 0x01 });
-    var remaining = filtered;
-    while (remaining.len > 0) {
-        const block_len = @min(remaining.len, 65535);
-        const final: u8 = if (block_len == remaining.len) 1 else 0;
-        try zlib.append(allocator, final);
-        var len_buf: [2]u8 = undefined;
-        std.mem.writeInt(u16, &len_buf, @intCast(block_len), .little);
-        try zlib.appendSlice(allocator, &len_buf);
-        std.mem.writeInt(u16, &len_buf, ~@as(u16, @intCast(block_len)), .little);
-        try zlib.appendSlice(allocator, &len_buf);
-        try zlib.appendSlice(allocator, remaining[0..block_len]);
-        remaining = remaining[block_len..];
-    }
-    var adler_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &adler_buf, std.hash.Adler32.hash(filtered), .big);
-    try zlib.appendSlice(allocator, &adler_buf);
-
-    var png: std.ArrayListUnmanaged(u8) = .{};
-    errdefer png.deinit(allocator);
-    try png.appendSlice(allocator, "\x89PNG\r\n\x1a\n");
-
-    var ihdr: [13]u8 = undefined;
-    std.mem.writeInt(u32, ihdr[0..4], width, .big);
-    std.mem.writeInt(u32, ihdr[4..8], height, .big);
-    ihdr[8] = 8;
-    ihdr[9] = 6;
-    ihdr[10] = 0;
-    ihdr[11] = 0;
-    ihdr[12] = 0;
-    try writePngChunk(&png, allocator, "IHDR", &ihdr);
-    try writePngChunk(&png, allocator, "IDAT", zlib.items);
-    try writePngChunk(&png, allocator, "IEND", "");
-
-    return png.toOwnedSlice(allocator);
+    data: []const u8,
+) bool {
+    return key.pane_id == pane_id and
+        key.image_id == image_id and
+        key.format == format and
+        key.width == width and
+        key.height == height and
+        key.content_hash == imageContentHash(data);
 }
 
 pub fn getImageResponse(
@@ -219,11 +185,18 @@ pub fn getImageResponse(
 
     const storage = &pane.terminal.screens.active.kitty_images;
     const image = storage.images.getPtr(key.image_id) orelse return null;
-    if (image.data.len != key.data_len) return null;
-
     const format = imageFormat(image.format);
+    if (!keyMatches(key, pane.id, key.image_id, format, image.width, image.height, image.data)) return null;
+
     if (format != .png) {
-        const png = pngFromRaw(allocator, image.data, format, image.width, image.height) catch |err| {
+        const raw_format = rawPngFormat(format) orelse return .{
+            .data = image.data,
+            .mime_type = "",
+            .format = imageFormatString(format),
+            .width = image.width,
+            .height = image.height,
+        };
+        const png = png_encoder.encodeRgba(allocator, image.data, raw_format, image.width, image.height) catch |err| {
             log.warn("failed to encode raw image as PNG: {}", .{err});
             return .{
                 .data = image.data,
@@ -277,7 +250,10 @@ pub fn putManifest(
             allocator,
             pane.id,
             entry.key_ptr.image_id,
-            image.data.len,
+            image.format,
+            image.width,
+            image.height,
+            image.data,
         );
         errdefer allocator.free(image_key);
 
@@ -318,6 +294,7 @@ pub fn putManifest(
         allocator.free(entry.image_key);
         allocator.free(entry.url);
     };
+    sortManifestEntries(list.items);
 
     var arr = try msgpack.Payload.arrPayload(list.items.len, allocator);
     errdefer arr.free(allocator);
@@ -376,12 +353,71 @@ pub const ManifestEntry = struct {
     generation: u64,
 };
 
+fn manifestLessThan(_: void, lhs: ManifestEntry, rhs: ManifestEntry) bool {
+    if (lhs.z != rhs.z) return lhs.z < rhs.z;
+    if (lhs.viewport_row != rhs.viewport_row) return lhs.viewport_row < rhs.viewport_row;
+    if (lhs.viewport_col != rhs.viewport_col) return lhs.viewport_col < rhs.viewport_col;
+    if (lhs.image_id != rhs.image_id) return lhs.image_id < rhs.image_id;
+    return lhs.placement_id < rhs.placement_id;
+}
+
+fn sortManifestEntries(entries: []ManifestEntry) void {
+    std.mem.sort(ManifestEntry, entries, {}, manifestLessThan);
+}
+
 test "parse image key" {
-    const key = parseImageKey("7-42-1024").?;
+    const data = [_]u8{ 1, 2, 3, 4 };
+    const raw_key = try allocImageKey(std.testing.allocator, 7, 42, ImageFormat.rgba, 1, 1, &data);
+    defer std.testing.allocator.free(raw_key);
+    const key = parseImageKey(raw_key).?;
     try std.testing.expectEqual(@as(u16, 7), key.pane_id);
     try std.testing.expectEqual(@as(u32, 42), key.image_id);
-    try std.testing.expectEqual(@as(usize, 1024), key.data_len);
+    try std.testing.expectEqual(ImageFormat.rgba, key.format);
+    try std.testing.expectEqual(@as(u32, 1), key.width);
+    try std.testing.expectEqual(@as(u32, 1), key.height);
+    try std.testing.expectEqual(imageContentHash(&data), key.content_hash);
     try std.testing.expect(parseImageKey("bad") == null);
+}
+
+test "image key changes when content changes at same length" {
+    const first = [_]u8{ 255, 0, 0, 255 };
+    const second = [_]u8{ 0, 255, 0, 255 };
+    const key1 = try allocImageKey(std.testing.allocator, 1, 2, ImageFormat.rgba, 1, 1, &first);
+    defer std.testing.allocator.free(key1);
+    const key2 = try allocImageKey(std.testing.allocator, 1, 2, ImageFormat.rgba, 1, 1, &second);
+    defer std.testing.allocator.free(key2);
+    try std.testing.expect(!std.mem.eql(u8, key1, key2));
+}
+
+fn testManifestEntry(key: []const u8, z: i32, col: i32, image_id: u32, placement_id: u32) ManifestEntry {
+    return .{
+        .image_key = key,
+        .url = "",
+        .pane_id = 1, .image_id = image_id, .placement_id = placement_id,
+        .viewport_col = col,
+        .viewport_row = 1,
+        .grid_cols = 1, .grid_rows = 1,
+        .image_width = 1, .image_height = 1,
+        .pixel_width = 1, .pixel_height = 1,
+        .source_x = 0, .source_y = 0,
+        .source_width = 1, .source_height = 1,
+        .x_offset = 0, .y_offset = 0,
+        .z = z,
+        .format = "rgba",
+        .generation = 1,
+    };
+}
+
+test "manifest entries sort deterministically" {
+    var entries = [_]ManifestEntry{
+        testManifestEntry("c", 1, 4, 2, 2),
+        testManifestEntry("a", 0, 0, 1, 1),
+        testManifestEntry("b", 0, 2, 3, 3),
+    };
+    sortManifestEntries(&entries);
+    try std.testing.expectEqualStrings("a", entries[0].image_key);
+    try std.testing.expectEqualStrings("b", entries[1].image_key);
+    try std.testing.expectEqualStrings("c", entries[2].image_key);
 }
 
 test "kitty rgb transmit and display produces manifest entry" {
@@ -423,7 +459,7 @@ test "kitty png transmit and display produces manifest entry" {
     defer payload.free(allocator);
     try putManifest(allocator, &payload, &pane);
 
-    const key = try allocImageKey(allocator, pane.id, 1, image.data.len);
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
     defer allocator.free(key);
     const response = getImageResponse(allocator, &pane, key).?;
     defer if (response.owned) allocator.free(response.data);
@@ -445,24 +481,15 @@ test "kitty rgba transmit and display produces manifest entry" {
     const storage = &pane.terminal.screens.active.kitty_images;
     try std.testing.expectEqual(@as(usize, 1), storage.images.count());
     try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
-}
+    const image = storage.images.getPtr(1).?;
 
-test "raw RGB image response is served as PNG" {
-    const data = [_]u8{ 255, 0, 0 };
-    const png = try pngFromRaw(std.testing.allocator, &data, .rgb, 1, 1);
-    defer std.testing.allocator.free(png);
-    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", png[0..8]);
-    const decoded = try png_decoder.decodePng(std.testing.allocator, png);
-    defer std.testing.allocator.free(decoded.data);
-    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, decoded.data);
-}
-
-test "raw RGBA image response preserves alpha in PNG" {
-    const data = [_]u8{ 255, 0, 0, 128 };
-    const png = try pngFromRaw(std.testing.allocator, &data, .rgba, 1, 1);
-    defer std.testing.allocator.free(png);
-    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", png[0..8]);
-    const decoded = try png_decoder.decodePng(std.testing.allocator, png);
-    defer std.testing.allocator.free(decoded.data);
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
+    defer allocator.free(key);
+    const response = getImageResponse(allocator, &pane, key).?;
+    defer if (response.owned) allocator.free(response.data);
+    try std.testing.expectEqualStrings("image/png", response.mime_type);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", response.data[0..8]);
+    const decoded = try png_decoder.decodePng(allocator, response.data);
+    defer allocator.free(decoded.data);
     try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 128 }, decoded.data);
 }

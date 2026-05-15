@@ -911,7 +911,14 @@ body.layout-resizing-vertical * {
   inset: var(--term-padding-y) var(--term-padding-x);
   overflow: hidden;
   pointer-events: none;
+}
+
+.terminal-image-layer--background {
   z-index: 1;
+}
+
+.terminal-image-layer--foreground {
+  z-index: 3;
 }
 
 .terminal-image {

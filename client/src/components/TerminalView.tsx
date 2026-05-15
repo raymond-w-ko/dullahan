@@ -7,7 +7,7 @@ import { debug } from "../debug";
 
 const imeLog = debug.category('ime');
 const clipboardLog = debug.category('clipboard');
-import { useRef, useEffect, useCallback, useMemo, useState } from "preact/hooks";
+import { useRef, useEffect, useCallback, useMemo } from "preact/hooks";
 import { TerminalConnection } from "../terminal/connection";
 import { KeyboardHandler, createKeyboardHandler } from "../terminal/keyboard";
 import { IMEHandler, createIMEHandler } from "../terminal/ime";
@@ -40,10 +40,9 @@ import {
 import { renderLine } from "../terminal/cursorRendering";
 import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
-import type { TerminalImagePlacement } from "../../../protocol/schema/messages";
 import { normalizeWheelDeltaToRows } from "../terminal/wheel";
-import { resolveTerminalImageZIndex } from "../terminal/imageZIndex";
 import type { SelectionBounds } from "../../../protocol/schema/messages";
+import { TerminalImage } from "./TerminalImage";
 
 const MAX_IMAGE_PASTE_BYTES = 32 * 1024 * 1024;
 const INVALID_ROW_ID = 0xffffffffffffffffn;
@@ -167,108 +166,6 @@ const HIDDEN_CURSOR: CursorState = {
   visible: false,
   blink: true,
 };
-
-const terminalImageObjectUrlCache = new Map<string, string>();
-
-interface TerminalImageProps {
-  image: TerminalImagePlacement;
-  authToken?: string;
-}
-
-function TerminalImage({ image, authToken }: TerminalImageProps) {
-  const cachedSrc = terminalImageObjectUrlCache.get(image.imageKey) ?? null;
-  const [state, setState] = useState<"loading" | "loaded" | "error">(
-    cachedSrc ? "loaded" : "loading"
-  );
-  const [src, setSrc] = useState<string | null>(cachedSrc);
-
-  useEffect(() => {
-    let cancelled = false;
-    const cached = terminalImageObjectUrlCache.get(image.imageKey);
-    if (cached) {
-      setSrc(cached);
-      setState("loaded");
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    setState("loading");
-
-    const headers: Record<string, string> = {};
-    if (authToken) {
-      headers.Authorization = `Bearer ${authToken}`;
-    }
-
-    fetch(image.url, { headers })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`image fetch ${response.status}`);
-        }
-        const contentType = response.headers.get("content-type") ?? "";
-        if (contentType.startsWith("image/")) {
-          return response.blob();
-        }
-        throw new Error(`unsupported image content type ${contentType || "unknown"}`);
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        const objectUrl = URL.createObjectURL(blob);
-        terminalImageObjectUrlCache.set(image.imageKey, objectUrl);
-        setSrc(objectUrl);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          debug.category("snapshot").warn("Terminal image fetch failed:", err);
-          setState("error");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [image.imageKey, image.url, authToken]);
-
-  const style = {
-    left: `calc(${image.viewportCol} * var(--cell-width, 1ch) + ${image.xOffset ?? 0}px)`,
-    top: `calc(${image.viewportRow} * var(--term-line-height) + ${image.yOffset ?? 0}px)`,
-    width: `calc(${image.gridCols} * var(--cell-width, 1ch))`,
-    height: `calc(${image.gridRows} * var(--term-line-height))`,
-    zIndex: resolveTerminalImageZIndex(image.z),
-  };
-  const cropsImage =
-    image.imageWidth > 0 &&
-    image.imageHeight > 0 &&
-    (image.sourceX !== 0 ||
-      image.sourceY !== 0 ||
-      image.sourceWidth !== image.imageWidth ||
-      image.sourceHeight !== image.imageHeight);
-  const imgStyle = cropsImage
-    ? {
-        position: "absolute",
-        left: `${-(image.sourceX / image.sourceWidth) * 100}%`,
-        top: `${-(image.sourceY / image.sourceHeight) * 100}%`,
-        width: `${(image.imageWidth / image.sourceWidth) * 100}%`,
-        height: `${(image.imageHeight / image.sourceHeight) * 100}%`,
-      }
-    : undefined;
-
-  return (
-    <div class={`terminal-image terminal-image--${state}`} style={style}>
-      {src && (
-        <img
-          src={src}
-          alt=""
-          draggable={false}
-          style={imgStyle}
-          onLoad={() => setState("loaded")}
-          onError={() => setState("error")}
-        />
-      )}
-      {state === "loading" && <span class="terminal-image-spinner" />}
-    </div>
-  );
-}
 
 interface TerminalRowProps {
   runs: StyledRun[];
@@ -959,6 +856,8 @@ export function TerminalView({
     snapshot.scrollback.viewportTop < snapshot.scrollback.totalRows - rows;
   const hasVisibleCursor = isActive && cursor.visible;
   const imagePlacements = snapshot.images ?? [];
+  const backgroundImages = imagePlacements.filter((image) => image.z < 0);
+  const foregroundImages = imagePlacements.filter((image) => image.z >= 0);
 
   return (
     <pre
@@ -971,9 +870,9 @@ export function TerminalView({
           {snapshot.scrollback.totalRows - snapshot.scrollback.viewportTop - rows} lines above
         </div>
       )}
-      {imagePlacements.length > 0 && (
-        <div class="terminal-image-layer" aria-hidden="true">
-          {imagePlacements.map((image) => (
+      {backgroundImages.length > 0 && (
+        <div class="terminal-image-layer terminal-image-layer--background" aria-hidden="true">
+          {backgroundImages.map((image) => (
             <TerminalImage
               key={`${image.imageKey}:${image.placementId}`}
               image={image}
@@ -1004,6 +903,17 @@ export function TerminalView({
           />
         );
       })}
+      {foregroundImages.length > 0 && (
+        <div class="terminal-image-layer terminal-image-layer--foreground" aria-hidden="true">
+          {foregroundImages.map((image) => (
+            <TerminalImage
+              key={`${image.imageKey}:${image.placementId}`}
+              image={image}
+              authToken={connection?.authToken ?? undefined}
+            />
+          ))}
+        </div>
+      )}
     </pre>
   );
 }

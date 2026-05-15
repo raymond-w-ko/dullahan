@@ -17,6 +17,7 @@ pub const websocket = @import("websocket.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const images = @import("images.zig");
 pub const png_decoder = @import("png_decoder.zig");
+pub const png_encoder = @import("png_encoder.zig");
 
 // Session/Window/Pane hierarchy
 pub const Session = @import("session.zig").Session;

@@ -19,4 +19,13 @@ describe("terminal CSS", () => {
     expect(rowLineRule).toContain("position: relative");
     expect(rowLineRule).toContain("z-index: 2");
   });
+
+  it("places image layers around terminal text", async () => {
+    const css = await Bun.file(new URL("../dullahan.css", import.meta.url)).text();
+    const backgroundRule = cssRuleBody(css, ".terminal-image-layer--background");
+    const foregroundRule = cssRuleBody(css, ".terminal-image-layer--foreground");
+
+    expect(backgroundRule).toContain("z-index: 1");
+    expect(foregroundRule).toContain("z-index: 3");
+  });
 });
