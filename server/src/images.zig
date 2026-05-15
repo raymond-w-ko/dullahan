@@ -117,11 +117,28 @@ fn parseImageKey(raw: []const u8) ?struct { pane_id: u16, image_id: u32, data_le
     };
 }
 
-fn putLe(comptime T: type, out: []u8, value: T) void {
-    std.mem.writeInt(T, out[0..@sizeOf(T)], value, .little);
+fn writePngChunk(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+    chunk_type: *const [4]u8,
+    data: []const u8,
+) !void {
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(data.len), .big);
+    try out.appendSlice(allocator, &len_buf);
+    try out.appendSlice(allocator, chunk_type);
+    try out.appendSlice(allocator, data);
+
+    var crc_data = try allocator.alloc(u8, chunk_type.len + data.len);
+    defer allocator.free(crc_data);
+    @memcpy(crc_data[0..chunk_type.len], chunk_type);
+    @memcpy(crc_data[chunk_type.len..], data);
+    var crc_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &crc_buf, std.hash.crc.Crc32.hash(crc_data), .big);
+    try out.appendSlice(allocator, &crc_buf);
 }
 
-fn bmpFromRaw(
+fn pngFromRaw(
     allocator: std.mem.Allocator,
     data: []const u8,
     format: ImageFormat,
@@ -136,48 +153,60 @@ fn bmpFromRaw(
     const pixel_count = @as(usize, width) * @as(usize, height);
     if (data.len != pixel_count * bpp) return error.InvalidData;
 
-    const file_header_len = 14;
-    const dib_header_len = 108;
-    const pixel_offset = file_header_len + dib_header_len;
-    const pixel_bytes = pixel_count * 4;
-    const total_len = pixel_offset + pixel_bytes;
-    const out = try allocator.alloc(u8, total_len);
-    errdefer allocator.free(out);
-    @memset(out, 0);
+    const row_len = 1 + @as(usize, width) * 4;
+    const filtered = try allocator.alloc(u8, row_len * @as(usize, height));
+    defer allocator.free(filtered);
 
-    out[0] = 'B';
-    out[1] = 'M';
-    putLe(u32, out[2..6], @intCast(total_len));
-    putLe(u32, out[10..14], pixel_offset);
-    putLe(u32, out[14..18], dib_header_len);
-    putLe(i32, out[18..22], @intCast(width));
-    putLe(i32, out[22..26], -@as(i32, @intCast(height)));
-    putLe(u16, out[26..28], 1);
-    putLe(u16, out[28..30], 32);
-    putLe(u32, out[30..34], 3);
-    putLe(u32, out[34..38], @intCast(pixel_bytes));
-    putLe(u32, out[54..58], 0x00ff0000);
-    putLe(u32, out[58..62], 0x0000ff00);
-    putLe(u32, out[62..66], 0x000000ff);
-    putLe(u32, out[66..70], 0xff000000);
-    out[70] = 'B';
-    out[71] = 'G';
-    out[72] = 'R';
-    out[73] = 's';
-
-    var src: usize = 0;
-    var dst: usize = pixel_offset;
-    while (src < data.len) : ({
-        src += bpp;
-        dst += 4;
-    }) {
-        out[dst] = data[src];
-        out[dst + 1] = data[src + 1];
-        out[dst + 2] = data[src + 2];
-        out[dst + 3] = if (format == .rgba) data[src + 3] else 255;
+    for (0..@as(usize, height)) |y| {
+        const row_start = y * row_len;
+        filtered[row_start] = 0;
+        for (0..@as(usize, width)) |x| {
+            const src = (y * @as(usize, width) + x) * bpp;
+            const dst = row_start + 1 + x * 4;
+            filtered[dst] = data[src];
+            filtered[dst + 1] = data[src + 1];
+            filtered[dst + 2] = data[src + 2];
+            filtered[dst + 3] = if (format == .rgba) data[src + 3] else 255;
+        }
     }
 
-    return out;
+    var zlib: std.ArrayListUnmanaged(u8) = .{};
+    defer zlib.deinit(allocator);
+    try zlib.appendSlice(allocator, &.{ 0x78, 0x01 });
+    var remaining = filtered;
+    while (remaining.len > 0) {
+        const block_len = @min(remaining.len, 65535);
+        const final: u8 = if (block_len == remaining.len) 1 else 0;
+        try zlib.append(allocator, final);
+        var len_buf: [2]u8 = undefined;
+        std.mem.writeInt(u16, &len_buf, @intCast(block_len), .little);
+        try zlib.appendSlice(allocator, &len_buf);
+        std.mem.writeInt(u16, &len_buf, ~@as(u16, @intCast(block_len)), .little);
+        try zlib.appendSlice(allocator, &len_buf);
+        try zlib.appendSlice(allocator, remaining[0..block_len]);
+        remaining = remaining[block_len..];
+    }
+    var adler_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &adler_buf, std.hash.Adler32.hash(filtered), .big);
+    try zlib.appendSlice(allocator, &adler_buf);
+
+    var png: std.ArrayListUnmanaged(u8) = .{};
+    errdefer png.deinit(allocator);
+    try png.appendSlice(allocator, "\x89PNG\r\n\x1a\n");
+
+    var ihdr: [13]u8 = undefined;
+    std.mem.writeInt(u32, ihdr[0..4], width, .big);
+    std.mem.writeInt(u32, ihdr[4..8], height, .big);
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+    try writePngChunk(&png, allocator, "IHDR", &ihdr);
+    try writePngChunk(&png, allocator, "IDAT", zlib.items);
+    try writePngChunk(&png, allocator, "IEND", "");
+
+    return png.toOwnedSlice(allocator);
 }
 
 pub fn getImageResponse(
@@ -194,8 +223,8 @@ pub fn getImageResponse(
 
     const format = imageFormat(image.format);
     if (format != .png) {
-        const bmp = bmpFromRaw(allocator, image.data, format, image.width, image.height) catch |err| {
-            log.warn("failed to encode raw image as BMP: {}", .{err});
+        const png = pngFromRaw(allocator, image.data, format, image.width, image.height) catch |err| {
+            log.warn("failed to encode raw image as PNG: {}", .{err});
             return .{
                 .data = image.data,
                 .mime_type = "",
@@ -205,8 +234,8 @@ pub fn getImageResponse(
             };
         };
         return .{
-            .data = bmp,
-            .mime_type = "image/bmp",
+            .data = png,
+            .mime_type = "image/png",
             .format = imageFormatString(format),
             .width = image.width,
             .height = image.height,
@@ -398,8 +427,10 @@ test "kitty png transmit and display produces manifest entry" {
     defer allocator.free(key);
     const response = getImageResponse(allocator, &pane, key).?;
     defer if (response.owned) allocator.free(response.data);
-    try std.testing.expectEqualStrings("image/bmp", response.mime_type);
-    try std.testing.expectEqual(@as(usize, 126), response.data.len);
+    try std.testing.expectEqualStrings("image/png", response.mime_type);
+    const decoded = try png_decoder.decodePng(allocator, response.data);
+    defer allocator.free(decoded.data);
+    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, decoded.data);
 }
 
 test "kitty rgba transmit and display produces manifest entry" {
@@ -416,26 +447,22 @@ test "kitty rgba transmit and display produces manifest entry" {
     try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
 }
 
-test "raw RGB image response is served as BMP" {
+test "raw RGB image response is served as PNG" {
     const data = [_]u8{ 255, 0, 0 };
-    const bmp = try bmpFromRaw(std.testing.allocator, &data, .rgb, 1, 1);
-    defer std.testing.allocator.free(bmp);
-    try std.testing.expectEqualStrings("BM", bmp[0..2]);
-    try std.testing.expectEqual(@as(usize, 126), bmp.len);
-    try std.testing.expectEqual(@as(u8, 255), bmp[122]);
-    try std.testing.expectEqual(@as(u8, 0), bmp[123]);
-    try std.testing.expectEqual(@as(u8, 0), bmp[124]);
-    try std.testing.expectEqual(@as(u8, 255), bmp[125]);
+    const png = try pngFromRaw(std.testing.allocator, &data, .rgb, 1, 1);
+    defer std.testing.allocator.free(png);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", png[0..8]);
+    const decoded = try png_decoder.decodePng(std.testing.allocator, png);
+    defer std.testing.allocator.free(decoded.data);
+    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 255 }, decoded.data);
 }
 
-test "raw RGBA image response preserves alpha in BMP" {
+test "raw RGBA image response preserves alpha in PNG" {
     const data = [_]u8{ 255, 0, 0, 128 };
-    const bmp = try bmpFromRaw(std.testing.allocator, &data, .rgba, 1, 1);
-    defer std.testing.allocator.free(bmp);
-    try std.testing.expectEqualStrings("BM", bmp[0..2]);
-    try std.testing.expectEqual(@as(usize, 126), bmp.len);
-    try std.testing.expectEqual(@as(u8, 255), bmp[122]);
-    try std.testing.expectEqual(@as(u8, 0), bmp[123]);
-    try std.testing.expectEqual(@as(u8, 0), bmp[124]);
-    try std.testing.expectEqual(@as(u8, 128), bmp[125]);
+    const png = try pngFromRaw(std.testing.allocator, &data, .rgba, 1, 1);
+    defer std.testing.allocator.free(png);
+    try std.testing.expectEqualStrings("\x89PNG\r\n\x1a\n", png[0..8]);
+    const decoded = try png_decoder.decodePng(std.testing.allocator, png);
+    defer std.testing.allocator.free(decoded.data);
+    try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 128 }, decoded.data);
 }
