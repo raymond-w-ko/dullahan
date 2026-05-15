@@ -1,5 +1,17 @@
 const std = @import("std");
 
+const wuffs_defines = [_][]const u8{
+    "WUFFS_CONFIG__MODULES",
+    "WUFFS_CONFIG__MODULE__AUX__BASE",
+    "WUFFS_CONFIG__MODULE__AUX__IMAGE",
+    "WUFFS_CONFIG__MODULE__BASE",
+    "WUFFS_CONFIG__MODULE__ADLER32",
+    "WUFFS_CONFIG__MODULE__CRC32",
+    "WUFFS_CONFIG__MODULE__DEFLATE",
+    "WUFFS_CONFIG__MODULE__PNG",
+    "WUFFS_CONFIG__MODULE__ZLIB",
+};
+
 fn pathExists(path: []const u8) bool {
     if (!std.fs.path.isAbsolute(path)) return false;
     std.fs.accessAbsolute(path, .{}) catch return false;
@@ -94,6 +106,25 @@ pub fn build(b: *std.Build) void {
     })) |ghostty_dep| {
         const ghostty_vt = ghostty_dep.module("ghostty-vt");
         dullahan_mod.addImport("ghostty-vt", ghostty_vt);
+    }
+
+    if (b.lazyDependency("wuffs", .{})) |wuffs_dep| {
+        var wuffs_flags: std.ArrayList([]const u8) = .empty;
+        defer wuffs_flags.deinit(b.allocator);
+        wuffs_flags.append(b.allocator, "-DWUFFS_IMPLEMENTATION") catch @panic("OOM");
+        if (target.result.abi == .msvc) {
+            wuffs_flags.append(b.allocator, "-fno-sanitize=undefined") catch @panic("OOM");
+            wuffs_flags.append(b.allocator, "-fno-sanitize-trap=undefined") catch @panic("OOM");
+        }
+        inline for (wuffs_defines) |key| {
+            wuffs_flags.append(b.allocator, "-D" ++ key) catch @panic("OOM");
+        }
+
+        dullahan_mod.addIncludePath(wuffs_dep.path("release/c"));
+        dullahan_mod.addCSourceFile(.{
+            .file = wuffs_dep.path("release/c/wuffs-v0.4.c"),
+            .flags = wuffs_flags.items,
+        });
     }
 
     // Add zig-msgpack dependency for binary serialization

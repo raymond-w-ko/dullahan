@@ -9,6 +9,7 @@ const paths = dullahan.paths;
 const test_runners = dullahan.test_runners;
 const dlog = dullahan.dlog;
 const os_name = dullahan.os_name;
+const png_decoder = dullahan.png_decoder;
 
 // Custom logging to file (path determined at runtime from paths module)
 var log_file: ?std.fs.File = null;
@@ -61,6 +62,7 @@ fn fileLog(
 pub fn main() !void {
     // Resolve OS name once before any other startup work.
     os_name.init();
+    png_decoder.install();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

@@ -3,6 +3,7 @@
 const std = @import("std");
 const msgpack = @import("msgpack");
 const Pane = @import("pane.zig").Pane;
+const png_decoder = @import("png_decoder.zig");
 
 const log = std.log.scoped(.image);
 
@@ -135,8 +136,11 @@ fn bmpFromRaw(
     const pixel_count = @as(usize, width) * @as(usize, height);
     if (data.len != pixel_count * bpp) return error.InvalidData;
 
+    const file_header_len = 14;
+    const dib_header_len = 108;
+    const pixel_offset = file_header_len + dib_header_len;
     const pixel_bytes = pixel_count * 4;
-    const total_len = 14 + 40 + pixel_bytes;
+    const total_len = pixel_offset + pixel_bytes;
     const out = try allocator.alloc(u8, total_len);
     errdefer allocator.free(out);
     @memset(out, 0);
@@ -144,16 +148,25 @@ fn bmpFromRaw(
     out[0] = 'B';
     out[1] = 'M';
     putLe(u32, out[2..6], @intCast(total_len));
-    putLe(u32, out[10..14], 54);
-    putLe(u32, out[14..18], 40);
+    putLe(u32, out[10..14], pixel_offset);
+    putLe(u32, out[14..18], dib_header_len);
     putLe(i32, out[18..22], @intCast(width));
     putLe(i32, out[22..26], -@as(i32, @intCast(height)));
     putLe(u16, out[26..28], 1);
     putLe(u16, out[28..30], 32);
+    putLe(u32, out[30..34], 3);
     putLe(u32, out[34..38], @intCast(pixel_bytes));
+    putLe(u32, out[54..58], 0x00ff0000);
+    putLe(u32, out[58..62], 0x0000ff00);
+    putLe(u32, out[62..66], 0x000000ff);
+    putLe(u32, out[66..70], 0xff000000);
+    out[70] = 'B';
+    out[71] = 'G';
+    out[72] = 'R';
+    out[73] = 's';
 
     var src: usize = 0;
-    var dst: usize = 54;
+    var dst: usize = pixel_offset;
     while (src < data.len) : ({
         src += bpp;
         dst += 4;
@@ -360,14 +373,69 @@ test "kitty rgb transmit and display produces manifest entry" {
     try putManifest(allocator, &payload, &pane);
 }
 
+test "kitty png transmit and display produces manifest entry" {
+    png_decoder.install();
+
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 10, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b_Ga=T,t=d,f=100,i=1,p=1,c=3,r=2,q=1;");
+    try pane.feed("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
+    try pane.feed("\x1b\\");
+
+    const storage = &pane.terminal.screens.active.kitty_images;
+    try std.testing.expectEqual(@as(usize, 1), storage.images.count());
+    try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
+    const image = storage.images.getPtr(1).?;
+    try std.testing.expectEqualStrings("rgba", imageFormatString(imageFormat(image.format)));
+
+    var payload = msgpack.Payload.mapPayload(allocator);
+    defer payload.free(allocator);
+    try putManifest(allocator, &payload, &pane);
+
+    const key = try allocImageKey(allocator, pane.id, 1, image.data.len);
+    defer allocator.free(key);
+    const response = getImageResponse(allocator, &pane, key).?;
+    defer if (response.owned) allocator.free(response.data);
+    try std.testing.expectEqualStrings("image/bmp", response.mime_type);
+    try std.testing.expectEqual(@as(usize, 126), response.data.len);
+}
+
+test "kitty rgba transmit and display produces manifest entry" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 11, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b_Ga=T,t=d,f=32,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
+    try pane.feed("/wAAgA==");
+    try pane.feed("\x1b\\");
+
+    const storage = &pane.terminal.screens.active.kitty_images;
+    try std.testing.expectEqual(@as(usize, 1), storage.images.count());
+    try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
+}
+
 test "raw RGB image response is served as BMP" {
     const data = [_]u8{ 255, 0, 0 };
     const bmp = try bmpFromRaw(std.testing.allocator, &data, .rgb, 1, 1);
     defer std.testing.allocator.free(bmp);
     try std.testing.expectEqualStrings("BM", bmp[0..2]);
-    try std.testing.expectEqual(@as(usize, 58), bmp.len);
-    try std.testing.expectEqual(@as(u8, 0), bmp[54]);
-    try std.testing.expectEqual(@as(u8, 0), bmp[55]);
-    try std.testing.expectEqual(@as(u8, 255), bmp[56]);
-    try std.testing.expectEqual(@as(u8, 255), bmp[57]);
+    try std.testing.expectEqual(@as(usize, 126), bmp.len);
+    try std.testing.expectEqual(@as(u8, 0), bmp[122]);
+    try std.testing.expectEqual(@as(u8, 0), bmp[123]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[124]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[125]);
+}
+
+test "raw RGBA image response preserves alpha in BMP" {
+    const data = [_]u8{ 255, 0, 0, 128 };
+    const bmp = try bmpFromRaw(std.testing.allocator, &data, .rgba, 1, 1);
+    defer std.testing.allocator.free(bmp);
+    try std.testing.expectEqualStrings("BM", bmp[0..2]);
+    try std.testing.expectEqual(@as(usize, 126), bmp.len);
+    try std.testing.expectEqual(@as(u8, 0), bmp[122]);
+    try std.testing.expectEqual(@as(u8, 0), bmp[123]);
+    try std.testing.expectEqual(@as(u8, 255), bmp[124]);
+    try std.testing.expectEqual(@as(u8, 128), bmp[125]);
 }
