@@ -167,20 +167,32 @@ const HIDDEN_CURSOR: CursorState = {
   blink: true,
 };
 
+const terminalImageObjectUrlCache = new Map<string, string>();
+
 interface TerminalImageProps {
   image: TerminalImagePlacement;
   authToken?: string;
 }
 
 function TerminalImage({ image, authToken }: TerminalImageProps) {
-  const [state, setState] = useState<"loading" | "loaded" | "error">("loading");
-  const [src, setSrc] = useState<string | null>(null);
+  const cachedSrc = terminalImageObjectUrlCache.get(image.imageKey) ?? null;
+  const [state, setState] = useState<"loading" | "loaded" | "error">(
+    cachedSrc ? "loaded" : "loading"
+  );
+  const [src, setSrc] = useState<string | null>(cachedSrc);
 
   useEffect(() => {
     let cancelled = false;
-    let objectUrl: string | null = null;
+    const cached = terminalImageObjectUrlCache.get(image.imageKey);
+    if (cached) {
+      setSrc(cached);
+      setState("loaded");
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setState("loading");
-    setSrc(null);
 
     const headers: Record<string, string> = {};
     if (authToken) {
@@ -200,7 +212,8 @@ function TerminalImage({ image, authToken }: TerminalImageProps) {
       })
       .then((blob) => {
         if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(blob);
+        terminalImageObjectUrlCache.set(image.imageKey, objectUrl);
         setSrc(objectUrl);
       })
       .catch((err) => {
@@ -212,11 +225,8 @@ function TerminalImage({ image, authToken }: TerminalImageProps) {
 
     return () => {
       cancelled = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [image.url, authToken]);
+  }, [image.imageKey, image.url, authToken]);
 
   const style = {
     left: `calc(${image.viewportCol} * var(--cell-width, 1ch) + ${image.xOffset ?? 0}px)`,
@@ -964,7 +974,7 @@ export function TerminalView({
         <div class="terminal-image-layer" aria-hidden="true">
           {imagePlacements.map((image) => (
             <TerminalImage
-              key={`${image.imageKey}:${image.placementId}:${image.generation}`}
+              key={`${image.imageKey}:${image.placementId}`}
               image={image}
               authToken={connection?.authToken ?? undefined}
             />
