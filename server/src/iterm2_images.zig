@@ -283,6 +283,27 @@ pub const Parser = struct {
         self.* = .{};
     }
 
+    pub fn abortMultipartForScreen(
+        self: *Parser,
+        allocator: std.mem.Allocator,
+        terminal: *Terminal,
+        screen_key: ScreenKey,
+    ) void {
+        const should_abort = if (self.multipart) |multipart|
+            if (multipart.anchor) |anchor| anchor.screen_key == screen_key else false
+        else
+            false;
+        if (!should_abort) return;
+
+        if (self.multipart) |*multipart| multipart.deinit(allocator, terminal);
+        self.multipart = null;
+    }
+
+    pub fn abortMultipartAll(self: *Parser, allocator: std.mem.Allocator, terminal: *Terminal) void {
+        if (self.multipart) |*multipart| multipart.deinit(allocator, terminal);
+        self.multipart = null;
+    }
+
     pub fn process(
         self: *Parser,
         allocator: std.mem.Allocator,
@@ -610,9 +631,8 @@ const CellSize = struct { width: u32, height: u32 };
 
 fn imageDimensions(allocator: std.mem.Allocator, mime: Mime, data: []const u8) Dimensions {
     if (mime != .png) return .{};
-    const decoded = png_decoder.decodePng(allocator, data) catch return .{};
-    defer allocator.free(decoded.data);
-    return .{ .width = decoded.width, .height = decoded.height };
+    const dimensions = png_decoder.decodePngDimensions(allocator, data) catch return .{};
+    return .{ .width = dimensions.width, .height = dimensions.height };
 }
 
 fn cellSize(terminal: *Terminal) CellSize {

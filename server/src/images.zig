@@ -194,7 +194,28 @@ pub fn getImageResponse(
     const key = parseImageKey(image_key) orelse return null;
     if (key.pane_id != pane.id) return null;
 
-    const storage = &pane.terminal.screens.active.kitty_images;
+    const screen_keys = [_]@TypeOf(pane.terminal.screens.active_key){
+        pane.terminal.screens.active_key,
+        .primary,
+        .alternate,
+    };
+    for (screen_keys, 0..) |screen_key, idx| {
+        if (idx > 0 and screen_key == pane.terminal.screens.active_key) continue;
+        const screen = pane.terminal.screens.get(screen_key) orelse continue;
+        if (getKittyImageResponse(allocator, pane, key, &screen.kitty_images)) |response| {
+            return response;
+        }
+    }
+
+    return null;
+}
+
+fn getKittyImageResponse(
+    allocator: std.mem.Allocator,
+    pane: *Pane,
+    key: ImageKey,
+    storage: anytype,
+) ?ImageResponse {
     const image = storage.images.getPtr(key.image_id) orelse return null;
     const format = imageFormat(image.format);
     if (!keyMatches(key, pane.id, key.image_id, format, image.width, image.height, image.data)) return null;
@@ -571,6 +592,28 @@ test "kitty rgba transmit and display produces manifest entry" {
     try std.testing.expectEqualSlices(u8, &.{ 255, 0, 0, 128 }, decoded.data);
 }
 
+test "kitty image response survives active screen switch" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 18, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b_Ga=T,t=d,f=24,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
+    try pane.feed("/wAA");
+    try pane.feed("\x1b\\");
+
+    const storage = &pane.terminal.screens.active.kitty_images;
+    const image = storage.images.getPtr(1).?;
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
+    defer allocator.free(key);
+
+    try pane.feed("\x1b[?1049h");
+    try std.testing.expectEqual(.alternate, pane.terminal.screens.active_key);
+
+    const response = getImageResponse(allocator, &pane, key).?;
+    defer if (response.owned) allocator.free(response.data);
+    try std.testing.expectEqualStrings("image/png", response.mime_type);
+}
+
 const test_iterm2_png_b64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 
@@ -672,5 +715,35 @@ test "iterm2 images are cleared by full reset" {
     try std.testing.expectEqual(@as(usize, 1), pane.iterm2_image_store.entries.items.len);
 
     try pane.feed("\x1bc");
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+}
+
+test "iterm2 pending multipart is aborted by erase display complete" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 19, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");
+    try pane.feed("\x1b]1337;FilePart=");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x07");
+    try pane.feed("\x1b[H\x1b[2J");
+    try pane.feed("\x1b]1337;FileEnd\x07");
+
+    try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
+}
+
+test "iterm2 pending multipart is aborted by full reset" {
+    const allocator = std.testing.allocator;
+    var pane = try Pane.init(allocator, .{ .id = 20, .cols = 80, .rows = 24 });
+    defer pane.deinit();
+
+    try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");
+    try pane.feed("\x1b]1337;FilePart=");
+    try pane.feed(test_iterm2_png_b64);
+    try pane.feed("\x07");
+    try pane.feed("\x1bc");
+    try pane.feed("\x1b]1337;FileEnd\x07");
+
     try std.testing.expectEqual(@as(usize, 0), pane.iterm2_image_store.entries.items.len);
 }

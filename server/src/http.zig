@@ -1099,28 +1099,32 @@ pub const Server = struct {
             return;
         }
 
-        const owned = self.allocator.dupe(u8, image_response.data) catch {
-            self.respondAndClose(idx, "500 Internal Server Error", "Failed to copy image");
-            return;
-        };
-        errdefer self.allocator.free(owned);
-
         var width_buf: [32]u8 = undefined;
         var height_buf: [32]u8 = undefined;
         const width = std.fmt.bufPrint(&width_buf, "{d}", .{image_response.width}) catch "0";
         const height = std.fmt.bufPrint(&height_buf, "{d}", .{image_response.height}) catch "0";
 
+        var header = self.buildResponseHeader("200 OK", &.{
+            .{ "Content-Type", image_response.mime_type },
+            .{ "Cache-Control", "no-store" },
+            .{ "X-Dullahan-Image-Format", image_response.format },
+            .{ "X-Dullahan-Image-Width", width },
+            .{ "X-Dullahan-Image-Height", height },
+        }, image_response.data.len) catch {
+            self.closeAndRemovePending(idx);
+            return;
+        };
+        errdefer header.deinit(self.allocator);
+
+        const owned = self.allocator.dupe(u8, image_response.data) catch {
+            header.deinit(self.allocator);
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to copy image");
+            return;
+        };
+        errdefer self.allocator.free(owned);
+
         const response = PendingResponse{
-            .header = self.buildResponseHeader("200 OK", &.{
-                .{ "Content-Type", image_response.mime_type },
-                .{ "Cache-Control", "no-store" },
-                .{ "X-Dullahan-Image-Format", image_response.format },
-                .{ "X-Dullahan-Image-Width", width },
-                .{ "X-Dullahan-Image-Height", height },
-            }, image_response.data.len) catch {
-                self.closeAndRemovePending(idx);
-                return;
-            },
+            .header = header,
             .body = .{
                 .owned_bytes = .{ .data = owned },
             },

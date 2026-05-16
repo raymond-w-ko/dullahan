@@ -101,6 +101,12 @@ pub const images = struct {
 
     /// Maximum captured OSC 1337 sequence before it is dropped.
     pub const iterm2_osc_sequence_limit: usize = 48 * 1024 * 1024;
+
+    /// Maximum decoded RGBA image bytes for terminal image protocols.
+    pub const max_decoded_rgba_bytes: usize = 32 * 1024 * 1024;
+
+    /// Maximum single decoded PNG dimension for terminal image protocols.
+    pub const max_decoded_dimension: u32 = 8192;
 };
 
 /// Default terminal colors for OSC 10/11 queries.

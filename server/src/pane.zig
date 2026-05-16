@@ -501,6 +501,11 @@ pub const Pane = struct {
     }
 
     pub fn clearIterm2ImagesForActiveScreen(self: *Pane) void {
+        self.iterm2_image_parser.abortMultipartForScreen(
+            self.allocator,
+            &self.terminal,
+            self.terminal.screens.active_key,
+        );
         self.iterm2_image_store.clearScreen(
             self.allocator,
             &self.terminal,
@@ -509,6 +514,7 @@ pub const Pane = struct {
     }
 
     pub fn clearIterm2ImagesAllScreens(self: *Pane) void {
+        self.iterm2_image_parser.abortMultipartAll(self.allocator, &self.terminal);
         self.iterm2_image_store.clearAll(self.allocator, &self.terminal);
     }
 
