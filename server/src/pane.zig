@@ -173,15 +173,10 @@ pub const Pane = struct {
     /// The fromGen of the cached delta (what generation clients need to be at to apply it)
     cached_delta_from_gen: u64 = 0,
 
-    /// Track whether we were last on alternate screen to detect screen switches
-    /// Screen switches (primary <-> alternate) require full resync because
-    /// row IDs are completely different between screens
-    last_was_alt_screen: bool = false,
-
-    /// Track the last seen page serial to detect page reallocation
-    /// When ghostty adjusts page capacity, it creates new pages with new serials,
-    /// which invalidates all existing row IDs and requires full resync
-    last_page_serial: ?u64 = null,
+    /// Last observed active screen/page-list identity for row ID stability.
+    /// Ghostty grid refs are snapshots unless explicitly tracked; when the
+    /// active screen or PageList serial range changes, cached row IDs are stale.
+    last_screen_identity: ?ScreenIdentity = null,
 
     /// Shell integration (OSC 133) event tracking
     /// Stores the most recent shell integration event for broadcast to clients
@@ -207,6 +202,12 @@ pub const Pane = struct {
         rows: u16 = 24,
         id: u16 = 0,
         allow_sync_output: bool = true,
+    };
+
+    const ScreenIdentity = struct {
+        active_key: @TypeOf(@as(Terminal, undefined).screens.active_key),
+        first_page_serial: u64,
+        page_serial_min: u64,
     };
 
     pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
@@ -442,36 +443,7 @@ pub const Pane = struct {
         self.ensureVtStream();
         try self.feedTerminalBytes(data);
 
-        // Check for screen switch (primary <-> alternate)
-        // Row IDs are completely different between screens, so clients need full resync
-        const is_alt_screen = self.terminal.screens.active_key == .alternate;
-        if (is_alt_screen != self.last_was_alt_screen) {
-            log.debug("Screen switch detected: {s} -> {s}, forcing full resync", .{
-                if (self.last_was_alt_screen) "alternate" else "primary",
-                if (is_alt_screen) "alternate" else "primary",
-            });
-            self.last_was_alt_screen = is_alt_screen;
-            self.forceFullResync();
-        }
-
-        // Check for page reallocation (ghostty adjusting page capacity)
-        // When this happens, page serials change and all row IDs become invalid
-        const pages = &self.terminal.screens.active.pages;
-        if (pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } })) |first_pin| {
-            const current_serial = first_pin.node.serial;
-            if (self.last_page_serial) |last_serial| {
-                if (current_serial != last_serial) {
-                    log.debug("Page serial changed: {d} -> {d}, forcing full resync", .{
-                        last_serial,
-                        current_serial,
-                    });
-                    self.last_page_serial = current_serial;
-                    self.forceFullResync();
-                }
-            } else {
-                self.last_page_serial = current_serial;
-            }
-        }
+        self.checkScreenIdentity("feed");
 
         // Collect dirty rows from ghostty's dirty tracking
         self.collectDirtyRows();
@@ -1330,7 +1302,8 @@ pub const Pane = struct {
 
         // Resize reflows content, invalidating row IDs
         // Force all clients to do full resync
-        self.forceFullResync();
+        self.forceFullResync("resize");
+        self.refreshScreenIdentity();
     }
 
     /// Scroll the viewport by delta rows (negative = up, positive = down)
@@ -1359,7 +1332,7 @@ pub const Pane = struct {
     }
 
     /// Mark all visible rows as dirty (used for scroll).
-    /// For resize, use forceFullResync() instead.
+    /// For resize, use forceFullResync("resize") instead.
     fn markAllRowsDirty(self: *Pane) void {
         const pages = &self.terminal.screens.active.pages;
 
@@ -1401,9 +1374,52 @@ pub const Pane = struct {
         return offscreen_count;
     }
 
+    fn currentScreenIdentity(self: *Pane) ?ScreenIdentity {
+        const pages = &self.terminal.screens.active.pages;
+        const first_pin = pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } }) orelse return null;
+        return .{
+            .active_key = self.terminal.screens.active_key,
+            .first_page_serial = first_pin.node.serial,
+            .page_serial_min = pages.page_serial_min,
+        };
+    }
+
+    fn refreshScreenIdentity(self: *Pane) void {
+        self.last_screen_identity = self.currentScreenIdentity();
+    }
+
+    fn checkScreenIdentity(self: *Pane, reason: []const u8) void {
+        const current = self.currentScreenIdentity() orelse return;
+        const previous = self.last_screen_identity orelse {
+            self.last_screen_identity = current;
+            return;
+        };
+
+        if (current.active_key != previous.active_key or
+            current.first_page_serial != previous.first_page_serial or
+            current.page_serial_min != previous.page_serial_min)
+        {
+            log.debug(
+                "Screen identity changed after {s}: key {s}->{s}, first serial {d}->{d}, min serial {d}->{d}; forcing full resync",
+                .{
+                    reason,
+                    @tagName(previous.active_key),
+                    @tagName(current.active_key),
+                    previous.first_page_serial,
+                    current.first_page_serial,
+                    previous.page_serial_min,
+                    current.page_serial_min,
+                },
+            );
+            self.forceFullResync(reason);
+            self.last_screen_identity = self.currentScreenIdentity() orelse current;
+        }
+    }
+
     /// Force all clients to do a full resync.
-    /// Used after resize because reflow invalidates row IDs.
-    fn forceFullResync(self: *Pane) void {
+    /// Used when Ghostty row identity changes because reflow/reset/screen
+    /// switches invalidate client row caches.
+    fn forceFullResync(self: *Pane, reason: []const u8) void {
         // Increment generation first - this is critical!
         // Clients are at the current generation, so we need the delta's from_gen
         // to be HIGHER than what clients have, triggering snapshot fallback.
@@ -1423,7 +1439,7 @@ pub const Pane = struct {
         // Now delta from_gen will be higher than client_gen, forcing snapshot
         self.last_broadcast_gen = self.generation;
 
-        delta_log.debug("Pane {d}: forceFullResync, new gen={d}", .{ self.id, self.generation });
+        delta_log.debug("Pane {d}: forceFullResync reason={s}, new gen={d}", .{ self.id, reason, self.generation });
     }
 
     /// Get the set of dirty row IDs since last clear.
@@ -1878,6 +1894,77 @@ test "palette-only changes invalidate viewport rows" {
     // Palette mutation should mark rows dirty even without text mutation.
     try pane.feed("\x1b]4;1;rgb:00/ff/00\x07");
     try std.testing.expect(pane.getDirtyRowCount() > 0);
+}
+
+test "terminal reset forces full resync for stale row ids" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    defer pane.deinit();
+
+    try pane.feed("before reset\r\n");
+    const client_gen = pane.generation;
+    pane.clearDirtyRows();
+    try std.testing.expect(!pane.needsFullResync(client_gen));
+
+    try pane.feed("\x1bc");
+    try std.testing.expect(pane.needsFullResync(client_gen));
+}
+
+test "alternate screen switch forces full resync for stale row ids" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    defer pane.deinit();
+
+    try pane.feed("primary");
+    const client_gen = pane.generation;
+    pane.clearDirtyRows();
+    try std.testing.expect(!pane.needsFullResync(client_gen));
+
+    try pane.feed("\x1b[?1049h");
+    try std.testing.expect(pane.needsFullResync(client_gen));
+}
+
+test "resize preserves cursor after blank cells during reflow" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    defer pane.deinit();
+
+    try pane.feed("abc\x1b[6C");
+    try std.testing.expectEqual(@as(usize, 9), pane.terminal.screens.active.cursor.x);
+    try std.testing.expectEqual(@as(usize, 0), pane.terminal.screens.active.cursor.y);
+
+    try pane.resize(5, 3, null, null);
+    try std.testing.expectEqual(@as(usize, 4), pane.terminal.screens.active.cursor.x);
+    try std.testing.expectEqual(@as(usize, 1), pane.terminal.screens.active.cursor.y);
+}
+
+test "selection snapshot does not survive terminal reset" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    defer pane.deinit();
+
+    try pane.feed("selection");
+    pane.startSelection(0, 0);
+    pane.updateSelection(3, 0, false);
+    try std.testing.expect(pane.hasSelection());
+
+    try pane.feed("\x1bc");
+    try std.testing.expect(!pane.hasSelection());
+    try std.testing.expectEqual(@as(?terminal_mod.SelectionBounds, null), terminal_mod.getSelection(&pane.terminal));
+}
+
+test "variation selectors attach to preceding grapheme codepoint" {
+    var pane = try Pane.init(std.testing.allocator, .{ .cols = 5, .rows = 5 });
+    defer pane.deinit();
+
+    pane.terminal.modes.set(.grapheme_cluster, true);
+
+    try pane.terminal.print(0x1F3F4);
+    try pane.terminal.print(0x200D);
+    try pane.terminal.print(0x2620);
+    try pane.terminal.print(0xFE0F);
+
+    const list_cell = pane.terminal.screens.active.pages.getCell(.{ .screen = .{ .x = 0, .y = 0 } }).?;
+    const cell = list_cell.cell;
+    try std.testing.expectEqual(@as(u21, 0x1F3F4), cell.content.codepoint);
+    try std.testing.expect(cell.hasGrapheme());
+    try std.testing.expectEqualSlices(u21, &.{ 0x200D, 0x2620, 0xFE0F }, list_cell.node.data.lookupGrapheme(cell).?);
 }
 
 test "OSC title parsing" {

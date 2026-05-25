@@ -2,6 +2,12 @@
 //!
 //! This module provides the core terminal emulation functionality
 //! using libghostty-vt.
+//!
+//! Ghostty grid refs and selections built from pins are mutation-scoped
+//! snapshots unless Ghostty explicitly tracks them. Dullahan should store
+//! viewport/protocol coordinates for app state, reconstruct snapshot
+//! selections immediately before use, and force client resync whenever active
+//! screen or PageList identity changes.
 
 const std = @import("std");
 const ghostty_vt = @import("ghostty-vt");
