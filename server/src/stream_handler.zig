@@ -384,6 +384,9 @@ pub const Handler = struct {
                         }
                     }
                 },
+                .glyph => {
+                    log.debug("Ignoring glyph APC command", .{});
+                },
             }
         }
     }
