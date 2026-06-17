@@ -119,8 +119,9 @@ pub const Pty = struct {
 
         if (pid == 0) {
             // Child process
+            resetChildSignalHandlers();
             self.childSetup() catch posix.exit(1);
-            
+
             // Set terminal environment variables
             setTerminalEnv();
 
@@ -170,6 +171,15 @@ pub const Pty = struct {
         _ = posix.system.close(self.master);
     }
 };
+
+fn resetChildSignalHandlers() void {
+    const sa = posix.Sigaction{
+        .handler = .{ .handler = posix.SIG.DFL },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.CHLD, &sa, null);
+}
 
 /// Set terminal-related environment variables for Ghostty compatibility
 fn setTerminalEnv() void {
