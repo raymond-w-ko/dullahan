@@ -41,6 +41,17 @@ pub const RunConfig = struct {
     pub fn isTlsEnabled(self: RunConfig) bool {
         return self.tls_cert != null and self.tls_key != null;
     }
+
+    /// Tailscale HTTPS certs use MagicDNS names under ts.net.
+    pub fn isTailscaleMode(self: RunConfig) bool {
+        if (self.tls_cert) |path| {
+            if (std.mem.indexOf(u8, path, ".ts.net") != null) return true;
+        }
+        if (self.tls_key) |path| {
+            if (std.mem.indexOf(u8, path, ".ts.net") != null) return true;
+        }
+        return false;
+    }
 };
 
 fn hexDigit(n: u8) u8 {
@@ -120,7 +131,11 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Detect Tailscale for remote access BEFORE signal handlers are installed.
     // This is important because the SIGCHLD handler auto-reaps children, which
     // conflicts with Child.wait() used in tailscale detection.
-    var tailscale_info = tailscale.detect(allocator);
+    const tailscale_timeout_ms: i32 = if (config.isTailscaleMode())
+        tailscale.tailscale_mode_timeout_ms
+    else
+        tailscale.default_timeout_ms;
+    var tailscale_info = tailscale.detectWithTimeout(allocator, tailscale_timeout_ms);
     defer if (tailscale_info) |*info| info.deinit();
 
     const bind_all = tailscale_info != null;
@@ -315,4 +330,20 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 test "basic server test" {
     // Just verify imports work
     _ = EventLoop;
+}
+
+test "RunConfig detects Tailscale TLS mode from cert path" {
+    const config = RunConfig{
+        .tls_cert = "/home/me/cert/host.tailnet.ts.net.crt",
+        .tls_key = "/home/me/cert/host.tailnet.ts.net.key",
+    };
+    try std.testing.expect(config.isTailscaleMode());
+}
+
+test "RunConfig does not treat ordinary TLS as Tailscale mode" {
+    const config = RunConfig{
+        .tls_cert = "/home/me/cert/example.com.crt",
+        .tls_key = "/home/me/cert/example.com.key",
+    };
+    try std.testing.expect(!config.isTailscaleMode());
 }

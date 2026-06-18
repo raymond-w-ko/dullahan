@@ -24,24 +24,29 @@ const tailscale_paths = &[_][]const u8{
     "/Applications/Tailscale.app/Contents/MacOS/Tailscale", // macOS App Store
 };
 
+pub const default_timeout_ms: i32 = 500;
+pub const tailscale_mode_timeout_ms: i32 = 5000;
+
 /// Detect Tailscale and get the IPv4 address.
 /// Returns null if Tailscale is not available or not connected.
 pub fn detect(allocator: std.mem.Allocator) ?TailscaleInfo {
+    return detectWithTimeout(allocator, default_timeout_ms);
+}
+
+/// Detect Tailscale with a caller-selected timeout.
+pub fn detectWithTimeout(allocator: std.mem.Allocator, timeout_ms: i32) ?TailscaleInfo {
     // Try each known Tailscale path
     for (tailscale_paths) |tailscale_path| {
-        if (tryTailscale(allocator, tailscale_path)) |info| {
+        if (tryTailscale(allocator, tailscale_path, timeout_ms)) |info| {
             return info;
         }
     }
     return null;
 }
 
-/// Timeout for tailscale detection (ms)
-const TIMEOUT_MS = 500;
-
 /// Try to get Tailscale IP using a specific executable path
-/// Times out after 500ms to avoid blocking server startup
-fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?TailscaleInfo {
+/// Times out to avoid blocking server startup indefinitely.
+fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8, timeout_ms: i32) ?TailscaleInfo {
     const executable_path = resolveExecutable(allocator, tailscale_path) orelse {
         log.debug("Tailscale executable not found: {s}", .{tailscale_path});
         return null;
@@ -67,7 +72,7 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
         .{ .fd = stdout_fd, .events = std.posix.POLL.IN, .revents = 0 },
     };
 
-    const ready = std.posix.poll(&poll_fds, TIMEOUT_MS) catch |e| {
+    const ready = std.posix.poll(&poll_fds, timeout_ms) catch |e| {
         log.debug("Poll failed for {s}: {}", .{ tailscale_path, e });
         _ = child.kill() catch {};
         _ = waitChildOrReap(&child) catch {};
@@ -76,7 +81,7 @@ fn tryTailscale(allocator: std.mem.Allocator, tailscale_path: []const u8) ?Tails
 
     if (ready == 0) {
         // Timeout - tailscale is hanging
-        log.debug("{s} timed out after {}ms", .{ tailscale_path, TIMEOUT_MS });
+        log.debug("{s} timed out after {}ms", .{ tailscale_path, timeout_ms });
         _ = child.kill() catch {};
         _ = waitChildOrReap(&child) catch {};
         return null;
