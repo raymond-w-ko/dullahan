@@ -173,6 +173,11 @@ export const DEFAULT_LAYOUTS: LayoutTemplate[] = [
     nodes: [pane(70, 100), pane(30, 100)],
   },
   {
+    id: "side-main",
+    name: "Sidebar + Main",
+    nodes: [pane(33.33, 100), pane(66.67, 100)],
+  },
+  {
     id: "main-2side",
     name: "Main + 2 Sidebars",
     nodes: [

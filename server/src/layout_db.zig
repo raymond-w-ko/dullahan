@@ -414,6 +414,12 @@ pub const LayoutDb = struct {
             LayoutNode.createPane(30, 100),
         });
 
+        // Sidebar + main
+        try self.addDefault("side-main", "Sidebar + Main", &.{
+            LayoutNode.createPane(33.33, 100),
+            LayoutNode.createPane(66.67, 100),
+        });
+
         // Main + 2 sidebars
         const side_col = try self.allocator.alloc(LayoutNode, 2);
         side_col[0] = LayoutNode.createPane(100, 50);
@@ -534,6 +540,13 @@ test "LayoutDb creates defaults" {
     const grid = db.get("2x2");
     try std.testing.expect(grid != null);
     try std.testing.expectEqual(grid.?.countPanes(), 4);
+
+    // Check sidebar + main layout
+    const side_main = db.get("side-main");
+    try std.testing.expect(side_main != null);
+    try std.testing.expectEqual(side_main.?.countPanes(), 2);
+    try std.testing.expectEqual(@as(f32, 33.33), side_main.?.nodes[0].pane.width);
+    try std.testing.expectEqual(@as(f32, 66.67), side_main.?.nodes[1].pane.width);
 
     // Check 3x3 layout
     const grid3x3 = db.get("3x3");

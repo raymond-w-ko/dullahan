@@ -139,7 +139,7 @@ Built-in test utilities:
 ### Layouts
 
 - Layout templates loaded from `~/.config/dullahan/layouts.json`
-- Built-ins include `single`, `2-col`, `2-row`, `3-col`, `2x2`, `main-side`, and `main-2side`
+- Built-ins include `single`, `2-col`, `2-row`, `3-col`, `2x2`, `main-side`, `side-main`, and `main-2side`
 - Hidden panes stay in the window and can be brought back later
 
 ### Sync Model

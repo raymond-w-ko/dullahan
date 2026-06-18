@@ -194,6 +194,7 @@ describe("DEFAULT_LAYOUTS", () => {
     expect(ids).toContain("2-row");
     expect(ids).toContain("2x2");
     expect(ids).toContain("main-side");
+    expect(ids).toContain("side-main");
     expect(ids).toContain("main-2side");
   });
 
@@ -213,6 +214,14 @@ describe("DEFAULT_LAYOUTS", () => {
     const layout = getLayoutTemplate("2x2");
     expect(layout).toBeDefined();
     expect(countPanes(layout!.nodes)).toBe(4);
+  });
+
+  test("side-main layout has sidebar then main", () => {
+    const layout = getLayoutTemplate("side-main");
+    expect(layout).toBeDefined();
+    expect(countPanes(layout!.nodes)).toBe(2);
+    expect(layout!.nodes[0]).toMatchObject({ width: 33.33, height: 100 });
+    expect(layout!.nodes[1]).toMatchObject({ width: 66.67, height: 100 });
   });
 
   test("3-col layout has 3 panes", () => {
