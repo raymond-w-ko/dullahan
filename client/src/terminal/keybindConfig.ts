@@ -45,6 +45,10 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "ctrl+shift+n=new_window",
   "ctrl+tab=next_window",
   "ctrl+shift+tab=prev_window",
+  "meta+u=prev_window",
+  "meta+o=next_window",
+  "alt+u=prev_window",
+  "alt+o=next_window",
 
   // Direct window switching (alt/meta+1 through alt/meta+9)
   "alt+1=switch_window:1",
@@ -71,6 +75,18 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "ctrl+shift+right=focus_pane:right",
   "ctrl+shift+up=focus_pane:up",
   "ctrl+shift+down=focus_pane:down",
+  "ctrl+shift+i=focus_pane:up",
+  "ctrl+shift+j=focus_pane:left",
+  "ctrl+shift+k=focus_pane:down",
+  "ctrl+shift+l=focus_pane:right",
+  "meta+i=focus_pane:up",
+  "meta+j=focus_pane:left",
+  "meta+k=focus_pane:down",
+  "meta+l=focus_pane:right",
+  "alt+i=focus_pane:up",
+  "alt+j=focus_pane:left",
+  "alt+k=focus_pane:down",
+  "alt+l=focus_pane:right",
 
   // Settings
   "ctrl+comma=open_settings",

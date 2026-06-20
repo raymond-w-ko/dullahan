@@ -230,6 +230,10 @@ Actions are client-side operations that keybinds can trigger.
 { type: "send_text", text: "\x1b[A" }  // Send Up arrow escape
 ```
 
+Directional pane focus (`up`, `down`, `left`, `right`) follows the active
+window layout. If there is no pane in the requested direction, focus remains
+on the current pane.
+
 ## Sending Raw Sequences
 
 Three action types allow sending raw terminal sequences, matching Ghostty's syntax:
@@ -339,11 +343,33 @@ const DEFAULT_KEYBINDS: KeybindEntry[] = [
   { keybind: parseKeybind("ctrl+shift+w"), action: { type: "close_window" } },
   { keybind: parseKeybind("ctrl+tab"), action: { type: "cycle_window", direction: "next" } },
   { keybind: parseKeybind("ctrl+shift+tab"), action: { type: "cycle_window", direction: "prev" } },
+  { keybind: parseKeybind("meta+u"), action: { type: "cycle_window", direction: "prev" } },
+  { keybind: parseKeybind("meta+o"), action: { type: "cycle_window", direction: "next" } },
+  { keybind: parseKeybind("alt+u"), action: { type: "cycle_window", direction: "prev" } },
+  { keybind: parseKeybind("alt+o"), action: { type: "cycle_window", direction: "next" } },
 
   // Direct window switching
   { keybind: parseKeybind("alt+1"), action: { type: "switch_window", windowIndex: 1 } },
   { keybind: parseKeybind("alt+2"), action: { type: "switch_window", windowIndex: 2 } },
   // ... alt+3 through alt+9
+
+  // Pane navigation
+  { keybind: parseKeybind("ctrl+shift+left"), action: { type: "focus_pane", direction: "left" } },
+  { keybind: parseKeybind("ctrl+shift+right"), action: { type: "focus_pane", direction: "right" } },
+  { keybind: parseKeybind("ctrl+shift+up"), action: { type: "focus_pane", direction: "up" } },
+  { keybind: parseKeybind("ctrl+shift+down"), action: { type: "focus_pane", direction: "down" } },
+  { keybind: parseKeybind("ctrl+shift+i"), action: { type: "focus_pane", direction: "up" } },
+  { keybind: parseKeybind("ctrl+shift+j"), action: { type: "focus_pane", direction: "left" } },
+  { keybind: parseKeybind("ctrl+shift+k"), action: { type: "focus_pane", direction: "down" } },
+  { keybind: parseKeybind("ctrl+shift+l"), action: { type: "focus_pane", direction: "right" } },
+  { keybind: parseKeybind("meta+i"), action: { type: "focus_pane", direction: "up" } },
+  { keybind: parseKeybind("meta+j"), action: { type: "focus_pane", direction: "left" } },
+  { keybind: parseKeybind("meta+k"), action: { type: "focus_pane", direction: "down" } },
+  { keybind: parseKeybind("meta+l"), action: { type: "focus_pane", direction: "right" } },
+  { keybind: parseKeybind("alt+i"), action: { type: "focus_pane", direction: "up" } },
+  { keybind: parseKeybind("alt+j"), action: { type: "focus_pane", direction: "left" } },
+  { keybind: parseKeybind("alt+k"), action: { type: "focus_pane", direction: "down" } },
+  { keybind: parseKeybind("alt+l"), action: { type: "focus_pane", direction: "right" } },
 
   // Settings
   { keybind: parseKeybind("ctrl+comma"), action: { type: "open_settings" } },

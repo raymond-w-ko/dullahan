@@ -347,6 +347,58 @@ describe("getDefaultKeybinds", () => {
     expect(strings).toContain("meta+1=switch_window:1");
     expect(strings).toContain("meta+9=switch_window:9");
   });
+
+  test("includes U/O window cycle defaults", () => {
+    const keybinds = getDefaultKeybinds();
+    const find = (
+      key: string,
+      modifiers: { meta?: boolean; alt?: boolean }
+    ) =>
+      keybinds.find(
+        (entry) =>
+          entry.keybind.meta === !!modifiers.meta &&
+          entry.keybind.alt === !!modifiers.alt &&
+          entry.keybind.key === key
+      );
+
+    for (const modifiers of [{ meta: true }, { alt: true }]) {
+      expect(find("u", modifiers)?.action).toEqual({
+        type: "cycle_window",
+        direction: "prev",
+      });
+      expect(find("o", modifiers)?.action).toEqual({
+        type: "cycle_window",
+        direction: "next",
+      });
+    }
+  });
+
+  test("includes IJKL pane focus defaults", () => {
+    const keybinds = getDefaultKeybinds();
+    const find = (
+      key: string,
+      modifiers: { ctrl?: boolean; shift?: boolean; meta?: boolean; alt?: boolean }
+    ) =>
+      keybinds.find(
+        (entry) =>
+          entry.keybind.ctrl === !!modifiers.ctrl &&
+          entry.keybind.shift === !!modifiers.shift &&
+          entry.keybind.meta === !!modifiers.meta &&
+          entry.keybind.alt === !!modifiers.alt &&
+          entry.keybind.key === key
+      );
+
+    for (const modifiers of [
+      { ctrl: true, shift: true },
+      { meta: true },
+      { alt: true },
+    ]) {
+      expect(find("i", modifiers)?.action).toEqual({ type: "focus_pane", direction: "up" });
+      expect(find("j", modifiers)?.action).toEqual({ type: "focus_pane", direction: "left" });
+      expect(find("k", modifiers)?.action).toEqual({ type: "focus_pane", direction: "down" });
+      expect(find("l", modifiers)?.action).toEqual({ type: "focus_pane", direction: "right" });
+    }
+  });
 });
 
 describe("custom keybinds storage", () => {
