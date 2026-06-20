@@ -437,6 +437,10 @@ export function TerminalView({
         return activeWindow?.paneIds ?? [];
       },
       getFocusedPaneId: () => getStore().focusedPaneId,
+      getActiveWindowLayout: () => {
+        const store = getStore();
+        return store.windows.get(store.activeWindowId)?.layout ?? null;
+      },
       toggleFullscreen: (targetPaneId: number) => toggleFullscreen(targetPaneId),
       selectAll: (targetPaneId: number) => {
         if (connection?.isConnected) {

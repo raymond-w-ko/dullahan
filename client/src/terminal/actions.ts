@@ -9,6 +9,9 @@
  * added by extending the TerminalAction type and implementing a handler.
  */
 
+import type { LayoutNode, WindowLayout } from "../../../protocol/schema/layout";
+import { isContainer, isPane } from "../../../protocol/schema/layout";
+
 // ============================================================================
 // Action Types
 // ============================================================================
@@ -184,6 +187,9 @@ export interface ActionContext {
   /** Get focused pane ID */
   getFocusedPaneId: () => number;
 
+  /** Get active window layout */
+  getActiveWindowLayout: () => WindowLayout | null;
+
   /** Toggle fullscreen for a pane */
   toggleFullscreen: (paneId: number) => void;
 
@@ -355,6 +361,144 @@ function cycleIndex(current: number, length: number, direction: "next" | "prev")
   return (current - 1 + length) % length;
 }
 
+interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface PaneRect extends Rect {
+  paneId: number;
+}
+
+function flattenPaneRects(
+  nodes: LayoutNode[],
+  level: number,
+  bounds: Rect
+): PaneRect[] {
+  const rects: PaneRect[] = [];
+  const horizontal = level % 2 === 0;
+  let offset = horizontal ? bounds.left : bounds.top;
+
+  for (const node of nodes) {
+    if (horizontal) {
+      const width = bounds.right - bounds.left;
+      const childWidth = width * (node.width / 100);
+      const childBounds = {
+        left: offset,
+        top: bounds.top,
+        right: offset + childWidth,
+        bottom: bounds.bottom,
+      };
+      offset += childWidth;
+      rects.push(...flattenPaneRectNode(node, level, childBounds));
+    } else {
+      const height = bounds.bottom - bounds.top;
+      const childHeight = height * (node.height / 100);
+      const childBounds = {
+        left: bounds.left,
+        top: offset,
+        right: bounds.right,
+        bottom: offset + childHeight,
+      };
+      offset += childHeight;
+      rects.push(...flattenPaneRectNode(node, level, childBounds));
+    }
+  }
+
+  return rects;
+}
+
+function flattenPaneRectNode(
+  node: LayoutNode,
+  level: number,
+  bounds: Rect
+): PaneRect[] {
+  if (isPane(node)) {
+    return node.paneId === undefined ? [] : [{ ...bounds, paneId: node.paneId }];
+  }
+  if (isContainer(node)) {
+    return flattenPaneRects(node.children, level + 1, bounds);
+  }
+  return [];
+}
+
+function getAxisOverlap(
+  current: PaneRect,
+  candidate: PaneRect,
+  direction: FocusPaneAction["direction"]
+): number {
+  if (direction === "left" || direction === "right") {
+    return Math.min(current.bottom, candidate.bottom) - Math.max(current.top, candidate.top);
+  }
+  if (direction === "up" || direction === "down") {
+    return Math.min(current.right, candidate.right) - Math.max(current.left, candidate.left);
+  }
+  return 0;
+}
+
+function getDirectionalDistance(
+  current: PaneRect,
+  candidate: PaneRect,
+  direction: FocusPaneAction["direction"]
+): number | null {
+  switch (direction) {
+    case "left":
+      return candidate.right <= current.left ? current.left - candidate.right : null;
+    case "right":
+      return candidate.left >= current.right ? candidate.left - current.right : null;
+    case "up":
+      return candidate.bottom <= current.top ? current.top - candidate.bottom : null;
+    case "down":
+      return candidate.top >= current.bottom ? candidate.top - current.bottom : null;
+    case "next":
+    case "prev":
+      return null;
+  }
+}
+
+function findDirectionalPane(
+  layout: WindowLayout,
+  focusedId: number,
+  direction: FocusPaneAction["direction"]
+): number | null {
+  const rects = flattenPaneRects(layout.nodes, 0, {
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 100,
+  });
+  const current = rects.find((rect) => rect.paneId === focusedId);
+  if (!current) return null;
+
+  let best: { paneId: number; overlapRank: number; distance: number } | null = null;
+
+  for (const candidate of rects) {
+    if (candidate.paneId === focusedId) continue;
+
+    const distance = getDirectionalDistance(current, candidate, direction);
+    if (distance === null) continue;
+
+    const overlapRank = getAxisOverlap(current, candidate, direction) > 0 ? 0 : 1;
+    const next = { paneId: candidate.paneId, overlapRank, distance };
+    if (
+      !best ||
+      next.overlapRank < best.overlapRank ||
+      (next.overlapRank === best.overlapRank && next.distance < best.distance) ||
+      (
+        next.overlapRank === best.overlapRank &&
+        next.distance === best.distance &&
+        next.paneId < best.paneId
+      )
+    ) {
+      best = next;
+    }
+  }
+
+  return best?.paneId ?? null;
+}
+
 // ============================================================================
 // Individual Action Handlers
 // ============================================================================
@@ -442,13 +586,16 @@ function handleFocusPane(action: FocusPaneAction, ctx: ActionContext): void {
   const currentIdx = paneIds.indexOf(focusedId);
   if (currentIdx === -1) return;
 
-  // Directional focus (up/down/left/right) needs layout awareness
-  // For now, treat all directions as next/prev cycling
-  const direction = action.direction === "prev" ? "prev" : "next";
-  const nextIdx = cycleIndex(currentIdx, paneIds.length, direction);
+  let targetId: number | undefined | null;
+  if (action.direction === "next" || action.direction === "prev") {
+    const nextIdx = cycleIndex(currentIdx, paneIds.length, action.direction);
+    targetId = paneIds[nextIdx];
+  } else {
+    const layout = ctx.getActiveWindowLayout();
+    targetId = layout ? findDirectionalPane(layout, focusedId, action.direction) : null;
+  }
 
-  const targetId = paneIds[nextIdx];
-  if (targetId !== undefined) {
+  if (targetId != null) {
     ctx.setFocusedPane(targetId);
   }
 }

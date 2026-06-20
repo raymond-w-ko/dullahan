@@ -9,6 +9,12 @@ import {
   type ActionContext,
   type TerminalAction,
 } from "./actions";
+import {
+  container,
+  pane,
+  type LayoutNode,
+  type WindowLayout,
+} from "../../../protocol/schema/layout";
 
 /**
  * Create a mock ActionContext for testing.
@@ -32,11 +38,16 @@ function createMockContext(overrides: Partial<ActionContext> = {}): ActionContex
     setFocusedPane: () => {},
     getPaneIds: () => [1],
     getFocusedPaneId: () => 1,
+    getActiveWindowLayout: () => null,
     toggleFullscreen: () => {},
     selectAll: () => {},
     clearSelectionInPane: () => {},
     ...overrides,
   };
+}
+
+function testLayout(nodes: LayoutNode[]): WindowLayout {
+  return { templateId: "test", nodes };
 }
 
 describe("canPerformAction", () => {
@@ -155,6 +166,120 @@ describe("canPerformAction", () => {
 });
 
 describe("executeAction", () => {
+  test("focus_pane left/right uses 2-column layout and does not wrap at edges", async () => {
+    const focused: number[] = [];
+    const layout = testLayout([pane(50, 100, 1), pane(50, 100, 2)]);
+
+    await executeAction(
+      { type: "focus_pane", direction: "right" },
+      createMockContext({
+        getPaneIds: () => [1, 2],
+        getFocusedPaneId: () => 1,
+        getActiveWindowLayout: () => layout,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      })
+    );
+    await executeAction(
+      { type: "focus_pane", direction: "left" },
+      createMockContext({
+        getPaneIds: () => [1, 2],
+        getFocusedPaneId: () => 1,
+        getActiveWindowLayout: () => layout,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      })
+    );
+
+    expect(focused).toEqual([2]);
+  });
+
+  test("focus_pane up/down uses 2-row layout and does not wrap at edges", async () => {
+    const focused: number[] = [];
+    const layout = testLayout([container(100, 100, [pane(100, 50, 1), pane(100, 50, 2)])]);
+
+    await executeAction(
+      { type: "focus_pane", direction: "down" },
+      createMockContext({
+        getPaneIds: () => [1, 2],
+        getFocusedPaneId: () => 1,
+        getActiveWindowLayout: () => layout,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      })
+    );
+    await executeAction(
+      { type: "focus_pane", direction: "up" },
+      createMockContext({
+        getPaneIds: () => [1, 2],
+        getFocusedPaneId: () => 1,
+        getActiveWindowLayout: () => layout,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      })
+    );
+
+    expect(focused).toEqual([2]);
+  });
+
+  test("focus_pane navigates all directions in 2x2 layout", async () => {
+    const layout = testLayout([
+      container(50, 100, [pane(100, 50, 1), pane(100, 50, 2)]),
+      container(50, 100, [pane(100, 50, 3), pane(100, 50, 4)]),
+    ]);
+
+    const focus = async (from: number, direction: "up" | "down" | "left" | "right") => {
+      const focused: number[] = [];
+      await executeAction(
+        { type: "focus_pane", direction },
+        createMockContext({
+          getPaneIds: () => [1, 2, 3, 4],
+          getFocusedPaneId: () => from,
+          getActiveWindowLayout: () => layout,
+          setFocusedPane: (paneId) => focused.push(paneId),
+        })
+      );
+      return focused[0];
+    };
+
+    expect(await focus(1, "right")).toBe(3);
+    expect(await focus(1, "down")).toBe(2);
+    expect(await focus(4, "left")).toBe(2);
+    expect(await focus(4, "up")).toBe(3);
+  });
+
+  test("focus_pane handles main pane with stacked side panes", async () => {
+    const layout = testLayout([
+      pane(50, 100, 1),
+      container(50, 100, [pane(100, 50, 2), pane(100, 50, 3)]),
+    ]);
+    const focused: number[] = [];
+    const context = (from: number) =>
+      createMockContext({
+        getPaneIds: () => [1, 2, 3],
+        getFocusedPaneId: () => from,
+        getActiveWindowLayout: () => layout,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      });
+
+    await executeAction({ type: "focus_pane", direction: "right" }, context(1));
+    await executeAction({ type: "focus_pane", direction: "down" }, context(2));
+    await executeAction({ type: "focus_pane", direction: "up" }, context(3));
+
+    expect(focused).toEqual([2, 3, 2]);
+  });
+
+  test("focus_pane next/prev keeps pane-order cycling", async () => {
+    const focused: number[] = [];
+    const ctx = (from: number) =>
+      createMockContext({
+        getPaneIds: () => [1, 2, 3],
+        getFocusedPaneId: () => from,
+        setFocusedPane: (paneId) => focused.push(paneId),
+      });
+
+    await executeAction({ type: "focus_pane", direction: "next" }, ctx(1));
+    await executeAction({ type: "focus_pane", direction: "prev" }, ctx(1));
+
+    expect(focused).toEqual([2, 3]);
+  });
+
   test("scroll_page_* uses live pane height", async () => {
     const calls: Array<{ paneId: number; lines: number }> = [];
     const ctx = createMockContext({
