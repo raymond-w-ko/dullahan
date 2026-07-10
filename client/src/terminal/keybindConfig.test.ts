@@ -361,7 +361,7 @@ describe("getDefaultKeybinds", () => {
           entry.keybind.key === key
       );
 
-    for (const modifiers of [{ meta: true }, { alt: true }]) {
+    for (const modifiers of [{ meta: true }, { meta: true, alt: true }]) {
       expect(find("u", modifiers)?.action).toEqual({
         type: "cycle_window",
         direction: "prev",
@@ -391,13 +391,26 @@ describe("getDefaultKeybinds", () => {
     for (const modifiers of [
       { ctrl: true, shift: true },
       { meta: true },
-      { alt: true },
+      { meta: true, alt: true },
     ]) {
       expect(find("i", modifiers)?.action).toEqual({ type: "focus_pane", direction: "up" });
       expect(find("j", modifiers)?.action).toEqual({ type: "focus_pane", direction: "left" });
       expect(find("k", modifiers)?.action).toEqual({ type: "focus_pane", direction: "down" });
       expect(find("l", modifiers)?.action).toEqual({ type: "focus_pane", direction: "right" });
     }
+  });
+
+  test("does not reserve bare Alt combinations by default", () => {
+    const keybinds = getDefaultKeybinds();
+    expect(
+      keybinds.some(
+        (entry) =>
+          entry.keybind.alt &&
+          !entry.keybind.ctrl &&
+          !entry.keybind.shift &&
+          !entry.keybind.meta
+      )
+    ).toBe(false);
   });
 });
 

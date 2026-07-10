@@ -47,19 +47,10 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "ctrl+shift+tab=prev_window",
   "meta+u=prev_window",
   "meta+o=next_window",
-  "alt+u=prev_window",
-  "alt+o=next_window",
+  "meta+alt+u=prev_window",
+  "meta+alt+o=next_window",
 
-  // Direct window switching (alt/meta+1 through alt/meta+9)
-  "alt+1=switch_window:1",
-  "alt+2=switch_window:2",
-  "alt+3=switch_window:3",
-  "alt+4=switch_window:4",
-  "alt+5=switch_window:5",
-  "alt+6=switch_window:6",
-  "alt+7=switch_window:7",
-  "alt+8=switch_window:8",
-  "alt+9=switch_window:9",
+  // Direct window switching (meta+1 through meta+9)
   "meta+1=switch_window:1",
   "meta+2=switch_window:2",
   "meta+3=switch_window:3",
@@ -83,10 +74,10 @@ export const DEFAULT_KEYBIND_STRINGS: string[] = [
   "meta+j=focus_pane:left",
   "meta+k=focus_pane:down",
   "meta+l=focus_pane:right",
-  "alt+i=focus_pane:up",
-  "alt+j=focus_pane:left",
-  "alt+k=focus_pane:down",
-  "alt+l=focus_pane:right",
+  "meta+alt+i=focus_pane:up",
+  "meta+alt+j=focus_pane:left",
+  "meta+alt+k=focus_pane:down",
+  "meta+alt+l=focus_pane:right",
 
   // Settings
   "ctrl+comma=open_settings",

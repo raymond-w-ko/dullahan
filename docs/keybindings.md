@@ -345,13 +345,13 @@ const DEFAULT_KEYBINDS: KeybindEntry[] = [
   { keybind: parseKeybind("ctrl+shift+tab"), action: { type: "cycle_window", direction: "prev" } },
   { keybind: parseKeybind("meta+u"), action: { type: "cycle_window", direction: "prev" } },
   { keybind: parseKeybind("meta+o"), action: { type: "cycle_window", direction: "next" } },
-  { keybind: parseKeybind("alt+u"), action: { type: "cycle_window", direction: "prev" } },
-  { keybind: parseKeybind("alt+o"), action: { type: "cycle_window", direction: "next" } },
+  { keybind: parseKeybind("meta+alt+u"), action: { type: "cycle_window", direction: "prev" } },
+  { keybind: parseKeybind("meta+alt+o"), action: { type: "cycle_window", direction: "next" } },
 
   // Direct window switching
-  { keybind: parseKeybind("alt+1"), action: { type: "switch_window", windowIndex: 1 } },
-  { keybind: parseKeybind("alt+2"), action: { type: "switch_window", windowIndex: 2 } },
-  // ... alt+3 through alt+9
+  { keybind: parseKeybind("meta+1"), action: { type: "switch_window", windowIndex: 1 } },
+  { keybind: parseKeybind("meta+2"), action: { type: "switch_window", windowIndex: 2 } },
+  // ... meta+3 through meta+9
 
   // Pane navigation
   { keybind: parseKeybind("ctrl+shift+left"), action: { type: "focus_pane", direction: "left" } },
@@ -366,10 +366,10 @@ const DEFAULT_KEYBINDS: KeybindEntry[] = [
   { keybind: parseKeybind("meta+j"), action: { type: "focus_pane", direction: "left" } },
   { keybind: parseKeybind("meta+k"), action: { type: "focus_pane", direction: "down" } },
   { keybind: parseKeybind("meta+l"), action: { type: "focus_pane", direction: "right" } },
-  { keybind: parseKeybind("alt+i"), action: { type: "focus_pane", direction: "up" } },
-  { keybind: parseKeybind("alt+j"), action: { type: "focus_pane", direction: "left" } },
-  { keybind: parseKeybind("alt+k"), action: { type: "focus_pane", direction: "down" } },
-  { keybind: parseKeybind("alt+l"), action: { type: "focus_pane", direction: "right" } },
+  { keybind: parseKeybind("meta+alt+i"), action: { type: "focus_pane", direction: "up" } },
+  { keybind: parseKeybind("meta+alt+j"), action: { type: "focus_pane", direction: "left" } },
+  { keybind: parseKeybind("meta+alt+k"), action: { type: "focus_pane", direction: "down" } },
+  { keybind: parseKeybind("meta+alt+l"), action: { type: "focus_pane", direction: "right" } },
 
   // Settings
   { keybind: parseKeybind("ctrl+comma"), action: { type: "open_settings" } },
