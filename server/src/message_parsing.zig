@@ -64,11 +64,15 @@ pub fn parseJsonMessage(allocator: std.mem.Allocator, data: []const u8) ?JsonPar
             .msg = .{ .key = .{
                 .key = parsed.value.key,
                 .code = parsed.value.code,
+                .unshiftedKey = parsed.value.unshiftedKey,
                 .state = parsed.value.state,
                 .ctrl = parsed.value.ctrl,
                 .alt = parsed.value.alt,
                 .shift = parsed.value.shift,
                 .meta = parsed.value.meta,
+                .altGraph = parsed.value.altGraph,
+                .capsLock = parsed.value.capsLock,
+                .numLock = parsed.value.numLock,
                 .repeat = parsed.value.repeat,
                 .timestamp = parsed.value.timestamp,
                 .keyCode = parsed.value.keyCode,
@@ -567,6 +571,20 @@ pub fn parseMsgpackMessage(allocator: std.mem.Allocator, data: []const u8) ?Msgp
 }
 
 // Tests
+test "parseJsonMessage preserves keyboard layout and lock state" {
+    const allocator = std.testing.allocator;
+    var result = parseJsonMessage(allocator,
+        \\{"type":"key","key":"Q","code":"KeyA","unshiftedKey":"q","state":"down","ctrl":true,"alt":false,"shift":true,"meta":false,"altGraph":true,"capsLock":true,"numLock":false,"repeat":false,"timestamp":1,"keyCode":65}
+    );
+    try std.testing.expect(result != null);
+    defer result.?.cleanup.deinit();
+    try std.testing.expect(result.?.msg == .key);
+    try std.testing.expectEqualStrings("q", result.?.msg.key.unshiftedKey.?);
+    try std.testing.expect(result.?.msg.key.altGraph);
+    try std.testing.expect(result.?.msg.key.capsLock);
+    try std.testing.expect(!result.?.msg.key.numLock);
+}
+
 test "parseJsonMessage ping" {
     const allocator = std.testing.allocator;
     const result = parseJsonMessage(allocator, "{\"type\":\"ping\",\"ts\":12345.678}");

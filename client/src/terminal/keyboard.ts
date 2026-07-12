@@ -42,6 +42,25 @@ function isSelectionInElement(element: HTMLElement): boolean {
 
 export type KeyboardCallback = (message: KeyMessage) => void;
 
+interface KeyboardLayoutController {
+  getLayoutMap: () => Promise<Map<string, string>>;
+  addEventListener?: (type: "layoutchange", listener: () => void) => void;
+  removeEventListener?: (type: "layoutchange", listener: () => void) => void;
+}
+
+export function resolveUnshiftedKey(
+  e: Pick<KeyboardEvent, "code" | "key" | "shiftKey">,
+  layoutMap: Map<string, string> | null,
+): string | undefined {
+  const mapped = layoutMap?.get(e.code);
+  if (mapped) return mapped;
+  if (/^Key[A-Z]$/.test(e.code) && e.key.length === 1) {
+    return e.key.toLocaleLowerCase();
+  }
+  if (!e.shiftKey) return e.key;
+  return undefined;
+}
+
 /** A keybind paired with its action */
 export interface KeybindEntry {
   keybind: Keybind;
@@ -74,7 +93,11 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
   private callback: KeyboardCallback | null = null;
   private boundKeyDown: (e: KeyboardEvent) => void;
   private boundKeyUp: (e: KeyboardEvent) => void;
+  private boundLayoutChange: () => void;
   private _paneId: number = 1; // Default pane ID
+  private layoutMap: Map<string, string> | null = null;
+  private layoutController: KeyboardLayoutController | null = null;
+  private layoutRequestGeneration = 0;
 
   // Keybind interception state
   private keybinds: KeybindEntry[] = [];
@@ -88,6 +111,7 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
   constructor() {
     this.boundKeyDown = this.handleKeyDown.bind(this);
     this.boundKeyUp = this.handleKeyUp.bind(this);
+    this.boundLayoutChange = this.refreshKeyboardLayoutMap.bind(this);
   }
 
   /**
@@ -202,6 +226,7 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
 
     this.element = element;
     this.callback = callback;
+    this.startKeyboardLayoutTracking();
 
     // Ensure element is focusable
     if (!element.hasAttribute("tabindex")) {
@@ -215,12 +240,44 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
     element.addEventListener("blur", () => this.clearConsumedKeys());
   }
 
+  private startKeyboardLayoutTracking(): void {
+    const keyboard = (navigator as Navigator & { keyboard?: KeyboardLayoutController }).keyboard;
+    if (!keyboard?.getLayoutMap) return;
+    this.layoutController = keyboard;
+    keyboard.addEventListener?.("layoutchange", this.boundLayoutChange);
+    this.refreshKeyboardLayoutMap();
+  }
+
+  private refreshKeyboardLayoutMap(): void {
+    const keyboard = this.layoutController;
+    if (!keyboard) return;
+    const generation = ++this.layoutRequestGeneration;
+    void keyboard
+      .getLayoutMap()
+      .then((layoutMap) => {
+        if (generation !== this.layoutRequestGeneration || !this.element) return;
+        this.layoutMap = layoutMap;
+      })
+      .catch(() => {
+        // Layout maps are permission/platform dependent. KeyboardEvent.key
+        // remains a useful fallback for letters and unshifted input.
+      });
+  }
+
+  private unshiftedKey(e: KeyboardEvent): string | undefined {
+    return resolveUnshiftedKey(e, this.layoutMap);
+  }
+
   /**
    * Detach keyboard handler
    */
   detach(): void {
     // Clean up global copy handler
     this.detachGlobalCopyHandler();
+    this.layoutController?.removeEventListener?.("layoutchange", this.boundLayoutChange);
+    this.layoutController = null;
+    this.layoutMap = null;
+    this.layoutRequestGeneration += 1;
 
     if (this.element) {
       this.element.removeEventListener("keydown", this.boundKeyDown);
@@ -350,12 +407,16 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
       paneId: this._paneId,
       key: e.key,
       code: e.code,
+      unshiftedKey: this.unshiftedKey(e),
       keyCode: e.keyCode,
       state,
       ctrl: e.ctrlKey,
       alt: e.altKey,
       shift: e.shiftKey,
       meta: e.metaKey,
+      altGraph: e.getModifierState?.("AltGraph") ?? false,
+      capsLock: e.getModifierState?.("CapsLock") ?? false,
+      numLock: e.getModifierState?.("NumLock") ?? false,
       repeat: e.repeat,
       timestamp: performance.now(),
     };

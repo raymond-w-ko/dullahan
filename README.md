@@ -158,6 +158,14 @@ Built-in test utilities:
 - selection updates primary clipboard
 - master client handles clipboard reads for terminal GET requests
 
+### Keyboard input
+
+- Kitty keyboard protocol negotiation and all progressive enhancement flags through Ghostty's encoder
+- distinct press, repeat, and release events when requested
+- active-layout unshifted keys when browser layout data is available, plus PC-101 base-layout alternate keys
+- modifier, navigation, function, numpad, and media keys
+- legacy VT/xterm encoding plus `modifyOtherKeys` mode 2 fallback
+
 ### Themes
 
 - Ghostty/iTerm theme bundle pinned in-repo

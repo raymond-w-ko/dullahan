@@ -1,323 +1,369 @@
-//! Keyboard event to terminal escape sequence conversion
-//!
-//! Converts browser KeyboardEvent data to terminal-compatible byte sequences.
-//! Handles special keys, modifiers, cursor keys in application mode, and function keys.
+//! Browser keyboard event adapter for libghostty-vt's key encoder.
 
 const std = @import("std");
+const ghostty = @import("ghostty-vt");
 
-/// Keyboard event from browser (matches JavaScript KeyboardEvent)
+const input = ghostty.input;
+
+/// Keyboard event from browser (matches JavaScript KeyboardEvent).
 pub const KeyEvent = struct {
     type: []const u8,
     key: []const u8,
     code: []const u8,
+    unshiftedKey: ?[]const u8 = null,
     state: []const u8,
     ctrl: bool = false,
     alt: bool = false,
     shift: bool = false,
     meta: bool = false,
+    altGraph: bool = false,
+    capsLock: bool = false,
+    numLock: bool = false,
     repeat: bool = false,
     timestamp: f64 = 0,
     keyCode: u16 = 0,
 };
 
-/// Convert a keyboard event to terminal escape sequence bytes.
-/// Returns a slice into the output buffer with the escape sequence.
-/// Returns empty slice for modifier-only keys or key-up events.
-pub fn keyEventToBytes(event: KeyEvent, output: []u8, cursor_key_application: bool) []u8 {
-    if (!std.mem.eql(u8, event.state, "down")) {
-        return output[0..0];
-    }
+pub const EncodeOptions = input.KeyEncodeOptions;
+// One browser key event carries at most one UTF-8 codepoint for the primary,
+// shifted, base-layout, and associated-text fields. Their decimal CSI-u form
+// is bounded well below Ghostty's own 128-byte key-encoder test buffers.
+pub const max_encoded_size: usize = 128;
 
-    const key = event.key;
-
-    // Ignore modifier-only keys
-    if (std.mem.eql(u8, key, "Meta") or
-        std.mem.eql(u8, key, "Control") or
-        std.mem.eql(u8, key, "Alt") or
-        std.mem.eql(u8, key, "Shift") or
-        std.mem.eql(u8, key, "CapsLock") or
-        std.mem.eql(u8, key, "NumLock") or
-        std.mem.eql(u8, key, "ScrollLock") or
-        std.mem.eql(u8, key, "Hyper") or
-        std.mem.eql(u8, key, "Super") or
-        std.mem.eql(u8, key, "OS") or
-        std.mem.eql(u8, key, "AltGraph") or
-        std.mem.eql(u8, key, "Fn") or
-        std.mem.eql(u8, key, "FnLock"))
-    {
-        return output[0..0];
-    }
-
-    const ctrl = event.ctrl;
-    const alt = event.alt;
-    const shift = event.shift;
-
-    // Single character keys
-    if (key.len == 1) {
-        const c = key[0];
-
-        // Ctrl+letter -> control character
-        if (ctrl and c >= 'a' and c <= 'z') {
-            output[0] = c - 'a' + 1;
-            return output[0..1];
-        }
-        if (ctrl and c >= 'A' and c <= 'Z') {
-            output[0] = c - 'A' + 1;
-            return output[0..1];
-        }
-
-        // Ctrl+special -> control character
-        if (ctrl) {
-            const ctrl_char: ?u8 = switch (c) {
-                '@' => 0x00,
-                '[' => 0x1b,
-                '\\' => 0x1c,
-                ']' => 0x1d,
-                '^' => 0x1e,
-                '_' => 0x1f,
-                '?' => 0x7f,
-                else => null,
-            };
-            if (ctrl_char) |cc| {
-                output[0] = cc;
-                return output[0..1];
-            }
-        }
-
-        // Alt+key -> ESC + key
-        if (alt) {
-            output[0] = 0x1b;
-            output[1] = c;
-            return output[0..2];
-        }
-
-        output[0] = c;
-        return output[0..1];
-    }
-
-    // Named special keys
-    if (std.mem.eql(u8, key, "Enter")) {
-        output[0] = '\r';
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Backspace")) {
-        output[0] = 0x7f;
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Tab")) {
-        if (shift) {
-            output[0] = 0x1b;
-            output[1] = '[';
-            output[2] = 'Z';
-            return output[0..3];
-        }
-        output[0] = '\t';
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Escape")) {
-        output[0] = 0x1b;
-        return output[0..1];
-    }
-    if (std.mem.eql(u8, key, "Delete")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '3';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    // Arrow keys
-    if (std.mem.eql(u8, key, "ArrowUp")) {
-        return writeArrowKey(output, 'A', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowDown")) {
-        return writeArrowKey(output, 'B', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowRight")) {
-        return writeArrowKey(output, 'C', ctrl, alt, cursor_key_application);
-    }
-    if (std.mem.eql(u8, key, "ArrowLeft")) {
-        return writeArrowKey(output, 'D', ctrl, alt, cursor_key_application);
-    }
-
-    // Navigation keys
-    if (std.mem.eql(u8, key, "Home")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = 'H';
-        return output[0..3];
-    }
-    if (std.mem.eql(u8, key, "End")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = 'F';
-        return output[0..3];
-    }
-
-    if (std.mem.eql(u8, key, "PageUp")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '5';
-        output[3] = '~';
-        return output[0..4];
-    }
-    if (std.mem.eql(u8, key, "PageDown")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '6';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    if (std.mem.eql(u8, key, "Insert")) {
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '2';
-        output[3] = '~';
-        return output[0..4];
-    }
-
-    // Function keys (F1-F12)
-    if (key.len >= 2 and key[0] == 'F') {
-        const fnum = std.fmt.parseInt(u8, key[1..], 10) catch return output[0..0];
-        return writeFunctionKey(output, fnum);
-    }
-
-    // Multi-byte UTF-8 character (emoji, etc.)
-    if (key.len > 1 and key.len <= output.len) {
-        @memcpy(output[0..key.len], key);
-        if (alt) {
-            var i: usize = key.len;
-            while (i > 0) : (i -= 1) {
-                output[i] = output[i - 1];
-            }
-            output[0] = 0x1b;
-            return output[0 .. key.len + 1];
-        }
-        return output[0..key.len];
-    }
-
-    return output[0..0];
+/// Encode browser key data using Ghostty's legacy, modifyOtherKeys, or Kitty
+/// keyboard encoder according to the active terminal modes.
+pub fn keyEventToBytes(event: KeyEvent, output: []u8, options: EncodeOptions) []u8 {
+    var writer: std.Io.Writer = .fixed(output);
+    input.encodeKey(&writer, toGhosttyEvent(event), options) catch return output[0..0];
+    return writer.buffered();
 }
 
-/// Write arrow key escape sequence with optional modifiers
-fn writeArrowKey(output: []u8, arrow: u8, ctrl: bool, alt: bool, cursor_key_application: bool) []u8 {
-    if (ctrl or alt) {
-        var mod: u8 = 1;
-        if (alt) mod += 2;
-        if (ctrl) mod += 4;
-        output[0] = 0x1b;
-        output[1] = '[';
-        output[2] = '1';
-        output[3] = ';';
-        output[4] = '0' + mod;
-        output[5] = arrow;
-        return output[0..6];
-    }
-    output[0] = 0x1b;
-    if (cursor_key_application) {
-        output[1] = 'O';
-    } else {
-        output[1] = '[';
-    }
-    output[2] = arrow;
-    return output[0..3];
-}
+fn toGhosttyEvent(event: KeyEvent) input.KeyEvent {
+    const printable = std.unicode.utf8ValidateSlice(event.key) and
+        std.unicode.utf8CountCodepoints(event.key) catch 0 == 1;
+    const unshifted = unshiftedCodepoint(event.unshiftedKey, event.code, event.key, event.shift);
 
-/// Write function key escape sequence (F1-F12)
-fn writeFunctionKey(output: []u8, fnum: u8) []u8 {
-    const codes = [_]struct { prefix: []const u8, suffix: u8 }{
-        .{ .prefix = "\x1bOP", .suffix = 0 }, // F1
-        .{ .prefix = "\x1bOQ", .suffix = 0 }, // F2
-        .{ .prefix = "\x1bOR", .suffix = 0 }, // F3
-        .{ .prefix = "\x1bOS", .suffix = 0 }, // F4
-        .{ .prefix = "\x1b[15~", .suffix = 0 }, // F5
-        .{ .prefix = "\x1b[17~", .suffix = 0 }, // F6
-        .{ .prefix = "\x1b[18~", .suffix = 0 }, // F7
-        .{ .prefix = "\x1b[19~", .suffix = 0 }, // F8
-        .{ .prefix = "\x1b[20~", .suffix = 0 }, // F9
-        .{ .prefix = "\x1b[21~", .suffix = 0 }, // F10
-        .{ .prefix = "\x1b[23~", .suffix = 0 }, // F11
-        .{ .prefix = "\x1b[24~", .suffix = 0 }, // F12
+    return .{
+        .action = if (std.mem.eql(u8, event.state, "up"))
+            .release
+        else if (event.repeat)
+            .repeat
+        else
+            .press,
+        .key = keyFromEvent(event),
+        .mods = .{
+            // Browsers commonly expose AltGr as synthetic Ctrl+Alt. AltGr is
+            // consumed by the layout to produce text, not a terminal chord.
+            .ctrl = event.ctrl and !event.altGraph,
+            .alt = event.alt and !event.altGraph,
+            .shift = event.shift,
+            .super = event.meta,
+            .caps_lock = event.capsLock,
+            .num_lock = event.numLock,
+        },
+        // Browser KeyboardEvent.key already contains the shifted printable
+        // value, so Shift was consumed to produce its text.
+        .consumed_mods = .{
+            .shift = printable and event.shift,
+            .ctrl = printable and event.altGraph,
+            .alt = printable and event.altGraph,
+        },
+        .utf8 = if (printable) event.key else "",
+        .unshifted_codepoint = unshifted,
     };
+}
 
-    if (fnum >= 1 and fnum <= 12) {
-        const code = codes[fnum - 1];
-        @memcpy(output[0..code.prefix.len], code.prefix);
-        return output[0..code.prefix.len];
+fn unshiftedCodepoint(unshifted_key: ?[]const u8, code: []const u8, key: []const u8, shifted: bool) u21 {
+    if (unshifted_key) |value| {
+        if (std.unicode.utf8ValidateSlice(value) and (std.unicode.utf8CountCodepoints(value) catch 0) == 1) {
+            return std.unicode.utf8Decode(value) catch 0;
+        }
+    }
+    // Older clients do not send unshiftedKey. Their logical key is still
+    // authoritative when Shift is not active, including non-US layouts.
+    if (!shifted and std.unicode.utf8ValidateSlice(key) and (std.unicode.utf8CountCodepoints(key) catch 0) == 1) {
+        return std.unicode.utf8Decode(key) catch 0;
+    }
+    if (code.len == 4 and std.mem.startsWith(u8, code, "Key")) {
+        const c = code[3];
+        if (c >= 'A' and c <= 'Z') return c - 'A' + 'a';
+    }
+    if (code.len == 6 and std.mem.startsWith(u8, code, "Digit")) {
+        const c = code[5];
+        if (c >= '0' and c <= '9') return c;
+    }
+    const punctuation = [_]struct { []const u8, u21 }{
+        .{ "Backquote", '`' },    .{ "Backslash", '\\' }, .{ "BracketLeft", '[' },
+        .{ "BracketRight", ']' }, .{ "Comma", ',' },      .{ "Equal", '=' },
+        .{ "Minus", '-' },        .{ "Period", '.' },     .{ "Quote", '\'' },
+        .{ "Semicolon", ';' },    .{ "Slash", '/' },      .{ "Space", ' ' },
+    };
+    for (punctuation) |entry| if (std.mem.eql(u8, code, entry[0])) return entry[1];
+
+    if (std.unicode.utf8ValidateSlice(key) and (std.unicode.utf8CountCodepoints(key) catch 0) == 1) {
+        return std.unicode.utf8Decode(key) catch 0;
+    }
+    return 0;
+}
+
+fn keyFromEvent(event: KeyEvent) input.Key {
+    const code = event.code;
+    if (!event.numLock and std.mem.startsWith(u8, code, "Numpad")) {
+        const navigation = [_]struct { []const u8, []const u8, input.Key }{
+            .{ "Numpad0", "Insert", .numpad_insert },       .{ "Numpad1", "End", .numpad_end },
+            .{ "Numpad2", "ArrowDown", .numpad_down },      .{ "Numpad3", "PageDown", .numpad_page_down },
+            .{ "Numpad4", "ArrowLeft", .numpad_left },      .{ "Numpad5", "Clear", .numpad_begin },
+            .{ "Numpad6", "ArrowRight", .numpad_right },    .{ "Numpad7", "Home", .numpad_home },
+            .{ "Numpad8", "ArrowUp", .numpad_up },          .{ "Numpad9", "PageUp", .numpad_page_up },
+            .{ "NumpadDecimal", "Delete", .numpad_delete },
+        };
+        for (navigation) |entry| {
+            if (std.mem.eql(u8, code, entry[0]) and std.mem.eql(u8, event.key, entry[1])) return entry[2];
+        }
+    }
+    if (code.len == 4 and std.mem.startsWith(u8, code, "Key")) {
+        const c = code[3];
+        if (c >= 'A' and c <= 'Z') return @enumFromInt(@intFromEnum(input.Key.key_a) + c - 'A');
+    }
+    if (code.len == 6 and std.mem.startsWith(u8, code, "Digit")) {
+        const c = code[5];
+        if (c >= '0' and c <= '9') return @enumFromInt(@intFromEnum(input.Key.digit_0) + c - '0');
+    }
+    if (code.len >= 2 and code[0] == 'F') {
+        const n = std.fmt.parseInt(u8, code[1..], 10) catch 0;
+        if (n >= 1 and n <= 25) return @enumFromInt(@intFromEnum(input.Key.f1) + n - 1);
     }
 
-    return output[0..0];
+    const entries = [_]struct { []const u8, input.Key }{
+        .{ "Backquote", .backquote },                         .{ "Backslash", .backslash },
+        .{ "BracketLeft", .bracket_left },                    .{ "BracketRight", .bracket_right },
+        .{ "Comma", .comma },                                 .{ "Equal", .equal },
+        .{ "IntlBackslash", .intl_backslash },                .{ "IntlRo", .intl_ro },
+        .{ "IntlYen", .intl_yen },                            .{ "Minus", .minus },
+        .{ "Period", .period },                               .{ "Quote", .quote },
+        .{ "Semicolon", .semicolon },                         .{ "Slash", .slash },
+        .{ "AltLeft", .alt_left },                            .{ "AltRight", .alt_right },
+        .{ "Backspace", .backspace },                         .{ "CapsLock", .caps_lock },
+        .{ "ContextMenu", .context_menu },                    .{ "ControlLeft", .control_left },
+        .{ "ControlRight", .control_right },                  .{ "Enter", .enter },
+        .{ "Escape", .escape },                               .{ "MetaLeft", .meta_left },
+        .{ "MetaRight", .meta_right },                        .{ "ShiftLeft", .shift_left },
+        .{ "ShiftRight", .shift_right },                      .{ "Space", .space },
+        .{ "Fn", .@"fn" },                                    .{ "FnLock", .fn_lock },
+        .{ "Tab", .tab },                                     .{ "Convert", .convert },
+        .{ "KanaMode", .kana_mode },                          .{ "NonConvert", .non_convert },
+        .{ "Delete", .delete },                               .{ "End", .end },
+        .{ "Help", .help },                                   .{ "Home", .home },
+        .{ "Insert", .insert },                               .{ "PageDown", .page_down },
+        .{ "PageUp", .page_up },                              .{ "ArrowDown", .arrow_down },
+        .{ "ArrowLeft", .arrow_left },                        .{ "ArrowRight", .arrow_right },
+        .{ "ArrowUp", .arrow_up },                            .{ "NumLock", .num_lock },
+        .{ "NumpadAdd", .numpad_add },                        .{ "NumpadBackspace", .numpad_backspace },
+        .{ "NumpadClear", .numpad_clear },                    .{ "NumpadComma", .numpad_comma },
+        .{ "NumpadDecimal", .numpad_decimal },                .{ "NumpadDivide", .numpad_divide },
+        .{ "NumpadEnter", .numpad_enter },                    .{ "NumpadEqual", .numpad_equal },
+        .{ "NumpadMultiply", .numpad_multiply },              .{ "NumpadClearEntry", .numpad_clear_entry },
+        .{ "NumpadMemoryAdd", .numpad_memory_add },           .{ "NumpadMemoryClear", .numpad_memory_clear },
+        .{ "NumpadMemoryRecall", .numpad_memory_recall },     .{ "NumpadMemoryStore", .numpad_memory_store },
+        .{ "NumpadMemorySubtract", .numpad_memory_subtract }, .{ "NumpadParenLeft", .numpad_paren_left },
+        .{ "NumpadParenRight", .numpad_paren_right },         .{ "NumpadSubtract", .numpad_subtract },
+        .{ "Pause", .pause },                                 .{ "PrintScreen", .print_screen },
+        .{ "ScrollLock", .scroll_lock },                      .{ "BrowserBack", .browser_back },
+        .{ "BrowserFavorites", .browser_favorites },          .{ "BrowserForward", .browser_forward },
+        .{ "BrowserHome", .browser_home },                    .{ "BrowserRefresh", .browser_refresh },
+        .{ "BrowserSearch", .browser_search },                .{ "BrowserStop", .browser_stop },
+        .{ "Eject", .eject },                                 .{ "LaunchApp1", .launch_app_1 },
+        .{ "LaunchApp2", .launch_app_2 },                     .{ "LaunchMail", .launch_mail },
+        .{ "MediaSelect", .media_select },                    .{ "AudioVolumeDown", .audio_volume_down },
+        .{ "AudioVolumeMute", .audio_volume_mute },           .{ "AudioVolumeUp", .audio_volume_up },
+        .{ "MediaPlayPause", .media_play_pause },             .{ "MediaStop", .media_stop },
+        .{ "MediaTrackNext", .media_track_next },             .{ "MediaTrackPrevious", .media_track_previous },
+        .{ "Power", .power },                                 .{ "Sleep", .sleep },
+        .{ "WakeUp", .wake_up },                              .{ "Copy", .copy },
+        .{ "Cut", .cut },                                     .{ "Paste", .paste },
+    };
+    for (entries) |entry| if (std.mem.eql(u8, code, entry[0])) return entry[1];
+
+    if (std.mem.startsWith(u8, code, "Numpad") and code.len == 7 and code[6] >= '0' and code[6] <= '9') {
+        return @enumFromInt(@intFromEnum(input.Key.numpad_0) + code[6] - '0');
+    }
+    return .unidentified;
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
+test "legacy and Kitty modified enter" {
+    var buf: [64]u8 = undefined;
+    const event: KeyEvent = .{
+        .type = "key",
+        .key = "Enter",
+        .code = "Enter",
+        .state = "down",
+        .alt = true,
+    };
+    try std.testing.expectEqualStrings("\x1b\r", keyEventToBytes(event, &buf, .default));
 
-test "basic keys" {
-    var buf: [32]u8 = undefined;
+    var kitty = EncodeOptions.default;
+    kitty.kitty_flags = @bitCast(@as(u5, 1));
+    try std.testing.expectEqualStrings("\x1b[13;3u", keyEventToBytes(event, &buf, kitty));
 
-    // Single character
-    const a = keyEventToBytes(.{ .type = "key", .key = "a", .code = "KeyA", .state = "down" }, &buf, false);
-    try std.testing.expectEqualStrings("a", a);
+    var pi_options = EncodeOptions.default;
+    pi_options.kitty_flags = @bitCast(@as(u5, 7));
+    try std.testing.expectEqualStrings("\x1b[13;3u", keyEventToBytes(event, &buf, pi_options));
 
-    // Enter
-    const enter = keyEventToBytes(.{ .type = "key", .key = "Enter", .code = "Enter", .state = "down" }, &buf, false);
-    try std.testing.expectEqualStrings("\r", enter);
-
-    // Backspace
-    const bs = keyEventToBytes(.{ .type = "key", .key = "Backspace", .code = "Backspace", .state = "down" }, &buf, false);
-    try std.testing.expectEqual(@as(u8, 0x7f), bs[0]);
+    var shifted = event;
+    shifted.alt = false;
+    shifted.shift = true;
+    try std.testing.expectEqualStrings("\x1b[13;2u", keyEventToBytes(shifted, &buf, pi_options));
 }
 
-test "modifier keys" {
-    var buf: [32]u8 = undefined;
-
-    // Ctrl+c
-    const ctrl_c = keyEventToBytes(.{ .type = "key", .key = "c", .code = "KeyC", .state = "down", .ctrl = true }, &buf, false);
-    try std.testing.expectEqual(@as(u8, 3), ctrl_c[0]);
-
-    // Alt+x
-    const alt_x = keyEventToBytes(.{ .type = "key", .key = "x", .code = "KeyX", .state = "down", .alt = true }, &buf, false);
-    try std.testing.expectEqual(@as(u8, 0x1b), alt_x[0]);
-    try std.testing.expectEqual(@as(u8, 'x'), alt_x[1]);
+test "modifyOtherKeys fallback distinguishes modified enter" {
+    var buf: [64]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.modify_other_keys_state_2 = true;
+    const event: KeyEvent = .{
+        .type = "key",
+        .key = "Enter",
+        .code = "Enter",
+        .state = "down",
+        .shift = true,
+    };
+    try std.testing.expectEqualStrings("\x1b[27;2;13~", keyEventToBytes(event, &buf, options));
 }
 
-test "arrow keys" {
-    var buf: [32]u8 = undefined;
+test "Kitty reports repeat and release" {
+    var buf: [64]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 3));
+    const base: KeyEvent = .{ .type = "key", .key = "a", .code = "KeyA", .state = "down" };
 
-    // Normal mode
-    const up_normal = keyEventToBytes(.{ .type = "key", .key = "ArrowUp", .code = "ArrowUp", .state = "down" }, &buf, false);
-    try std.testing.expectEqualStrings("\x1b[A", up_normal);
-
-    // Application mode
-    const up_app = keyEventToBytes(.{ .type = "key", .key = "ArrowUp", .code = "ArrowUp", .state = "down" }, &buf, true);
-    try std.testing.expectEqualStrings("\x1bOA", up_app);
+    var repeat = base;
+    repeat.repeat = true;
+    try std.testing.expectEqualStrings("\x1b[97;1:2u", keyEventToBytes(repeat, &buf, options));
+    var release = base;
+    release.state = "up";
+    try std.testing.expectEqualStrings("\x1b[97;1:3u", keyEventToBytes(release, &buf, options));
 }
 
-test "function keys" {
-    var buf: [32]u8 = undefined;
-
-    const f1 = keyEventToBytes(.{ .type = "key", .key = "F1", .code = "F1", .state = "down" }, &buf, false);
-    try std.testing.expectEqualStrings("\x1bOP", f1);
-
-    const f5 = keyEventToBytes(.{ .type = "key", .key = "F5", .code = "F5", .state = "down" }, &buf, false);
-    try std.testing.expectEqualStrings("\x1b[15~", f5);
+test "Kitty reports all keys with associated text" {
+    var buf: [64]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 31));
+    const event: KeyEvent = .{
+        .type = "key",
+        .key = "A",
+        .code = "KeyA",
+        .state = "down",
+        .shift = true,
+    };
+    try std.testing.expectEqualStrings("\x1b[97:65;2;65u", keyEventToBytes(event, &buf, options));
 }
 
-test "modifier-only keys ignored" {
-    var buf: [32]u8 = undefined;
-
-    const ctrl = keyEventToBytes(.{ .type = "key", .key = "Control", .code = "ControlLeft", .state = "down" }, &buf, false);
-    try std.testing.expectEqual(@as(usize, 0), ctrl.len);
-
-    const shift = keyEventToBytes(.{ .type = "key", .key = "Shift", .code = "ShiftLeft", .state = "down" }, &buf, false);
-    try std.testing.expectEqual(@as(usize, 0), shift.len);
+test "legacy basics remain compatible" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("a", keyEventToBytes(.{
+        .type = "key",
+        .key = "a",
+        .code = "KeyA",
+        .state = "down",
+    }, &buf, .default));
+    try std.testing.expectEqualStrings("\x1b[A", keyEventToBytes(.{
+        .type = "key",
+        .key = "ArrowUp",
+        .code = "ArrowUp",
+        .state = "down",
+    }, &buf, .default));
+    try std.testing.expectEqualStrings("\x03", keyEventToBytes(.{
+        .type = "key",
+        .key = "c",
+        .code = "KeyC",
+        .state = "down",
+        .ctrl = true,
+    }, &buf, .default));
 }
 
-test "key up ignored" {
-    var buf: [32]u8 = undefined;
+test "Kitty suppresses modifiers unless report-all is enabled" {
+    var buf: [64]u8 = undefined;
+    const event: KeyEvent = .{
+        .type = "key",
+        .key = "Alt",
+        .code = "AltLeft",
+        .state = "down",
+        .alt = true,
+    };
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 7));
+    try std.testing.expectEqual(@as(usize, 0), keyEventToBytes(event, &buf, options).len);
+    options.kitty_flags = @bitCast(@as(u5, 15));
+    try std.testing.expect(keyEventToBytes(event, &buf, options).len > 0);
+}
 
-    const up = keyEventToBytes(.{ .type = "key", .key = "a", .code = "KeyA", .state = "up" }, &buf, false);
-    try std.testing.expectEqual(@as(usize, 0), up.len);
+test "NumLock-off keypad keys retain navigation identity" {
+    var buf: [64]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 1));
+    try std.testing.expectEqualStrings("\x1b[57424u", keyEventToBytes(.{
+        .type = "key",
+        .key = "End",
+        .code = "Numpad1",
+        .state = "down",
+        .numLock = false,
+    }, &buf, options));
+    try std.testing.expectEqualStrings("\x1b[57400;129u", keyEventToBytes(.{
+        .type = "key",
+        .key = "1",
+        .code = "Numpad1",
+        .state = "down",
+        .numLock = true,
+    }, &buf, options));
+}
+
+test "non-US layout separates logical and PC-101 base keys" {
+    var buf: [64]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 7));
+    const output = keyEventToBytes(.{
+        .type = "key",
+        .key = "q",
+        .code = "KeyA",
+        .unshiftedKey = "q",
+        .state = "down",
+        .ctrl = true,
+    }, &buf, options);
+    try std.testing.expectEqualStrings("\x1b[113::97;5u", output);
+}
+
+test "AltGraph text does not become a synthetic Ctrl-Alt chord" {
+    var buf: [max_encoded_size]u8 = undefined;
+    const event: KeyEvent = .{
+        .type = "key",
+        .key = "@",
+        .code = "KeyQ",
+        .unshiftedKey = "q",
+        .state = "down",
+        .ctrl = true,
+        .alt = true,
+        .altGraph = true,
+    };
+    try std.testing.expectEqualStrings("@", keyEventToBytes(event, &buf, .default));
+    var kitty = EncodeOptions.default;
+    kitty.kitty_flags = @bitCast(@as(u5, 7));
+    try std.testing.expectEqualStrings("@", keyEventToBytes(event, &buf, kitty));
+}
+
+test "maximum-width Kitty event exceeds old buffer without being dropped" {
+    var buf: [max_encoded_size]u8 = undefined;
+    var options = EncodeOptions.default;
+    options.kitty_flags = @bitCast(@as(u5, 31));
+    const output = keyEventToBytes(.{
+        .type = "key",
+        .key = "\xF4\x8F\xBF\xBF",
+        .code = "KeyA",
+        .unshiftedKey = "\xF4\x8F\xBF\xBE",
+        .state = "down",
+        .shift = true,
+        .capsLock = true,
+        .numLock = true,
+    }, &buf, options);
+    try std.testing.expect(output.len > 32);
+    try std.testing.expect(output.len < max_encoded_size);
+    try std.testing.expect(output[output.len - 1] == 'u');
 }

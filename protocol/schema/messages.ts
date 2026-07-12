@@ -26,12 +26,16 @@ export interface KeyMessage {
   paneId: number;
   key: string; // Logical key value ("a", "Enter", "ArrowUp")
   code: string; // Physical key code ("KeyA", "Enter", "ArrowUp")
+  unshiftedKey?: string; // Active-layout key without Shift, when known
   keyCode: number; // Legacy keyCode (deprecated but useful)
   state: "down" | "up";
   ctrl: boolean;
   alt: boolean;
   shift: boolean;
   meta: boolean;
+  altGraph?: boolean;
+  capsLock?: boolean;
+  numLock?: boolean;
   repeat: boolean;
   timestamp: number; // High-resolution timestamp (performance.now())
 }

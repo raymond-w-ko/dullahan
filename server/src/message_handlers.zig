@@ -121,49 +121,40 @@ fn canControl(el: *EventLoop, client: *ClientState) bool {
 // ============================================================================
 
 fn handleKey(el: *EventLoop, key_msg: ParsedKeyEvent) !void {
-    if (!std.mem.eql(u8, key_msg.state, "down")) return;
-
     const pane = el.session.activePane() orelse return;
 
-    // Check if this is a modifier-only key (Ctrl, Shift, Alt, Meta)
-    // Don't clear selection for modifier-only keys - they don't produce output
-    const is_modifier_only = std.mem.eql(u8, key_msg.code, "ControlLeft") or
-        std.mem.eql(u8, key_msg.code, "ControlRight") or
-        std.mem.eql(u8, key_msg.code, "ShiftLeft") or
-        std.mem.eql(u8, key_msg.code, "ShiftRight") or
-        std.mem.eql(u8, key_msg.code, "AltLeft") or
-        std.mem.eql(u8, key_msg.code, "AltRight") or
-        std.mem.eql(u8, key_msg.code, "MetaLeft") or
-        std.mem.eql(u8, key_msg.code, "MetaRight");
-
-    // Clear selection on keyboard input that produces output (not modifier-only)
-    if (!is_modifier_only and pane.hasSelection()) {
-        pane.clearSelection();
-        el.broadcastPaneUpdate(pane) catch |e| {
-            logRecoverable("broadcast selection clear on keypress", e);
-        };
-    }
-
-    var output_buf: [32]u8 = undefined;
-    const cursor_key_app = pane.isCursorKeyApplication();
+    var output_buf: [keyboard.max_encoded_size]u8 = undefined;
+    const encode_options = keyboard.EncodeOptions.fromTerminal(&pane.terminal);
 
     // Convert ParsedKeyEvent to KeyEvent for keyEventToBytes
     const key_event = KeyEvent{
         .type = "key",
         .key = key_msg.key,
         .code = key_msg.code,
+        .unshiftedKey = key_msg.unshiftedKey,
         .state = key_msg.state,
         .ctrl = key_msg.ctrl,
         .alt = key_msg.alt,
         .shift = key_msg.shift,
         .meta = key_msg.meta,
+        .altGraph = key_msg.altGraph,
+        .capsLock = key_msg.capsLock,
+        .numLock = key_msg.numLock,
         .repeat = key_msg.repeat,
         .timestamp = key_msg.timestamp,
         .keyCode = key_msg.keyCode,
     };
-    const output = keyboard.keyEventToBytes(key_event, &output_buf, cursor_key_app);
+    const output = keyboard.keyEventToBytes(key_event, &output_buf, encode_options);
 
     if (output.len > 0) {
+        // Only an encoded press should clear selection. Releases and keys
+        // suppressed by the active protocol mode have no visible input effect.
+        if (std.mem.eql(u8, key_msg.state, "down") and pane.hasSelection()) {
+            pane.clearSelection();
+            el.broadcastPaneUpdate(pane) catch |e| {
+                logRecoverable("broadcast selection clear on keypress", e);
+            };
+        }
         el.session.logPtySend(pane.id, output);
         pane.writeInput(output) catch |e| {
             logRecoverable("write key to PTY", e);

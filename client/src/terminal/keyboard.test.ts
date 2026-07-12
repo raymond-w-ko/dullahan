@@ -9,7 +9,7 @@ const mockWindow = {
   getSelection: () => ({ toString: () => "" }),
 };
 (globalThis as unknown as { window: typeof mockWindow }).window = mockWindow;
-import { KeyboardHandler } from "./keyboard";
+import { KeyboardHandler, resolveUnshiftedKey } from "./keyboard";
 import type { KeybindEntry, KeyMessage } from "./keyboard";
 import { parseKeybind } from "./keybinds";
 import type { ActionContext, TerminalAction } from "./actions";
@@ -24,6 +24,9 @@ function createKeyboardEvent(
     altKey?: boolean;
     shiftKey?: boolean;
     metaKey?: boolean;
+    altGraph?: boolean;
+    capsLock?: boolean;
+    numLock?: boolean;
     repeat?: boolean;
   }
 ): KeyboardEvent {
@@ -37,6 +40,14 @@ function createKeyboardEvent(
     shiftKey: options.shiftKey ?? false,
     metaKey: options.metaKey ?? false,
     repeat: options.repeat ?? false,
+    getModifierState: (modifier: string) =>
+      modifier === "AltGraph"
+        ? (options.altGraph ?? false)
+        : modifier === "CapsLock"
+          ? (options.capsLock ?? false)
+          : modifier === "NumLock"
+            ? (options.numLock ?? false)
+            : false,
     preventDefault: mock(() => {}),
     stopPropagation: mock(() => {}),
   } as unknown as KeyboardEvent;
@@ -137,6 +148,66 @@ function createMockElement(): HTMLElement & {
   return element as unknown as HTMLElement & typeof element;
 }
 
+describe("resolveUnshiftedKey", () => {
+  test("uses active keyboard layout map for non-US keys", () => {
+    const layout = new Map([["KeyA", "q"]]);
+    expect(resolveUnshiftedKey({ code: "KeyA", key: "Q", shiftKey: true }, layout)).toBe("q");
+  });
+
+  test("falls back to lowercasing shifted letters", () => {
+    expect(resolveUnshiftedKey({ code: "KeyQ", key: "Q", shiftKey: true }, null)).toBe("q");
+  });
+
+  test("Caps Lock does not become the unshifted letter", () => {
+    expect(resolveUnshiftedKey({ code: "KeyA", key: "A", shiftKey: false }, null)).toBe("a");
+  });
+
+  test("does not guess shifted punctuation without layout data", () => {
+    expect(resolveUnshiftedKey({ code: "Digit1", key: "!", shiftKey: true }, null)).toBeUndefined();
+  });
+});
+
+test("KeyboardHandler refreshes layout maps and ignores stale requests", async () => {
+  const original = Object.getOwnPropertyDescriptor(navigator, "keyboard");
+  const listeners = new Set<() => void>();
+  const resolvers: Array<(map: Map<string, string>) => void> = [];
+  const keyboard = {
+    getLayoutMap: () =>
+      new Promise<Map<string, string>>((resolve) => {
+        resolvers.push(resolve);
+      }),
+    addEventListener: (_type: "layoutchange", listener: () => void) => listeners.add(listener),
+    removeEventListener: (_type: "layoutchange", listener: () => void) => listeners.delete(listener),
+  };
+  Object.defineProperty(navigator, "keyboard", { configurable: true, value: keyboard });
+
+  try {
+    const localHandler = new KeyboardHandler();
+    const localElement = createMockElement();
+    const localMessages: KeyMessage[] = [];
+    localHandler.attach(localElement, (message) => localMessages.push(message));
+    expect(resolvers.length).toBe(1);
+
+    for (const listener of listeners) listener();
+    expect(resolvers.length).toBe(2);
+    resolvers[1]!(new Map([["KeyA", "x"]]));
+    await Promise.resolve();
+    resolvers[0]!(new Map([["KeyA", "q"]]));
+    await Promise.resolve();
+
+    localElement.triggerKeyDown(
+      createKeyboardEvent("keydown", { key: "X", code: "KeyA", shiftKey: true }),
+    );
+    expect(localMessages[0]?.unshiftedKey).toBe("x");
+
+    localHandler.detach();
+    expect(listeners.size).toBe(0);
+  } finally {
+    if (original) Object.defineProperty(navigator, "keyboard", original);
+    else delete (navigator as Navigator & { keyboard?: unknown }).keyboard;
+  }
+});
+
 describe("KeyboardHandler", () => {
   let handler: KeyboardHandler;
   let element: ReturnType<typeof createMockElement>;
@@ -183,6 +254,21 @@ describe("KeyboardHandler", () => {
       expect(messages.length).toBe(1);
       expect(messages[0]?.code).toBe("ControlLeft");
       expect(messages[0]?.state).toBe("down");
+    });
+
+    test("sends AltGraph and lock state", () => {
+      const event = createKeyboardEvent("keydown", {
+        key: "@",
+        code: "KeyQ",
+        ctrlKey: true,
+        altKey: true,
+        altGraph: true,
+        capsLock: true,
+      });
+      element.triggerKeyDown(event);
+
+      expect(messages[0]?.altGraph).toBe(true);
+      expect(messages[0]?.capsLock).toBe(true);
     });
   });
 
