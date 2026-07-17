@@ -10,7 +10,7 @@ const test_runners = @import("test_runners.zig");
 
 pub const CliArgs = struct {
     command: ?ipc.Command = null,
-    send_data: ?[]const u8 = null, // Data payload for send command (pane_id + text)
+    send_data: ?[]const u8 = null, // Optional IPC command payload
     timeout_ms: u32 = constants.timeout.cli_default_ms,
     socket_path: ?[]const u8 = null, // null means use default from paths module
     pid_path: ?[]const u8 = null, // null means use default from paths module
@@ -64,7 +64,8 @@ pub const CliArgs = struct {
                 }
             } else if (std.mem.eql(u8, arg, "send") or
                 std.mem.eql(u8, arg, "clipboard-set") or
-                std.mem.eql(u8, arg, "clipboard-get"))
+                std.mem.eql(u8, arg, "clipboard-get") or
+                std.mem.eql(u8, arg, "debug-log"))
             {
                 // Commands that take arguments: collect remaining args
                 args.command = ipc.Command.fromString(arg);

@@ -24,6 +24,9 @@ import type { TerminalAction, ActionContext } from "./actions";
 import { executeAction, canPerformAction } from "./actions";
 import type { KeyMessage } from "../../../protocol/schema/messages";
 import type { InputHandler } from "./handler";
+import { debug } from "../debug";
+
+const keyboardLog = debug.category("keyboard");
 
 export type { KeyMessage };
 
@@ -421,6 +424,7 @@ export class KeyboardHandler implements InputHandler<KeyboardCallback> {
       timestamp: performance.now(),
     };
 
+    keyboardLog.log("Browser keyboard event", message);
     this.callback(message);
   }
 }

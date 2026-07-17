@@ -132,6 +132,7 @@ Built-in test utilities:
 ./dullahan test hyperlink-test
 ./dullahan test shell-delta
 ./dullahan test single-parser-matrix
+./dullahan test kitty-keyboard-stress       # defaults to 1000 iterations
 ```
 
 ## Features Worth Calling Out
@@ -227,12 +228,14 @@ Server logging:
 ```bash
 DULLAHAN_DEBUG=+all,-delta ./dullahan serve -d
 ./dullahan debug-log +all,-delta
+./dullahan debug-log +keyboard          # Kitty stack, screen switches, key encoding
 ./dullahan debug-log list
 ```
 
 Client logging:
 
 - `?debug=+all,-mouse`
+- `?debug=+keyboard` for raw browser `KeyboardEvent` fields
 - or localStorage-backed debug config in the browser
 
 Useful runtime files live under `/tmp/dullahan-<uid>/`.

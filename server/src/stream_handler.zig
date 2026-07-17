@@ -30,6 +30,7 @@ const os_name = @import("os_name.zig");
 const dlog = @import("dlog.zig");
 
 const log = dlog.scoped(.pane);
+const keyboard_log = dlog.scoped(.keyboard);
 
 /// Handler that wraps a Terminal and Pane for full VT event handling.
 /// Terminal-modifying events go to the terminal, query/notification events go to the pane.
@@ -194,17 +195,40 @@ pub const Handler = struct {
             .protected_mode_iso => self.terminal.setProtectedMode(.iso),
             .protected_mode_dec => self.terminal.setProtectedMode(.dec),
             .mouse_shift_capture => self.terminal.flags.mouse_shift_capture = if (value) .true else .false,
-            .kitty_keyboard_push => self.terminal.screens.active.kitty_keyboard.push(value.flags),
-            .kitty_keyboard_pop => self.terminal.screens.active.kitty_keyboard.pop(@intCast(value)),
-            .kitty_keyboard_set => self.terminal.screens.active.kitty_keyboard.set(.set, value.flags),
-            .kitty_keyboard_set_or => self.terminal.screens.active.kitty_keyboard.set(.@"or", value.flags),
-            .kitty_keyboard_set_not => self.terminal.screens.active.kitty_keyboard.set(.not, value.flags),
+            .kitty_keyboard_push => {
+                const stack = &self.terminal.screens.active.kitty_keyboard;
+                const before = stack.current().int();
+                const before_idx = stack.idx;
+                stack.push(value.flags);
+                keyboard_log.info(
+                    "Kitty keyboard push: pane={d} screen={s} requested={d} flags={d}->{d} stack={d}->{d}",
+                    .{ self.pane.id, @tagName(self.terminal.screens.active_key), value.flags.int(), before, stack.current().int(), before_idx, stack.idx },
+                );
+            },
+            .kitty_keyboard_pop => {
+                const stack = &self.terminal.screens.active.kitty_keyboard;
+                const before = stack.current().int();
+                const before_idx = stack.idx;
+                stack.pop(@intCast(value));
+                keyboard_log.info(
+                    "Kitty keyboard pop: pane={d} screen={s} count={d} flags={d}->{d} stack={d}->{d}",
+                    .{ self.pane.id, @tagName(self.terminal.screens.active_key), value, before, stack.current().int(), before_idx, stack.idx },
+                );
+            },
+            .kitty_keyboard_set => self.setKittyKeyboard(.set, value.flags),
+            .kitty_keyboard_set_or => self.setKittyKeyboard(.@"or", value.flags),
+            .kitty_keyboard_set_not => self.setKittyKeyboard(.not, value.flags),
             .modify_key_format => {
+                const before = self.terminal.flags.modify_other_keys_2;
                 self.terminal.flags.modify_other_keys_2 = false;
                 switch (value) {
                     .other_keys_numeric => self.terminal.flags.modify_other_keys_2 = true,
                     else => {},
                 }
+                keyboard_log.info(
+                    "modifyOtherKeys: pane={d} screen={s} value={s} enabled={any}->{any}",
+                    .{ self.pane.id, @tagName(self.terminal.screens.active_key), @tagName(value), before, self.terminal.flags.modify_other_keys_2 },
+                );
             },
             .active_status_display => self.terminal.status_display = value,
             .decaln => try self.terminal.decaln(),
@@ -412,6 +436,43 @@ pub const Handler = struct {
         }
     }
 
+    fn setKittyKeyboard(
+        self: *Handler,
+        mode: ghostty.kitty.KeySetMode,
+        flags: ghostty.kitty.KeyFlags,
+    ) void {
+        const stack = &self.terminal.screens.active.kitty_keyboard;
+        const before = stack.current().int();
+        stack.set(mode, flags);
+        keyboard_log.info(
+            "Kitty keyboard set: pane={d} screen={s} operation={s} requested={d} flags={d}->{d} stack={d}",
+            .{ self.pane.id, @tagName(self.terminal.screens.active_key), @tagName(mode), flags.int(), before, stack.current().int(), stack.idx },
+        );
+    }
+
+    fn switchScreenMode(
+        self: *Handler,
+        mode: Terminal.SwitchScreenMode,
+        enabled: bool,
+    ) !void {
+        const from_key = self.terminal.screens.active_key;
+        const from_flags = self.terminal.screens.active.kitty_keyboard.current().int();
+        try self.terminal.switchScreenMode(mode, enabled);
+        const to_key = self.terminal.screens.active_key;
+        const to_flags = self.terminal.screens.active.kitty_keyboard.current().int();
+
+        keyboard_log.info(
+            "Terminal screen switch: pane={d} mode={s} enabled={any} screen={s}->{s} kitty_flags={d}->{d}",
+            .{ self.pane.id, @tagName(mode), enabled, @tagName(from_key), @tagName(to_key), from_flags, to_flags },
+        );
+        if (from_key != to_key and from_flags != 0 and to_flags == 0) {
+            keyboard_log.warn(
+                "Kitty keyboard mode became disabled across screen switch: pane={d} mode={s} screen={s}->{s} previous_flags={d}; application must negotiate on the destination screen",
+                .{ self.pane.id, @tagName(mode), @tagName(from_key), @tagName(to_key), from_flags },
+            );
+        }
+    }
+
     fn setMode(self: *Handler, mode: modes.Mode, enabled: bool) !void {
         if (mode == .synchronized_output and enabled and !self.pane.sync_output_allowed) {
             // Synchronized output is currently disabled for this pane.
@@ -435,9 +496,9 @@ pub const Handler = struct {
                 self.terminal.scrolling_region.right = self.terminal.cols - 1;
             },
 
-            .alt_screen_legacy => try self.terminal.switchScreenMode(.@"47", enabled),
-            .alt_screen => try self.terminal.switchScreenMode(.@"1047", enabled),
-            .alt_screen_save_cursor_clear_enter => try self.terminal.switchScreenMode(.@"1049", enabled),
+            .alt_screen_legacy => try self.switchScreenMode(.@"47", enabled),
+            .alt_screen => try self.switchScreenMode(.@"1047", enabled),
+            .alt_screen_save_cursor_clear_enter => try self.switchScreenMode(.@"1049", enabled),
 
             .save_cursor => if (enabled) {
                 self.terminal.saveCursor();
@@ -738,9 +799,14 @@ pub const Handler = struct {
 
     fn queryKittyKeyboard(self: *Handler) !void {
         // Kitty keyboard protocol query response: CSI ? <flags> u
-        const flags = self.terminal.screens.active.kitty_keyboard.current().int();
+        const stack = &self.terminal.screens.active.kitty_keyboard;
+        const flags = stack.current().int();
         var buf: [32]u8 = undefined;
         const resp = try std.fmt.bufPrint(&buf, "\x1b[?{}u", .{flags});
+        keyboard_log.info(
+            "Kitty keyboard query: pane={d} screen={s} flags={d} stack={d} response_len={d}",
+            .{ self.pane.id, @tagName(self.terminal.screens.active_key), flags, stack.idx, resp.len },
+        );
         try self.pane.writeResponse(resp);
     }
 

@@ -32,6 +32,7 @@ const log = std.log.scoped(.message_handlers);
 const conn_log = dlog.scoped(.connection);
 const clip_log = dlog.scoped(.clipboard);
 const window_log = dlog.scoped(.window);
+const keyboard_log = dlog.scoped(.keyboard);
 
 // Message type aliases
 const ParsedMessage = messages.ParsedMessage;
@@ -145,6 +146,41 @@ fn handleKey(el: *EventLoop, key_msg: ParsedKeyEvent) !void {
         .keyCode = key_msg.keyCode,
     };
     const output = keyboard.keyEventToBytes(key_event, &output_buf, encode_options);
+
+    keyboard_log.debug(
+        "Key encoding: pane={d} screen={s} key={s} code={s} state={s} ctrl={any} alt={any} shift={any} meta={any} kitty_flags={d} modify_other_keys_2={any} output={any}",
+        .{
+            pane.id,
+            @tagName(pane.terminal.screens.active_key),
+            key_msg.key,
+            key_msg.code,
+            key_msg.state,
+            key_msg.ctrl,
+            key_msg.alt,
+            key_msg.shift,
+            key_msg.meta,
+            encode_options.kitty_flags.int(),
+            encode_options.modify_other_keys_state_2,
+            output,
+        },
+    );
+
+    const is_modified_enter = std.mem.eql(u8, key_msg.state, "down") and
+        (key_msg.ctrl or key_msg.alt or key_msg.shift or key_msg.meta) and
+        (std.mem.eql(u8, key_msg.code, "Enter") or std.mem.eql(u8, key_msg.code, "NumpadEnter"));
+    if (is_modified_enter and encode_options.kitty_flags.int() == 0) {
+        const primary_flags = pane.terminal.screens.get(.primary).?.kitty_keyboard.current().int();
+        const alternate_flags = if (pane.terminal.screens.get(.alternate)) |screen|
+            screen.kitty_keyboard.current().int()
+        else
+            0;
+        if (primary_flags != alternate_flags) {
+            keyboard_log.warn(
+                "Modified Enter encoded with screen-local Kitty mode disabled while screen modes disagree: pane={d} active={s} primary_flags={d} alternate_flags={d} output={any}",
+                .{ pane.id, @tagName(pane.terminal.screens.active_key), primary_flags, alternate_flags, output },
+            );
+        }
+    }
 
     if (output.len > 0) {
         // Only an encoded press should clear selection. Releases and keys
