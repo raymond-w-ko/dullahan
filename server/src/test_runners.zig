@@ -20,6 +20,7 @@ const query_trace_runner = @import("query_trace_runner.zig");
 const single_parser_matrix = @import("single_parser_matrix.zig");
 const kitty_image_test = @import("image_test.zig");
 const iterm2_image_test = @import("iterm2_image_test.zig");
+const kitty_keyboard_stress = @import("kitty_keyboard_stress.zig");
 
 const log = std.log.scoped(.test_runners);
 
@@ -43,6 +44,7 @@ pub const TestCommand = enum {
     @"iterm2-image-test",
     @"single-parser-diag",
     @"single-parser-matrix",
+    @"kitty-keyboard-stress",
     help,
 
     pub fn fromString(s: []const u8) ?TestCommand {
@@ -65,6 +67,7 @@ pub const TestCommand = enum {
             .{ "iterm2-image-test", .@"iterm2-image-test" },
             .{ "single-parser-diag", .@"single-parser-diag" },
             .{ "single-parser-matrix", .@"single-parser-matrix" },
+            .{ "kitty-keyboard-stress", .@"kitty-keyboard-stress" },
             .{ "help", .help },
         });
         return map.get(s);
@@ -90,6 +93,7 @@ pub const TestCommand = enum {
             .@"iterm2-image-test" => "Display images via iTerm2 OSC 1337 protocol",
             .@"single-parser-diag" => "Emit reusable single-parser diagnostics artifacts",
             .@"single-parser-matrix" => "Run the single-parser compatibility scenario matrix",
+            .@"kitty-keyboard-stress" => "Stress Kitty negotiation, fragmentation, and screen-local modes",
             .help => "Show available test commands",
         };
     }
@@ -121,6 +125,7 @@ pub fn printTestUsage() void {
         \\  dullahan test iterm2-image-test /tmp/dullahan-image-test.png
         \\  dullahan test single-parser-diag    # Emit reusable diagnostics artifacts
         \\  dullahan test single-parser-matrix  # Run the single-parser compatibility matrix
+        \\  dullahan test kitty-keyboard-stress # Run 1000 negotiation stress iterations
         \\
     , .{});
 }
@@ -146,6 +151,7 @@ pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand, args: ?[]const u8
         .@"iterm2-image-test" => try iterm2_image_test.run(allocator, args),
         .@"single-parser-diag" => try runSingleParserDiag(allocator),
         .@"single-parser-matrix" => try single_parser_matrix.run(allocator),
+        .@"kitty-keyboard-stress" => try kitty_keyboard_stress.run(allocator, args),
         .help => printTestUsage(),
     }
 }
