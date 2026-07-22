@@ -37,6 +37,8 @@ import {
   prepareSelection,
   type StyledRun,
 } from "../terminal/cellRendering";
+import { resolveFontCoverageProfile } from "../terminal/fontCoverage";
+import { rowRunsCacheContextChanged } from "../terminal/rowRunsCache";
 import { renderLine } from "../terminal/cursorRendering";
 import type { CursorConfig, CursorState } from "../terminal/cursorRendering";
 import type { TerminalSnapshot } from "../terminal/connection";
@@ -250,6 +252,7 @@ export interface TerminalViewProps {
   onKeyInput?: () => void;
   connection: TerminalConnection | null;
   theme: string;
+  fontFamily: string;
   deltaChangedRowIds: bigint[];
   deltaGen: number;
 }
@@ -266,6 +269,7 @@ export function TerminalView({
   onKeyInput,
   connection,
   theme,
+  fontFamily,
   deltaChangedRowIds,
   deltaGen,
 }: TerminalViewProps) {
@@ -292,7 +296,13 @@ export function TerminalView({
     cols,
     altScreen: snapshot.altScreen,
     theme,
+    fontCoverageId: null as string | null,
   });
+  const fontCoverage = useMemo(
+    () => resolveFontCoverageProfile(fontFamily),
+    [fontFamily]
+  );
+  const fontCoverageId = fontCoverage?.id ?? null;
 
   // Keep current snapshot in a ref so getSelection closure always accesses latest
   const snapshotRef = useRef(snapshot);
@@ -671,23 +681,20 @@ export function TerminalView({
   const lines = useMemo(() => {
     const cache = rowRunsCacheRef.current;
     const context = cacheContextRef.current;
+    const nextContext = {
+      paneId,
+      cols,
+      altScreen: snapshot.altScreen,
+      theme,
+      fontCoverageId,
+    };
     const lineState = lineRenderStateRef.current;
     const hasViewportRows = snapshot.viewportRows !== undefined;
     let forceFullRecompute = false;
 
-    if (
-      context.paneId !== paneId ||
-      context.cols !== cols ||
-      context.altScreen !== snapshot.altScreen ||
-      context.theme !== theme
-    ) {
+    if (rowRunsCacheContextChanged(context, nextContext)) {
       cache.clear();
-      cacheContextRef.current = {
-        paneId,
-        cols,
-        altScreen: snapshot.altScreen,
-        theme,
-      };
+      cacheContextRef.current = nextContext;
       forceFullRecompute = true;
     }
 
@@ -786,10 +793,22 @@ export function TerminalView({
             rowView.hyperlinks,
             rowView.graphemes,
             rowView.offset,
-            true
+            true,
+            fontCoverage
           );
         } else if (snapshot.viewportRows) {
-          runs = cellsRowToRuns([], styles, cols, y, preparedSelection);
+          runs = cellsRowToRuns(
+            [],
+            styles,
+            cols,
+            y,
+            preparedSelection,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            fontCoverage
+          );
         } else {
           runs = cellsRowToRuns(
             snapshot.cells,
@@ -798,7 +817,10 @@ export function TerminalView({
             y,
             preparedSelection,
             snapshot.hyperlinks,
-            snapshot.graphemes
+            snapshot.graphemes,
+            undefined,
+            false,
+            fontCoverage
           );
         }
 
@@ -850,6 +872,8 @@ export function TerminalView({
     snapshot.viewportRows,
     snapshot.selection,
     theme,
+    fontCoverage,
+    fontCoverageId,
     deltaChangedRowIds,
     deltaGen,
     snapshot.gen,

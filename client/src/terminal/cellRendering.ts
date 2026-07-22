@@ -6,26 +6,25 @@ import { getStyle, ColorTag } from "../../../protocol/schema/style";
 import type { Cell, HyperlinkTable, GraphemeTable } from "../../../protocol/schema/cell";
 import type { Style, StyleTable, Color } from "../../../protocol/schema/style";
 import {
+  profileHasCodepoint,
+  textNeedsFontFallback,
+  type FontCoverageProfile,
+} from "./fontCoverage";
+import {
   normalizeSelectionBounds,
   type SelectionBounds,
 } from "../../../protocol/schema/messages";
 
-/** Range of a wide character within the run's text (start inclusive, end exclusive) */
-export interface WideCharRange {
-  start: number;
-  end: number;
-}
-
 /** A run of consecutive cells with the same style */
 export interface StyledRun {
   text: string;
+  cellCount: number;
+  fixedWidth?: 1 | 2;
   styleId: number;
   style: Style;
   selected?: boolean; // True if this run is within selection
   bgOverride?: Color; // Cell content-based bg color (BG_COLOR_PALETTE/RGB)
   hyperlink?: string; // URL for OSC 8 hyperlinks
-  wideRanges?: WideCharRange[]; // Ranges of wide (2-cell) characters within text
-  singleRanges?: WideCharRange[]; // Ranges of single-cell private-use characters within text
 }
 
 export interface PreparedSelection extends SelectionBounds {
@@ -33,80 +32,24 @@ export interface PreparedSelection extends SelectionBounds {
   maxX: number;
 }
 
-function isPrivateUseCodePoint(cp: number): boolean {
-  // Private Use Areas:
-  // - BMP:      U+E000..U+F8FF
-  // - Plane 15: U+F0000..U+FFFFD
-  // - Plane 16: U+100000..U+10FFFD
-  return (
-    (cp >= 0xe000 && cp <= 0xf8ff) ||
-    (cp >= 0xf0000 && cp <= 0xffffd) ||
-    (cp >= 0x100000 && cp <= 0x10fffd)
-  );
-}
-
-function getCellCodepoint(cell: Cell | undefined): number {
-  if (!cell) return 0;
-  if (
-    cell.content.tag === ContentTag.CODEPOINT ||
-    cell.content.tag === ContentTag.CODEPOINT_GRAPHEME
-  ) {
-    return cell.content.codepoint;
-  }
-  return 0;
-}
-
-function isWhitespaceCodepoint(cp: number): boolean {
-  return cp === 0 || cp === 0x0020 || cp === 0x2002;
-}
-
-function isPowerline(cp: number): boolean {
-  return cp >= 0xe0b0 && cp <= 0xe0d7;
-}
-
-function isBoxDrawing(cp: number): boolean {
-  return cp >= 0x2500 && cp <= 0x257f;
-}
-
-function isBlockElement(cp: number): boolean {
-  return cp >= 0x2580 && cp <= 0x259f;
-}
-
-function isLegacyComputing(cp: number): boolean {
-  return (cp >= 0x1fb00 && cp <= 0x1fbff) || (cp >= 0x1cc00 && cp <= 0x1cebf);
-}
-
-function isGraphicsElement(cp: number): boolean {
-  return isBoxDrawing(cp) || isBlockElement(cp) || isLegacyComputing(cp) || isPowerline(cp);
-}
-
-function isSymbolLikeCodepoint(cp: number): boolean {
-  return isPrivateUseCodePoint(cp);
-}
-
-const forcedSingleCodepoints = new Set<number>([
-  0x279b,
-]);
-
-function isForcedSingleCodepoint(cp: number): boolean {
-  return forcedSingleCodepoints.has(cp);
-}
-
-function isFastPathCell(cell: Cell | undefined): boolean {
+function isFastPathCell(
+  cell: Cell | undefined,
+  fontCoverage?: FontCoverageProfile
+): boolean {
   if (!cell) return true;
   if (cell.wide !== Wide.NARROW) return false;
   if (cell.hyperlink) return false;
   if (cell.content.tag !== ContentTag.CODEPOINT) return false;
   if (cell.content.codepoint === 0) return true;
-  const cp = cell.content.codepoint;
-  return !isSymbolLikeCodepoint(cp) && !isForcedSingleCodepoint(cp);
+  return !fontCoverage || profileHasCodepoint(fontCoverage, cell.content.codepoint);
 }
 
 function tryBuildFastPathRuns(
   cells: Cell[],
   styles: StyleTable,
   cols: number,
-  baseOffset: number
+  baseOffset: number,
+  fontCoverage?: FontCoverageProfile
 ): StyledRun[] | null {
   const runs: StyledRun[] = [];
   let currentRun: StyledRun | null = null;
@@ -114,62 +57,22 @@ function tryBuildFastPathRuns(
   for (let x = 0; x < cols; x++) {
     const idx = baseOffset + x;
     const cell = cells[idx];
-    if (!isFastPathCell(cell)) {
+    if (!isFastPathCell(cell, fontCoverage)) {
       return null;
     }
     const char = cell ? cellToChar(cell, undefined, idx) : " ";
     const styleId = cell?.styleId ?? 0;
     if (currentRun && currentRun.styleId === styleId) {
       currentRun.text += char;
+      currentRun.cellCount += 1;
       continue;
     }
     const style = getStyle(styles, styleId);
-    currentRun = { text: char, styleId, style };
+    currentRun = { text: char, cellCount: 1, styleId, style };
     runs.push(currentRun);
   }
 
   return runs;
-}
-
-function shouldExpandSymbol(
-  cells: Cell[],
-  idx: number,
-  cols: number
-): boolean {
-  const cell = cells[idx];
-  if (!cell) return false;
-  if (cell.wide !== Wide.NARROW) return false;
-
-  const cp = getCellCodepoint(cell);
-  if (!isSymbolLikeCodepoint(cp)) return false;
-
-  const x = idx % cols;
-  if (x >= cols - 1) return false;
-
-  const nextCell = cells[idx + 1];
-  if (!nextCell || nextCell.wide !== Wide.NARROW) return false;
-  const nextCp = getCellCodepoint(nextCell);
-  if (!isWhitespaceCodepoint(nextCp)) return false;
-
-  if (x > 0) {
-    const prevCell = cells[idx - 1];
-    const prevCp = getCellCodepoint(prevCell);
-    if (isSymbolLikeCodepoint(prevCp) && !isGraphicsElement(prevCp)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function hasPrivateUse(text: string): boolean {
-  for (const ch of text) {
-    const cp = ch.codePointAt(0);
-    if (cp !== undefined && isPrivateUseCodePoint(cp)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /**
@@ -290,11 +193,11 @@ export function cellsRowToRuns(
   hyperlinks?: HyperlinkTable,
   graphemes?: GraphemeTable,
   rowOffset?: number,
-  rowRelativeTables: boolean = false
+  rowRelativeTables: boolean = false,
+  fontCoverage?: FontCoverageProfile
 ): StyledRun[] {
   const runs: StyledRun[] = [];
   let currentRun: StyledRun | null = null;
-  let skipNext = false;
   const preparedSelection =
     selection === undefined
       ? undefined
@@ -304,19 +207,15 @@ export function cellsRowToRuns(
   const baseOffset = rowOffset ?? y * cols;
 
   // Fast path: plain rows with no selection/link/grapheme metadata and no
-  // wide/symbol handling can be converted with minimal branching/allocation.
+  // fixed-width handling can be converted with minimal branching/allocation.
   if (!preparedSelection && !hyperlinks && !graphemes) {
-    const fastRuns = tryBuildFastPathRuns(cells, styles, cols, baseOffset);
+    const fastRuns = tryBuildFastPathRuns(cells, styles, cols, baseOffset, fontCoverage);
     if (fastRuns) {
       return fastRuns;
     }
   }
 
   for (let x = 0; x < cols; x++) {
-    if (skipNext) {
-      skipNext = false;
-      continue;
-    }
     const idx = baseOffset + x;
     const cell = cells[idx];
     const tableIndex = rowRelativeTables ? x : idx;
@@ -326,11 +225,6 @@ export function cellsRowToRuns(
     // still occupy a cell to keep column alignment.
     if (cell && cell.wide === Wide.SPACER_TAIL) {
       continue;
-    }
-
-    const expandSymbol = shouldExpandSymbol(cells, idx, cols);
-    if (expandSymbol) {
-      skipNext = true;
     }
 
     const char = cell ? cellToChar(cell, graphemes, tableIndex) : " ";
@@ -343,12 +237,35 @@ export function cellsRowToRuns(
     // Get hyperlink URL if this cell is part of a hyperlink
     const hyperlink = (cell?.hyperlink && hyperlinks) ? hyperlinks.get(tableIndex) : undefined;
 
-    // Check if this is a wide character, or a private-use glyph that should
-    // be constrained to a single cell (e.g. Nerd Font icons).
-    const isWide = cell?.wide === Wide.WIDE || expandSymbol;
-    const cp = getCellCodepoint(cell);
-    const isPrivateUse = char.length > 0 && hasPrivateUse(char);
-    const isSingle = !isWide && (isPrivateUse || isForcedSingleCodepoint(cp));
+    const isWide = cell?.wide === Wide.WIDE;
+    const isGrapheme = cell?.content.tag === ContentTag.CODEPOINT_GRAPHEME;
+    const needsFallback = fontCoverage
+      ? textNeedsFontFallback(char, fontCoverage)
+      : false;
+    const fixedWidth: 1 | 2 | undefined = isWide
+      ? 2
+      : isGrapheme || needsFallback
+        ? 1
+        : undefined;
+
+    // Fixed-width glyphs remain discrete elements. This preserves the
+    // server's logical cell occupancy while allowing the browser to select a
+    // fallback face from the configured font stack.
+    if (fixedWidth !== undefined) {
+      const style = getStyle(styles, styleId);
+      runs.push({
+        text: char,
+        cellCount: fixedWidth,
+        fixedWidth,
+        styleId,
+        style,
+        selected,
+        bgOverride,
+        hyperlink,
+      });
+      currentRun = null;
+      continue;
+    }
 
     // Start a new run if style, selection, bgOverride, or hyperlink changes
     if (
@@ -358,32 +275,19 @@ export function cellsRowToRuns(
       colorsEqual(currentRun.bgOverride, bgOverride) &&
       currentRun.hyperlink === hyperlink
     ) {
-      if (isWide) {
-        // Track the range of this wide character (graphemes can be multi-codepoint)
-        if (!currentRun.wideRanges) {
-          currentRun.wideRanges = [];
-        }
-        const start = currentRun.text.length;
-        currentRun.text += char;
-        currentRun.wideRanges.push({ start, end: currentRun.text.length });
-      } else if (isSingle) {
-        if (!currentRun.singleRanges) {
-          currentRun.singleRanges = [];
-        }
-        const start = currentRun.text.length;
-        currentRun.text += char;
-        currentRun.singleRanges.push({ start, end: currentRun.text.length });
-      } else {
-        currentRun.text += char;
-      }
+      currentRun.text += char;
+      currentRun.cellCount += 1;
     } else {
       const style = getStyle(styles, styleId);
-      currentRun = { text: char, styleId, style, selected, bgOverride, hyperlink };
-      if (isWide) {
-        currentRun.wideRanges = [{ start: 0, end: char.length }];
-      } else if (isSingle) {
-        currentRun.singleRanges = [{ start: 0, end: char.length }];
-      }
+      currentRun = {
+        text: char,
+        cellCount: 1,
+        styleId,
+        style,
+        selected,
+        bgOverride,
+        hyperlink,
+      };
       runs.push(currentRun);
     }
   }
@@ -398,13 +302,27 @@ export function cellsToRuns(
   rows: number,
   selection?: SelectionBounds,
   hyperlinks?: HyperlinkTable,
-  graphemes?: GraphemeTable
+  graphemes?: GraphemeTable,
+  fontCoverage?: FontCoverageProfile
 ): StyledRun[][] {
   const lines: StyledRun[][] = [];
   const preparedSelection = prepareSelection(selection);
 
   for (let y = 0; y < rows; y++) {
-    lines.push(cellsRowToRuns(cells, styles, cols, y, preparedSelection, hyperlinks, graphemes));
+    lines.push(
+      cellsRowToRuns(
+        cells,
+        styles,
+        cols,
+        y,
+        preparedSelection,
+        hyperlinks,
+        graphemes,
+        undefined,
+        false,
+        fontCoverage
+      )
+    );
   }
 
   return lines;

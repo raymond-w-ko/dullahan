@@ -8,7 +8,7 @@ import {
   getCellColor,
   colorToCss,
 } from "./terminalStyle";
-import type { StyledRun, WideCharRange } from "./cellRendering";
+import type { StyledRun } from "./cellRendering";
 import type { Style } from "../../../protocol/schema/style";
 import { ColorTag, DEFAULT_STYLE } from "../../../protocol/schema/style";
 
@@ -44,6 +44,14 @@ function appendClass(base: string, extra: string): string {
   return base ? `${base} ${extra}` : extra;
 }
 
+function appendFixedWidthClass(classes: string, fixedWidth?: 1 | 2): string {
+  if (fixedWidth === undefined) return classes;
+  return appendClass(
+    classes,
+    fixedWidth === 2 ? "fixed-cell fixed-cell-wide" : "fixed-cell"
+  );
+}
+
 /** Build class string for a run, including selection state and bgOverride palette */
 function runClasses(run: StyledRun): string {
   let classes = styleToClassesCached(run.styleId, run.style);
@@ -54,21 +62,10 @@ function runClasses(run: StyledRun): string {
   return run.selected ? appendClass(classes, "selected") : classes;
 }
 
-function sortRanges(ranges?: WideCharRange[]): WideCharRange[] {
-  if (!ranges || ranges.length === 0) {
-    return [];
-  }
-  if (ranges.length === 1) {
-    return ranges;
-  }
-  return [...ranges].sort((a, b) => a.start - b.start);
-}
-
 interface LineSegment {
   text: string;
   cells: number;
-  isWide: boolean;
-  isSingle: boolean;
+  fixedWidth?: 1 | 2;
   classes: string;
   style: h.JSX.CSSProperties | undefined;
   hyperlink?: string;
@@ -129,128 +126,45 @@ function takeFirstCodepoint(text: string): { ch: string; rest: string } {
   return { ch: "", rest: "" };
 }
 
-function buildRunSegments(run: StyledRun): LineSegment[] {
-  const baseClasses = runClasses(run);
-  const baseStyle = runInlineStyle(run);
-  const wideRanges = sortRanges(run.wideRanges);
-  const singleRanges = sortRanges(run.singleRanges);
-  let wideIndex = 0;
-  let singleIndex = 0;
-  let nextWide = wideRanges[0];
-  let nextSingle = singleRanges[0];
-  const segments: LineSegment[] = [];
-  let bufferStart = 0;
-  let bufferCells = 0;
-
-  const flushBuffer = (end: number) => {
-    if (bufferCells === 0) {
-      return;
-    }
-    segments.push({
-      text: run.text.slice(bufferStart, end),
-      cells: bufferCells,
-      isWide: false,
-      isSingle: false,
-      classes: baseClasses,
-      style: baseStyle,
-      hyperlink: run.hyperlink,
-      styleRef: run.style,
-    });
-    bufferCells = 0;
-  };
-
-  for (let i = 0; i < run.text.length; ) {
-    if (nextWide && nextWide.start === i) {
-      flushBuffer(i);
-      const end = nextWide.end;
-      segments.push({
-        text: run.text.slice(i, end),
-        cells: 2,
-        isWide: true,
-        isSingle: false,
-        classes: baseClasses,
-        style: baseStyle,
-        hyperlink: run.hyperlink,
-        styleRef: run.style,
-      });
-      i = end;
-      wideIndex += 1;
-      nextWide = wideRanges[wideIndex];
-      bufferStart = i;
-      continue;
-    }
-
-    if (nextSingle && nextSingle.start === i) {
-      flushBuffer(i);
-      const end = nextSingle.end;
-      segments.push({
-        text: run.text.slice(i, end),
-        cells: 1,
-        isWide: false,
-        isSingle: true,
-        classes: baseClasses,
-        style: baseStyle,
-        hyperlink: run.hyperlink,
-        styleRef: run.style,
-      });
-      i = end;
-      singleIndex += 1;
-      nextSingle = singleRanges[singleIndex];
-      bufferStart = i;
-      continue;
-    }
-
-    if (bufferCells === 0) {
-      bufferStart = i;
-    }
-    const cp = run.text.codePointAt(i);
-    const len = cp !== undefined && cp > 0xffff ? 2 : 1;
-    bufferCells += 1;
-    i += len;
-  }
-
-  flushBuffer(run.text.length);
-  return segments;
-}
-
 function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[] {
   const segments: PositionedSegment[] = [];
   let cellPos = 0;
 
   for (const run of runs) {
-    const runSegments = buildRunSegments(run);
-    for (const segment of runSegments) {
-      if (cellPos >= cols) {
-        break;
-      }
-      const remaining = cols - cellPos;
-      if (segment.cells <= remaining) {
-        const startCell = cellPos;
-        const endCell = cellPos + segment.cells;
-        segments.push({ ...segment, startCell, endCell });
-        cellPos = endCell;
-      } else {
-        if (segment.isWide || remaining === 0) {
-          cellPos = cols;
-          break;
-        }
-        const truncatedText = sliceCodepoints(segment.text, remaining);
-        if (truncatedText.length > 0) {
-          const startCell = cellPos;
-          const endCell = cellPos + remaining;
-          segments.push({
-            ...segment,
-            text: truncatedText,
-            cells: remaining,
-            startCell,
-            endCell,
-          });
-        }
+    if (cellPos >= cols) break;
+    const segment: LineSegment = {
+      text: run.text,
+      cells: run.cellCount,
+      fixedWidth: run.fixedWidth,
+      classes: runClasses(run),
+      style: runInlineStyle(run),
+      hyperlink: run.hyperlink,
+      styleRef: run.style,
+    };
+    const remaining = cols - cellPos;
+    if (segment.cells <= remaining) {
+      const startCell = cellPos;
+      const endCell = cellPos + segment.cells;
+      segments.push({ ...segment, startCell, endCell });
+      cellPos = endCell;
+    } else {
+      if (segment.fixedWidth !== undefined || remaining === 0) {
         cellPos = cols;
         break;
       }
-    }
-    if (cellPos >= cols) {
+      const truncatedText = sliceCodepoints(segment.text, remaining);
+      if (truncatedText.length > 0) {
+        const startCell = cellPos;
+        const endCell = cellPos + remaining;
+        segments.push({
+          ...segment,
+          text: truncatedText,
+          cells: remaining,
+          startCell,
+          endCell,
+        });
+      }
+      cellPos = cols;
       break;
     }
   }
@@ -260,8 +174,6 @@ function buildLineSegments(runs: StyledRun[], cols: number): PositionedSegment[]
     segments.push({
       text: " ".repeat(remaining),
       cells: remaining,
-      isWide: false,
-      isSingle: false,
       classes: "",
       style: undefined,
       styleRef: DEFAULT_STYLE,
@@ -304,10 +216,8 @@ function runInlineStyle(run: StyledRun): h.JSX.CSSProperties | undefined {
 }
 
 /**
- * Render text content, wrapping wide characters in explicit-width spans.
- * Wide characters (CJK, emoji) need explicit 2-cell width for proper alignment
- * when mixed with different fallback fonts. Private-use glyphs can be
- * constrained to a single cell.
+ * Render text content with explicit-width spans already isolated by the cell
+ * conversion pass.
  */
 /** Render a line of runs, inserting cursor if needed */
 export function renderLine(
@@ -363,17 +273,12 @@ export function renderLine(
         }
       }
 
-      const widthClass = segment.isWide
-        ? "wide-char"
-        : segment.isSingle
-          ? "single-char"
-          : "";
       const classesBase = preserveStyle
         ? appendClass(cursorClass, segment.classes)
         : cursorClass;
-      const classes = widthClass ? appendClass(classesBase, widthClass) : classesBase;
+      const classes = appendFixedWidthClass(classesBase, segment.fixedWidth);
 
-      if (segment.isWide) {
+      if (segment.fixedWidth !== undefined) {
         elements.push(
           <span
             key={`s-${i}-cursor`}
@@ -395,8 +300,7 @@ export function renderLine(
                 ...segment,
                 text: before,
                 cells: countCodepoints(before),
-                isWide: false,
-                isSingle: false,
+                fixedWidth: undefined,
               },
               `s-${i}-before`
             )
@@ -420,8 +324,7 @@ export function renderLine(
                 ...segment,
                 text: after,
                 cells: countCodepoints(after),
-                isWide: false,
-                isSingle: false,
+                fixedWidth: undefined,
               },
               `s-${i}-after`
             )
@@ -449,15 +352,7 @@ function renderSegmentElement(
   segment: LineSegment,
   key: string
 ): preact.JSX.Element {
-  const widthClass = segment.isWide
-    ? "wide-char"
-    : segment.isSingle
-      ? "single-char"
-      : "";
-  let classes = segment.classes;
-  if (widthClass) {
-    classes = appendClass(classes, widthClass);
-  }
+  let classes = appendFixedWidthClass(segment.classes, segment.fixedWidth);
   if (segment.hyperlink) {
     classes = appendClass(classes, "hyperlink");
   }

@@ -141,6 +141,7 @@ export interface Store {
 
   // Config (mirrored from config module for reactivity)
   theme: string;
+  fontFamily: string;
   cursorStyle: "block" | "bar" | "underline" | "block_hollow";
   cursorColor: string;
   cursorText: string;
@@ -256,6 +257,7 @@ const store: Store = {
   layoutDividerEnabled: false,
 
   theme: config.get("theme") as string,
+  fontFamily: config.get("fontFamily") as string,
   cursorStyle: config.get("cursorStyle") as Store["cursorStyle"],
   cursorColor: config.get("cursorColor") as string,
   cursorText: config.get("cursorText") as string,
@@ -846,6 +848,7 @@ export function triggerDimensionRecalc() {
 // Config sync
 export function syncConfig() {
   store.theme = config.get("theme") as string;
+  store.fontFamily = config.get("fontFamily") as string;
   store.cursorStyle = config.get("cursorStyle") as Store["cursorStyle"];
   store.cursorColor = config.get("cursorColor") as string;
   store.cursorText = config.get("cursorText") as string;
@@ -1097,6 +1100,7 @@ export function initConnection() {
     storeLog.log(`config-change ${String(key)}=${String(value)}`);
     if (
       key === "theme" ||
+      key === "fontFamily" ||
       key === "cursorStyle" ||
       key === "cursorColor" ||
       key === "cursorText" ||

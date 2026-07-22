@@ -13,8 +13,6 @@ export interface SettingsState {
   spacing: "compact" | "comfortable";
   fontSize: number;
   fontFamily: string;
-  symbolFontSize: number;
-  symbolFontFamily: string;
   fontStyle: string;
   fontFeature: string;
   lineHeight: number;
@@ -34,8 +32,6 @@ const CSS_KEYS = new Set<keyof SettingsState>([
   "spacing",
   "fontSize",
   "fontFamily",
-  "symbolFontSize",
-  "symbolFontFamily",
   "fontStyle",
   "fontFeature",
   "lineHeight",
@@ -63,8 +59,6 @@ export function useSettings() {
     spacing: config.get("spacing"),
     fontSize: config.get("fontSize"),
     fontFamily: config.get("fontFamily"),
-    symbolFontSize: config.get("symbolFontSize"),
-    symbolFontFamily: config.get("symbolFontFamily"),
     fontStyle: config.get("fontStyle"),
     fontFeature: config.get("fontFeature"),
     lineHeight: config.get("lineHeight"),

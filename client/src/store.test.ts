@@ -7,6 +7,7 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 // Mock the config module before importing store
 const mockConfigValues: Record<string, any> = {
   theme: "atom-one-dark",
+  fontFamily: "Iosevka Term, monospace",
   cursorStyle: "block",
   cursorColor: "",
   cursorText: "",
@@ -497,12 +498,14 @@ describe("setLayoutPickerOpen", () => {
 describe("syncConfig", () => {
   test("syncs config values to store", () => {
     mockConfigValues.theme = "nord";
+    mockConfigValues.fontFamily = "AnthropicMono, Iosevka Term";
     mockConfigValues.cursorStyle = "bar";
 
     syncConfig();
 
     const store = getStore();
     expect(store.theme).toBe("nord");
+    expect(store.fontFamily).toBe("AnthropicMono, Iosevka Term");
     expect(store.cursorStyle).toBe("bar");
   });
 

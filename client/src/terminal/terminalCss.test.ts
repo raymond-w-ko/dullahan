@@ -28,4 +28,18 @@ describe("terminal CSS", () => {
     expect(backgroundRule).toContain("z-index: 1");
     expect(foregroundRule).toContain("z-index: 3");
   });
+
+  it("constrains fixed glyphs without overriding their fallback font", async () => {
+    const css = await Bun.file(new URL("../dullahan.css", import.meta.url)).text();
+    const fixedRule = cssRuleBody(css, ".fixed-cell");
+    const wideRule = cssRuleBody(css, ".fixed-cell-wide");
+
+    expect(fixedRule).toContain("display: inline-block");
+    expect(fixedRule).toContain("vertical-align: top");
+    expect(fixedRule).toContain("overflow: hidden");
+    expect(fixedRule).toContain("width: var(--cell-width, 1ch)");
+    expect(fixedRule).not.toContain("font-family");
+    expect(wideRule).toContain("calc(2 * var(--cell-width, 1ch))");
+    expect(css).not.toContain("--term-symbol-font");
+  });
 });

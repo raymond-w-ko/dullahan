@@ -40,8 +40,6 @@ export interface ConfigSchema {
   // Font settings
   fontFamily: string;
   fontSize: number;
-  symbolFontFamily: string;
-  symbolFontSize: number;
   fontStyle: string;
   fontFeature: string;
   lineHeight: number;
@@ -88,8 +86,6 @@ export const DEFAULTS: ConfigSchema = {
   // Font settings
   fontFamily: 'Iosevka Term, JetBrains Mono, Fira Code, Cascadia Code, SF Mono, Consolas, Source Code Pro, DejaVu Sans Mono, Hack, Inconsolata, Ubuntu Mono, Menlo, Monaco, Courier New, Symbols Nerd Font, monospace',
   fontSize: 14,
-  symbolFontFamily: 'Symbols Nerd Font',
-  symbolFontSize: 0,
   fontStyle: 'normal',
   fontFeature: '',
   lineHeight: 16,
@@ -284,16 +280,6 @@ export function applyToCSS(): void {
   // Font settings
   root.style.setProperty('--term-font', get('fontFamily'));
   root.style.setProperty('--term-font-size', `${get('fontSize')}px`);
-  const symbolFontFamily = get('symbolFontFamily').trim();
-  root.style.setProperty(
-    '--term-symbol-font',
-    symbolFontFamily.length > 0 ? symbolFontFamily : get('fontFamily')
-  );
-  const symbolFontSize = get('symbolFontSize');
-  root.style.setProperty(
-    '--term-symbol-font-size',
-    `${symbolFontSize > 0 ? symbolFontSize : get('fontSize')}px`
-  );
   root.style.setProperty('--term-font-weight', get('fontStyle'));
   root.style.setProperty('--term-font-feature', get('fontFeature') || 'normal');
   root.style.setProperty('--term-line-height', `${get('lineHeight')}px`);

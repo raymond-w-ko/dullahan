@@ -148,7 +148,6 @@ describe("get", () => {
   test("returns default when not set", () => {
     expect(get("theme")).toBe(DEFAULTS.theme);
     expect(get("fontSize")).toBe(DEFAULTS.fontSize);
-    expect(get("symbolFontSize")).toBe(DEFAULTS.symbolFontSize);
     expect(get("selectionClearOnCopy")).toBe(DEFAULTS.selectionClearOnCopy);
   });
 
@@ -275,7 +274,6 @@ describe("getAll", () => {
     const all = getAll();
     expect(all.theme).toBe(DEFAULTS.theme);
     expect(all.fontSize).toBe(DEFAULTS.fontSize);
-    expect(all.symbolFontSize).toBe(DEFAULTS.symbolFontSize);
     expect(all.cursorStyle).toBe(DEFAULTS.cursorStyle);
   });
 
@@ -287,6 +285,15 @@ describe("getAll", () => {
     expect(all.theme).toBe("nord");
     expect(all.fontSize).toBe(16);
     expect(all.cursorStyle).toBe(DEFAULTS.cursorStyle); // Still default
+  });
+
+  test("ignores stale removed symbol-font keys", () => {
+    mockStorage.set("dullahan.symbolFontFamily", "Symbols Nerd Font");
+    mockStorage.set("dullahan.symbolFontSize", "18");
+
+    const all = getAll();
+    expect("symbolFontFamily" in all).toBe(false);
+    expect("symbolFontSize" in all).toBe(false);
   });
 
   test("returns all config keys", () => {
@@ -338,8 +345,6 @@ describe("DEFAULTS", () => {
     expect(DEFAULTS.theme).toBeDefined();
     expect(DEFAULTS.fontSize).toBeDefined();
     expect(DEFAULTS.fontFamily).toBeDefined();
-    expect(DEFAULTS.symbolFontSize).toBeDefined();
-    expect(DEFAULTS.symbolFontFamily).toBeDefined();
     expect(DEFAULTS.cursorStyle).toBeDefined();
     expect(DEFAULTS.bellFeatures).toBeDefined();
   });
@@ -357,8 +362,6 @@ describe("DEFAULTS", () => {
   test("has reasonable font size", () => {
     expect(DEFAULTS.fontSize).toBeGreaterThan(0);
     expect(DEFAULTS.fontSize).toBeLessThan(100);
-    expect(DEFAULTS.symbolFontSize).toBeGreaterThanOrEqual(0);
-    expect(DEFAULTS.symbolFontSize).toBeLessThan(100);
   });
 
   test("has reasonable line height", () => {

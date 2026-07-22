@@ -67,6 +67,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
     dimensionVersion,
     connection,
     theme,
+    fontFamily,
   } = useStoreSelector(
     (store) => ({
         connected: store.connected,
@@ -79,6 +80,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
         dimensionVersion: store.dimensionVersion,
         connection: store.connection,
         theme: store.theme,
+        fontFamily: store.fontFamily,
       }),
     shallowEqual
   );
@@ -246,6 +248,7 @@ export function TerminalPane({ paneId, windowId }: TerminalPaneProps) {
             onKeyInput={isReadOnly ? undefined : handleKeyInput}
             connection={connection}
             theme={theme}
+            fontFamily={fontFamily}
             deltaChangedRowIds={deltaChangedRowIds}
             deltaGen={deltaGen}
           />

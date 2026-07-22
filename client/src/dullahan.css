@@ -57,8 +57,6 @@ html, body {
   /* Font settings */
   --term-font: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Monaco, "Courier New", "Symbols Nerd Font", monospace;
   --term-font-size: 14px;
-  --term-symbol-font: var(--term-font);
-  --term-symbol-font-size: var(--term-font-size);
   --term-line-height: 16px;
 
   /* Spacing - compact by default */
@@ -969,21 +967,18 @@ body.layout-resizing-vertical * {
   }
 }
 
-/* Wide characters (CJK, emoji) need explicit 2-cell width for font alignment.
-   Uses --cell-width if set (from measurement), falls back to ch units. */
-.wide-char {
+/* Glyphs that cannot safely share a proportional fallback-font text run are
+   constrained to the terminal grid. */
+.fixed-cell {
   display: inline-block;
-  width: calc(2 * var(--cell-width, 1ch));
+  vertical-align: top;
+  overflow: hidden;
+  width: var(--cell-width, 1ch);
   text-align: center;
 }
 
-/* Private-use glyphs (e.g. Nerd Font icons) are constrained to a single cell. */
-.single-char {
-  display: inline-block;
-  font-family: var(--term-symbol-font, var(--term-font));
-  font-size: var(--term-symbol-font-size, var(--term-font-size));
-  width: var(--cell-width, 1ch);
-  text-align: center;
+.fixed-cell-wide {
+  width: calc(2 * var(--cell-width, 1ch));
 }
 
 .null-char {

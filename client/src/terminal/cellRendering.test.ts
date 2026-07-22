@@ -12,6 +12,7 @@ import {
 import { ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { StyleTable } from "../../../protocol/schema/style";
+import { ANTHROPIC_MONO_PROFILE } from "./fontCoverage";
 
 /** Create a simple cell with given codepoint and wide state */
 function makeCell(codepoint: number, wide: number = Wide.NARROW, styleId: number = 0): Cell {
@@ -35,11 +36,22 @@ describe("cellsToRuns", () => {
       makeCell(33),  // !
     ];
 
-    const lines = cellsToRuns(cells, emptyStyles, 3, 1);
+    const lines = cellsToRuns(
+      cells,
+      emptyStyles,
+      3,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      ANTHROPIC_MONO_PROFILE
+    );
 
     expect(lines.length).toBe(1);
     expect(lines[0]!.length).toBe(1); // All same style, one run
     expect(lines[0]![0]!.text).toBe("Hi!");
+    expect(lines[0]![0]!.cellCount).toBe(3);
+    expect(lines[0]![0]!.fixedWidth).toBeUndefined();
   });
 
   test("wide character with SPACER_TAIL is rendered correctly", () => {
@@ -52,12 +64,21 @@ describe("cellsToRuns", () => {
       makeCell(65),                       // A
     ];
 
-    const lines = cellsToRuns(cells, emptyStyles, 3, 1);
+    const lines = cellsToRuns(
+      cells,
+      emptyStyles,
+      3,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      ANTHROPIC_MONO_PROFILE
+    );
 
     expect(lines.length).toBe(1);
-    expect(lines[0]!.length).toBe(1); // All same style
-    // Should render "中A" not "中 A" (spacer skipped)
-    expect(lines[0]![0]!.text).toBe("中A");
+    expect(lines[0]!.length).toBe(2);
+    expect(lines[0]![0]).toMatchObject({ text: "中", cellCount: 2, fixedWidth: 2 });
+    expect(lines[0]![1]).toMatchObject({ text: "A", cellCount: 1 });
   });
 
   test("multiple wide characters", () => {
@@ -72,7 +93,9 @@ describe("cellsToRuns", () => {
     const lines = cellsToRuns(cells, emptyStyles, 4, 1);
 
     expect(lines.length).toBe(1);
-    expect(lines[0]![0]!.text).toBe("中文");
+    expect(lines[0]).toHaveLength(2);
+    expect(lines[0]![0]).toMatchObject({ text: "中", cellCount: 2, fixedWidth: 2 });
+    expect(lines[0]![1]).toMatchObject({ text: "文", cellCount: 2, fixedWidth: 2 });
   });
 
   test("SPACER_HEAD keeps column alignment", () => {
@@ -101,10 +124,11 @@ describe("cellsToRuns", () => {
     const lines = cellsToRuns(cells, emptyStyles, 4, 1);
 
     expect(lines.length).toBe(1);
-    expect(lines[0]![0]!.text).toBe("A中B");
+    expect(lines[0]!.map((run) => run.text)).toEqual(["A", "中", "B"]);
+    expect(lines[0]!.map((run) => run.cellCount)).toEqual([1, 2, 1]);
   });
 
-  test("symbol-like PUA expands when followed by whitespace", () => {
+  test("missing PUA is fixed to one cell without consuming following whitespace", () => {
     const iconCp = 0xea61;
     const icon = String.fromCodePoint(iconCp);
     const cells = [
@@ -113,14 +137,23 @@ describe("cellsToRuns", () => {
       makeCell(65),     // A
     ];
 
-    const lines = cellsToRuns(cells, emptyStyles, 3, 1);
+    const lines = cellsToRuns(
+      cells,
+      emptyStyles,
+      3,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      ANTHROPIC_MONO_PROFILE
+    );
 
-    expect(lines[0]![0]!.text).toBe(`${icon}A`);
-    expect(lines[0]![0]!.wideRanges).toEqual([{ start: 0, end: 1 }]);
-    expect(lines[0]![0]!.singleRanges).toBeUndefined();
+    expect(lines[0]!.map((run) => run.text)).toEqual([icon, " A"]);
+    expect(lines[0]![0]).toMatchObject({ cellCount: 1, fixedWidth: 1 });
+    expect(lines[0]![1]).toMatchObject({ cellCount: 2 });
   });
 
-  test("symbol-like PUA stays single when next cell is not whitespace", () => {
+  test("unknown font profiles do not apply codepoint heuristics", () => {
     const iconCp = 0xea61;
     const icon = String.fromCodePoint(iconCp);
     const cells = [
@@ -132,20 +165,48 @@ describe("cellsToRuns", () => {
     const lines = cellsToRuns(cells, emptyStyles, 3, 1);
 
     expect(lines[0]![0]!.text).toBe(`${icon}BA`);
-    expect(lines[0]![0]!.wideRanges).toBeUndefined();
-    expect(lines[0]![0]!.singleRanges).toEqual([{ start: 0, end: 1 }]);
+    expect(lines[0]![0]!.cellCount).toBe(3);
+    expect(lines[0]![0]!.fixedWidth).toBeUndefined();
   });
 
-  test("forced single codepoint renders as single-char", () => {
+  test("missing U+279B uses the coverage profile instead of a forced exception", () => {
     const cp = 0x279b;
     const ch = String.fromCodePoint(cp);
     const cells = [makeCell(cp), makeCell(65)];
 
-    const lines = cellsToRuns(cells, emptyStyles, 2, 1);
+    const lines = cellsToRuns(
+      cells,
+      emptyStyles,
+      2,
+      1,
+      undefined,
+      undefined,
+      undefined,
+      ANTHROPIC_MONO_PROFILE
+    );
 
-    expect(lines[0]![0]!.text).toBe(`${ch}A`);
-    expect(lines[0]![0]!.wideRanges).toBeUndefined();
-    expect(lines[0]![0]!.singleRanges).toEqual([{ start: 0, end: 1 }]);
+    expect(lines[0]!.map((run) => run.text)).toEqual([ch, "A"]);
+    expect(lines[0]![0]).toMatchObject({ cellCount: 1, fixedWidth: 1 });
+  });
+
+  test("multi-codepoint grapheme is one fixed logical cell", () => {
+    const cell = makeCell(0x65);
+    cell.content = { tag: ContentTag.CODEPOINT_GRAPHEME, codepoint: 0x65 };
+    const graphemes = new Map([[0, [0x0301]]]);
+
+    const lines = cellsToRuns(
+      [cell, makeCell(65)],
+      emptyStyles,
+      2,
+      1,
+      undefined,
+      undefined,
+      graphemes,
+      ANTHROPIC_MONO_PROFILE
+    );
+
+    expect(lines[0]!.map((run) => run.text)).toEqual(["e\u0301", "A"]);
+    expect(lines[0]![0]).toMatchObject({ cellCount: 1, fixedWidth: 1 });
   });
 
   test("wide characters with different styles create separate runs", () => {
@@ -195,8 +256,8 @@ describe("cellsToRuns", () => {
     const lines = cellsToRuns(cells, emptyStyles, 3, 2);
 
     expect(lines.length).toBe(2);
-    expect(lines[0]![0]!.text).toBe("中A");
-    expect(lines[1]![0]!.text).toBe("B文");
+    expect(lines[0]!.map((run) => run.text)).toEqual(["中", "A"]);
+    expect(lines[1]!.map((run) => run.text)).toEqual(["B", "文"]);
   });
 
   test("row-relative rendering path supports prepared selection and hyperlinks", () => {
