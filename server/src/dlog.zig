@@ -35,47 +35,75 @@ const is_debug_build = builtin.mode == .Debug;
 pub const Category = debug_config.Category;
 
 /// Global state for logging
-var log_file: ?std.fs.File = null;
+var app_io: ?std.Io = null;
+var log_writer: ?std.Io.File.Writer = null;
+var log_buffer: [8192]u8 = undefined;
+var log_mutex: std.Io.Mutex = .init;
 var debug_pane: ?*Pane = null;
-var debug_pane_mutex: std.Thread.Mutex = .{};
+var debug_pane_mutex: std.Io.Mutex = .init;
 var initialized: bool = false;
 
 /// Initialize logging system (load env config, open log file)
-pub fn init() void {
+pub fn init(io: std.Io, debug_env: ?[]const u8) void {
     if (initialized) return;
+    app_io = io;
     initialized = true;
-    debug_config.loadFromEnv();
-    initLogFile();
+    debug_config.init(io, debug_env);
+
+    log_mutex.lockUncancelable(io);
+    defer log_mutex.unlock(io);
+    initLogFile(io);
+}
+
+pub fn deinit() void {
+    const io = app_io orelse return;
+    log_mutex.lockUncancelable(io);
+    if (log_writer) |*writer| {
+        writer.interface.flush() catch {};
+        writer.file.close(io);
+        log_writer = null;
+    }
+    log_mutex.unlock(io);
+    debug_config.deinit();
+    initialized = false;
+    app_io = null;
+}
+
+fn currentIo() std.Io {
+    return app_io orelse std.Io.Threaded.global_single_threaded.io();
 }
 
 /// Initialize the log file (called automatically on first log)
-fn initLogFile() void {
-    if (log_file != null) return;
+fn initLogFile(io: std.Io) void {
+    if (log_writer != null) return;
 
     // Ensure temp directory exists
-    paths.ensureTempDir() catch return;
+    paths.ensureTempDir(io) catch return;
 
-    // Open with append mode via posix
     const log_file_path = paths.StaticPaths.log();
-    const fd = std.posix.open(
-        log_file_path,
-        .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true },
-        0o644,
-    ) catch return;
-    log_file = .{ .handle = fd };
+    const file = std.Io.Dir.createFileAbsolute(io, log_file_path, .{
+        .truncate = false,
+        .permissions = @enumFromInt(0o644),
+    }) catch return;
+    log_writer = file.writer(io, &log_buffer);
+    log_writer.?.seekTo(file.length(io) catch 0) catch {
+        file.close(io);
+        log_writer = null;
+    };
 }
 
 /// Set the debug pane for console logging
 /// Call this after session is initialized
 pub fn setDebugPane(pane: ?*Pane) void {
-    debug_pane_mutex.lock();
-    defer debug_pane_mutex.unlock();
+    const io = currentIo();
+    debug_pane_mutex.lockUncancelable(io);
+    defer debug_pane_mutex.unlock(io);
     debug_pane = pane;
 }
 
 /// Get current timestamp string [HH:MM:SS.mmm]
-fn getTimestamp(buf: []u8) []const u8 {
-    const ts_ms = std.time.milliTimestamp();
+fn getTimestamp(io: std.Io, buf: []u8) []const u8 {
+    const ts_ms = std.Io.Timestamp.now(io, .real).toMilliseconds();
     const ts_s: u64 = @intCast(@divTrunc(ts_ms, 1000));
     const ms: u64 = @intCast(@mod(ts_ms, 1000));
     const day_s = @mod(ts_s, 86400);
@@ -96,41 +124,51 @@ fn logImpl(
     // Format the message
     var msg_buf: [4096]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, format, args) catch return;
+    writeLine(level, if (category) |c| c.asText() else "", msg, to_stderr);
+}
+
+fn writeLine(
+    comptime level: Level,
+    category: []const u8,
+    msg: []const u8,
+    to_stderr: bool,
+) void {
+    const io = currentIo();
 
     // Get timestamp
     var ts_buf: [16]u8 = undefined;
-    const timestamp = getTimestamp(&ts_buf);
-
-    // Category prefix
-    const cat_prefix = if (category) |c| c.asText() else "";
+    const timestamp = getTimestamp(io, &ts_buf);
 
     // Format full line for file
     var line_buf: [4096]u8 = undefined;
-    const line = if (category != null)
-        std.fmt.bufPrint(&line_buf, "{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), cat_prefix, msg }) catch return
+    const line = if (category.len > 0)
+        std.fmt.bufPrint(&line_buf, "{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), category, msg }) catch return
     else
         std.fmt.bufPrint(&line_buf, "{s} {s}: {s}\n", .{ timestamp, level.asText(), msg }) catch return;
 
     // 1. Always log to file
-    initLogFile();
-    if (log_file) |file| {
-        file.writeAll(line) catch {};
+    log_mutex.lockUncancelable(io);
+    initLogFile(io);
+    if (log_writer) |*writer| {
+        writer.interface.writeAll(line) catch {};
+        writer.interface.flush() catch {};
     }
+    log_mutex.unlock(io);
 
     // 2. Log to debug console if available
-    debug_pane_mutex.lock();
+    debug_pane_mutex.lockUncancelable(io);
     const pane = debug_pane;
-    debug_pane_mutex.unlock();
+    debug_pane_mutex.unlock(io);
 
     if (pane) |p| {
         // Format with color for terminal
         var term_buf: [4096]u8 = undefined;
-        const term_line = if (category != null)
+        const term_line = if (category.len > 0)
             std.fmt.bufPrint(&term_buf, "\x1b[90m{s}\x1b[0m {s}{s}\x1b[0m \x1b[90m({s})\x1b[0m: {s}\r\n", .{
                 timestamp,
                 level.color(),
                 level.asText(),
-                cat_prefix,
+                category,
                 msg,
             }) catch return
         else
@@ -145,12 +183,29 @@ fn logImpl(
 
     // 3. Log to stderr if requested (errors, missing features) or in debug builds
     if (to_stderr or is_debug_build) {
-        if (category != null) {
-            std.debug.print("{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), cat_prefix, msg });
+        if (category.len > 0) {
+            std.debug.print("{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), category, msg });
         } else {
             std.debug.print("{s} {s}: {s}\n", .{ timestamp, level.asText(), msg });
         }
     }
+}
+
+pub fn stdLog(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    var msg_buf: [4096]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, format, args) catch return;
+    const mapped_level: Level = switch (level) {
+        .debug => .debug,
+        .info => .info,
+        .warn => .warn,
+        .err => .err,
+    };
+    writeLine(mapped_level, if (scope == .default) "" else @tagName(scope), msg, level == .err);
 }
 
 /// Log levels

@@ -7,20 +7,20 @@ const std = @import("std");
 const Pane = @import("pane.zig").Pane;
 const verification_harness = @import("verification_harness.zig");
 
-pub fn run(allocator: std.mem.Allocator) !void {
-    const artifact_dir = try runSmoke(allocator);
+pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    const artifact_dir = try runSmoke(io, allocator);
     defer allocator.free(artifact_dir);
     std.debug.print("query-trace artifacts: {s}\n", .{artifact_dir});
 }
 
-pub fn runSmoke(allocator: std.mem.Allocator) ![]u8 {
-    var harness = try verification_harness.Harness.init(allocator, .{
+pub fn runSmoke(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    var harness = try verification_harness.Harness.init(io, allocator, .{
         .label = "query-trace",
         .debug_config = "+all,-delta",
     });
     defer harness.deinit();
 
-    var pane = try Pane.init(allocator, .{ .cols = 80, .rows = 24, .id = 1 });
+    var pane = try Pane.init(io, allocator, .{ .cols = 80, .rows = 24, .id = 1 });
     defer pane.deinit();
     try harness.attachFakePty(&pane);
 
@@ -45,7 +45,7 @@ pub fn runSmoke(allocator: std.mem.Allocator) ![]u8 {
 }
 
 test "query trace runner emits harness artifacts" {
-    const artifact_dir = try runSmoke(std.testing.allocator);
+    const artifact_dir = try runSmoke(std.testing.io, std.testing.allocator);
     defer std.testing.allocator.free(artifact_dir);
 
     const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
@@ -55,10 +55,10 @@ test "query trace runner emits harness artifacts" {
     const pty_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
     defer std.testing.allocator.free(pty_log_path);
 
-    var manifest_file = try std.fs.openFileAbsolute(manifest_path, .{});
-    manifest_file.close();
-    var server_log_file = try std.fs.openFileAbsolute(server_log_path, .{});
-    server_log_file.close();
-    var pty_log_file = try std.fs.openFileAbsolute(pty_log_path, .{});
-    pty_log_file.close();
+    const manifest_file = try std.Io.Dir.openFileAbsolute(std.testing.io, manifest_path, .{});
+    manifest_file.close(std.testing.io);
+    const server_log_file = try std.Io.Dir.openFileAbsolute(std.testing.io, server_log_path, .{});
+    server_log_file.close(std.testing.io);
+    const pty_log_file = try std.Io.Dir.openFileAbsolute(std.testing.io, pty_log_path, .{});
+    pty_log_file.close(std.testing.io);
 }

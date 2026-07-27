@@ -27,7 +27,7 @@ pub fn tryWaitpid(pid: posix.pid_t) bool {
 
 /// Try to reap a child process with timeout, handling all error cases.
 /// Sends SIGTERM first, waits for grace period, then SIGKILL if needed.
-pub fn reapChild(pid: posix.pid_t) void {
+pub fn reapChild(io: std.Io, pid: posix.pid_t) void {
     // Check if already exited
     if (tryWaitpid(pid)) return;
 
@@ -38,7 +38,7 @@ pub fn reapChild(pid: posix.pid_t) void {
     // Wait for graceful exit
     var waited: usize = 0;
     while (waited < constants.timeout.sigterm_grace_ms) : (waited += constants.process.poll_interval_ms) {
-        std.Thread.sleep(constants.process.poll_interval_ms * std.time.ns_per_ms);
+        io.sleep(.fromMilliseconds(constants.process.poll_interval_ms), .awake) catch return;
         if (tryWaitpid(pid)) return;
     }
 
@@ -49,7 +49,7 @@ pub fn reapChild(pid: posix.pid_t) void {
     // Wait for SIGKILL to take effect
     var kill_waited: usize = 0;
     while (kill_waited < constants.timeout.sigkill_wait_ms) : (kill_waited += constants.process.sigkill_poll_interval_ms) {
-        std.Thread.sleep(constants.process.sigkill_poll_interval_ms * std.time.ns_per_ms);
+        io.sleep(.fromMilliseconds(constants.process.sigkill_poll_interval_ms), .awake) catch return;
         if (tryWaitpid(pid)) return;
     }
 

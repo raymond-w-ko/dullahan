@@ -6,6 +6,8 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
+const net_compat = @import("net_compat.zig");
 const constants = @import("constants.zig");
 const paths = @import("paths.zig");
 const websocket = @import("websocket.zig");
@@ -18,6 +20,10 @@ const log = std.log.scoped(.http);
 
 pub const DEFAULT_PORT: u16 = 7681;
 
+fn nowMs(io: std.Io) i64 {
+    return std.Io.Timestamp.now(io, .awake).toMilliseconds();
+}
+
 const HANDSHAKE_TIMEOUT_MS: i64 = 10_000;
 const FIRST_BYTE_TIMEOUT_MS: i64 = 15_000;
 const HEADER_COMPLETE_TIMEOUT_MS: i64 = 15_000;
@@ -26,10 +32,10 @@ const WRITE_TIMEOUT_MS: i64 = 30_000;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 fn setNonBlocking(fd: posix.fd_t, enabled: bool) void {
-    const fl_flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return;
+    const fl_flags = posix_compat.fcntl(fd, std.posix.F.GETFL, 0) catch return;
     const O_NONBLOCK: usize = if (@import("builtin").os.tag == .macos) 0x4 else 0x800;
     const new_flags = if (enabled) (fl_flags | O_NONBLOCK) else (fl_flags & ~O_NONBLOCK);
-    _ = std.posix.fcntl(fd, std.posix.F.SETFL, new_flags) catch {};
+    _ = posix_compat.fcntl(fd, std.posix.F.SETFL, new_flags) catch {};
 }
 
 fn setSocketTimeoutMs(fd: posix.fd_t, timeout_ms: u32) void {
@@ -37,13 +43,13 @@ fn setSocketTimeoutMs(fd: posix.fd_t, timeout_ms: u32) void {
         .sec = @intCast(timeout_ms / 1000),
         .usec = @intCast((timeout_ms % 1000) * 1000),
     };
-    std.posix.setsockopt(
+    posix_compat.setsockopt(
         fd,
         std.posix.SOL.SOCKET,
         std.posix.SO.RCVTIMEO,
         std.mem.asBytes(&timeout),
     ) catch {};
-    std.posix.setsockopt(
+    posix_compat.setsockopt(
         fd,
         std.posix.SOL.SOCKET,
         std.posix.SO.SNDTIMEO,
@@ -154,8 +160,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, data: []const u8) !Request {
 /// Send HTTP response with body
 pub fn sendResponse(stream: *tls_wrapper.Stream, status: []const u8, headers: []const [2][]const u8, body: []const u8) !void {
     var buf: [constants.buffer.general]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.print("HTTP/1.1 {s}\r\n", .{status});
     for (headers) |header| {
@@ -165,14 +170,13 @@ pub fn sendResponse(stream: *tls_wrapper.Stream, status: []const u8, headers: []
     try writer.writeAll("\r\n");
     try writer.writeAll(body);
 
-    try stream.writeAll(fbs.getWritten());
+    try stream.writeAll(writer.buffered());
 }
 
 /// Send HTTP response headers only (for streaming body)
 pub fn sendResponseHeaders(stream: *tls_wrapper.Stream, status: []const u8, headers: []const [2][]const u8, content_length: usize) !void {
     var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.print("HTTP/1.1 {s}\r\n", .{status});
     for (headers) |header| {
@@ -181,7 +185,7 @@ pub fn sendResponseHeaders(stream: *tls_wrapper.Stream, status: []const u8, head
     try writer.print("Content-Length: {d}\r\n", .{content_length});
     try writer.writeAll("\r\n");
 
-    try stream.writeAll(fbs.getWritten());
+    try stream.writeAll(writer.buffered());
 }
 
 /// Send WebSocket upgrade response
@@ -189,8 +193,7 @@ pub fn sendWebSocketUpgrade(stream: *tls_wrapper.Stream, client_key: []const u8)
     const accept_key = websocket.computeAcceptKey(client_key);
 
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
     try writer.writeAll("HTTP/1.1 101 Switching Protocols\r\n");
     try writer.writeAll("Upgrade: websocket\r\n");
@@ -198,14 +201,14 @@ pub fn sendWebSocketUpgrade(stream: *tls_wrapper.Stream, client_key: []const u8)
     try writer.print("Sec-WebSocket-Accept: {s}\r\n", .{accept_key});
     try writer.writeAll("\r\n");
 
-    try stream.writeAll(fbs.getWritten());
+    try stream.writeAll(writer.buffered());
 }
 
 fn buildWebSocketUpgradeResponse(allocator: std.mem.Allocator, client_key: []const u8) !PendingBuffer {
     const accept_key = websocket.computeAcceptKey(client_key);
-    var out: std.ArrayListUnmanaged(u8) = .{};
-    errdefer out.deinit(allocator);
-    const writer = out.writer(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
 
     try writer.writeAll("HTTP/1.1 101 Switching Protocols\r\n");
     try writer.writeAll("Upgrade: websocket\r\n");
@@ -214,7 +217,7 @@ fn buildWebSocketUpgradeResponse(allocator: std.mem.Allocator, client_key: []con
     try writer.writeAll("\r\n");
 
     return .{
-        .data = try out.toOwnedSlice(allocator),
+        .data = try out.toOwnedSlice(),
     };
 }
 
@@ -259,14 +262,15 @@ fn extForImageMime(content_type: []const u8) []const u8 {
     return "img";
 }
 
-fn readTokensFile(path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
-    const file = std.fs.openFileAbsolute(path, .{}) catch |e| switch (e) {
+fn readTokensFile(io: std.Io, path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |e| switch (e) {
         error.FileNotFound => return null,
         else => return e,
     };
-    defer file.close();
+    defer file.close(io);
 
-    const n = try file.readAll(buf);
+    var reader = file.reader(io, &.{});
+    const n = try reader.interface.readSliceShort(buf);
     if (n == 0) return null;
 
     var master: ?[]const u8 = null;
@@ -285,7 +289,7 @@ fn readTokensFile(path: []const u8, buf: []u8) !?struct { master: []const u8, vi
     return .{ .master = master.?, .view = view.? };
 }
 
-fn isUploadAuthorized(request: *const Request) bool {
+fn isUploadAuthorized(io: std.Io, request: *const Request) bool {
     const auth = request.getHeader("authorization") orelse return false;
     if (auth.len < 8) return false;
     if (!std.ascii.eqlIgnoreCase(auth[0..7], "Bearer ")) return false;
@@ -294,15 +298,15 @@ fn isUploadAuthorized(request: *const Request) bool {
     if (token.len == 0) return false;
 
     var tokens_buf: [256]u8 = undefined;
-    const tokens = readTokensFile(paths.StaticPaths.tokens(), &tokens_buf) catch return false;
+    const tokens = readTokensFile(io, paths.StaticPaths.tokens(), &tokens_buf) catch return false;
     if (tokens == null) return false;
 
     return std.mem.eql(u8, token, tokens.?.master);
 }
 
-fn isReadAuthorized(request: *const Request) bool {
+fn isReadAuthorized(io: std.Io, request: *const Request) bool {
     var tokens_buf: [256]u8 = undefined;
-    const tokens = readTokensFile(paths.StaticPaths.tokens(), &tokens_buf) catch return false;
+    const tokens = readTokensFile(io, paths.StaticPaths.tokens(), &tokens_buf) catch return false;
     if (tokens == null) return true;
 
     const auth = request.getHeader("authorization") orelse return false;
@@ -317,7 +321,7 @@ fn isReadAuthorized(request: *const Request) bool {
 }
 
 const PendingStream = union(enum) {
-    plain: std.net.Stream,
+    plain: net_compat.Stream,
     tls_handshake: tls_wrapper.TlsHandshake,
     tls: tls_wrapper.TlsConnection,
 
@@ -376,7 +380,8 @@ const PendingBody = union(enum) {
         sent: usize = 0,
     },
     file: struct {
-        file: std.fs.File,
+        file: std.Io.File,
+        io: std.Io,
         remaining: u64,
         chunk: [16 * 1024]u8 = undefined,
         chunk_len: usize = 0,
@@ -386,7 +391,7 @@ const PendingBody = union(enum) {
     fn deinit(self: *PendingBody, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .owned_bytes => |*b| allocator.free(b.data),
-            .file => |*f| f.file.close(),
+            .file => |*f| f.file.close(f.io),
             else => {},
         }
         self.* = .none;
@@ -441,30 +446,30 @@ const PendingWriteState = union(enum) {
 
 const PendingConn = struct {
     stream: PendingStream,
-    peer_addr: std.net.Address,
+    peer_addr: []const u8,
     accepted_ms: i64,
     handshake_done_ms: ?i64 = null,
     first_byte_ms: ?i64 = null,
     deadline_ms: i64,
-    req_buf: std.ArrayListUnmanaged(u8) = .{},
+    req_buf: std.ArrayListUnmanaged(u8) = .empty,
     header_end: ?usize = null,
     expected_total_bytes: ?usize = null,
     write_state: PendingWriteState = .none,
 
-    fn init(tls_context: ?*tls_wrapper.TlsContext, conn: std.net.Server.Connection) !PendingConn {
+    fn init(tls_context: ?*tls_wrapper.TlsContext, conn: net_compat.Connection) !PendingConn {
         // Keep accepted sockets non-blocking so event loop never stalls.
         setNonBlocking(conn.stream.handle, true);
 
         // Disable Nagle's algorithm for low-latency interactive traffic.
         const nodelay: c_int = 1;
-        std.posix.setsockopt(
+        posix_compat.setsockopt(
             conn.stream.handle,
             std.posix.IPPROTO.TCP,
             std.posix.TCP.NODELAY,
             std.mem.asBytes(&nodelay),
         ) catch {};
 
-        const accepted_ms = std.time.milliTimestamp();
+        const accepted_ms = nowMs(conn.stream.io);
         if (tls_context) |tls_ctx| {
             const handshake = try tls_ctx.beginHandshake(conn.stream);
             return .{
@@ -506,16 +511,18 @@ const PendingConn = struct {
 
 /// HTTP/WebSocket server
 pub const Server = struct {
-    listener: std.net.Server,
+    listener: net_compat.Server,
+    io: std.Io,
     allocator: std.mem.Allocator,
     port: u16,
     static_dir: ?[]const u8,
     tls_context: ?*tls_wrapper.TlsContext,
     pane_registry: ?*PaneRegistry = null,
-    pending: std.ArrayListUnmanaged(PendingConn) = .{},
-    ready_ws: std.ArrayListUnmanaged(websocket.Connection) = .{},
+    pending: std.ArrayListUnmanaged(PendingConn) = .empty,
+    ready_ws: std.ArrayListUnmanaged(websocket.Connection) = .empty,
 
     pub fn init(
+        io: std.Io,
         allocator: std.mem.Allocator,
         port: u16,
         static_dir: ?[]const u8,
@@ -524,11 +531,11 @@ pub const Server = struct {
     ) !Server {
         // Bind to all interfaces if requested (e.g., for Tailscale), otherwise localhost only
         const address = if (bind_all)
-            std.net.Address.initIp4(.{ 0, 0, 0, 0 }, port)
+            net_compat.Address.initIp4(.{ 0, 0, 0, 0 }, port)
         else
-            std.net.Address.initIp4(.{ 127, 0, 0, 1 }, port);
+            net_compat.Address.initIp4(.{ 127, 0, 0, 1 }, port);
 
-        const listener = try address.listen(.{
+        const listener = try net_compat.listen(io, address, .{
             .reuse_address = true,
             .kernel_backlog = 128, // Handle burst of connections on refresh
         });
@@ -544,6 +551,7 @@ pub const Server = struct {
 
         return .{
             .listener = listener,
+            .io = io,
             .allocator = allocator,
             .port = port,
             .static_dir = static_dir,
@@ -580,9 +588,9 @@ pub const Server = struct {
         headers: []const [2][]const u8,
         content_length: u64,
     ) !PendingBuffer {
-        var out: std.ArrayListUnmanaged(u8) = .{};
-        errdefer out.deinit(self.allocator);
-        const writer = out.writer(self.allocator);
+        var out = std.Io.Writer.Allocating.init(self.allocator);
+        defer out.deinit();
+        const writer = &out.writer;
         try writer.print("HTTP/1.1 {s}\r\n", .{status});
         for (headers) |header| {
             try writer.print("{s}: {s}\r\n", .{ header[0], header[1] });
@@ -591,7 +599,7 @@ pub const Server = struct {
         try writer.writeAll("\r\n");
 
         return .{
-            .data = try out.toOwnedSlice(self.allocator),
+            .data = try out.toOwnedSlice(),
         };
     }
 
@@ -691,23 +699,23 @@ pub const Server = struct {
             clean_path = "index.html";
         }
 
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const full_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ static_dir, clean_path }) catch {
             return self.buildErrorResponse();
         };
 
-        const file = std.fs.cwd().openFile(full_path, .{}) catch {
+        const file = std.Io.Dir.cwd().openFile(self.io, full_path, .{}) catch {
             log.debug("File not found: {s}", .{full_path});
             return self.buildNotFoundResponse();
         };
-        errdefer file.close();
+        errdefer file.close(self.io);
 
-        const stat = file.stat() catch return self.buildErrorResponse();
+        const stat = file.stat(self.io) catch return self.buildErrorResponse();
         const file_size = stat.size;
         const mime_type = getMimeType(clean_path);
 
         var etag_buf: [64]u8 = undefined;
-        const mtime_sec: i64 = @intCast(@divFloor(stat.mtime, std.time.ns_per_s));
+        const mtime_sec = stat.mtime.toSeconds();
         const etag = std.fmt.bufPrint(&etag_buf, "\"{x}-{x}\"", .{ @as(u64, @bitCast(mtime_sec)), file_size }) catch "\"0\"";
 
         if (request.getHeader("if-none-match")) |client_etag| {
@@ -731,6 +739,7 @@ pub const Server = struct {
             .body = .{
                 .file = .{
                     .file = file,
+                    .io = self.io,
                     .remaining = file_size,
                 },
             },
@@ -816,7 +825,7 @@ pub const Server = struct {
 
     /// Expire pending sockets that exceeded their stage deadline.
     pub fn expirePendingConnections(self: *Server) void {
-        const now = std.time.milliTimestamp();
+        const now = nowMs(self.io);
         var idx = self.pending.items.len;
         while (idx > 0) {
             idx -= 1;
@@ -876,7 +885,7 @@ pub const Server = struct {
                 };
                 if (!done) return;
 
-                const now = std.time.milliTimestamp();
+                const now = nowMs(self.io);
                 pending.handshake_done_ms = now;
                 pending.deadline_ms = now + FIRST_BYTE_TIMEOUT_MS;
                 log.debug(
@@ -928,7 +937,7 @@ pub const Server = struct {
             try pending.req_buf.appendSlice(self.allocator, buf[0..n]);
 
             if (pending.first_byte_ms == null) {
-                const now = std.time.milliTimestamp();
+                const now = nowMs(self.io);
                 pending.first_byte_ms = now;
                 pending.deadline_ms = now + HEADER_COMPLETE_TIMEOUT_MS;
             }
@@ -938,7 +947,7 @@ pub const Server = struct {
                     const header_end = header_delim_idx + 4;
                     pending.header_end = header_end;
 
-                    const now = std.time.milliTimestamp();
+                    const now = nowMs(self.io);
                     const start_ms = pending.handshake_done_ms orelse pending.accepted_ms;
                     log.debug(
                         "HTTP headers read in {d}ms (accept to headers {d}ms)",
@@ -1061,7 +1070,7 @@ pub const Server = struct {
             self.respondAndClose(idx, "405 Method Not Allowed", "Method Not Allowed");
             return;
         }
-        if (!isReadAuthorized(request)) {
+        if (!isReadAuthorized(self.io, request)) {
             self.respondAndClose(idx, "401 Unauthorized", "Unauthorized");
             return;
         }
@@ -1138,7 +1147,7 @@ pub const Server = struct {
             return;
         }
 
-        if (!isUploadAuthorized(request)) {
+        if (!isUploadAuthorized(self.io, request)) {
             self.respondAndClose(idx, "401 Unauthorized", "Unauthorized");
             return;
         }
@@ -1163,20 +1172,23 @@ pub const Server = struct {
             return;
         }
 
-        paths.ensureTempDir() catch {
+        paths.ensureTempDir(self.io) catch {
             self.respondAndClose(idx, "500 Internal Server Error", "Failed to prepare temp dir");
             return;
         };
 
         var rand_bytes: [8]u8 = undefined;
-        std.crypto.random.bytes(&rand_bytes);
+        self.io.randomSecure(&rand_bytes) catch {
+            self.respondAndClose(idx, "500 Internal Server Error", "Failed to generate upload name");
+            return;
+        };
         var rand_hex: [16]u8 = undefined;
         for (rand_bytes, 0..) |b, i| {
             rand_hex[i * 2] = if ((b >> 4) < 10) '0' + @as(u8, (b >> 4)) else 'a' + @as(u8, (b >> 4) - 10);
             rand_hex[i * 2 + 1] = if ((b & 0x0F) < 10) '0' + @as(u8, (b & 0x0F)) else 'a' + @as(u8, (b & 0x0F) - 10);
         }
 
-        const now_ms: u64 = @intCast(std.time.milliTimestamp());
+        const now_ms: u64 = @intCast(std.Io.Timestamp.now(self.io, .real).toMilliseconds());
         const ext = extForImageMime(content_type);
 
         var filename_buf: [96]u8 = undefined;
@@ -1198,16 +1210,16 @@ pub const Server = struct {
         };
         defer self.allocator.free(uploaded_path);
 
-        const file = std.fs.createFileAbsolute(uploaded_path, .{
+        const file = std.Io.Dir.createFileAbsolute(self.io, uploaded_path, .{
             .truncate = true,
-            .mode = 0o600,
+            .permissions = @enumFromInt(0o600),
         }) catch {
             self.respondAndClose(idx, "500 Internal Server Error", "Failed to create upload file");
             return;
         };
-        defer file.close();
+        defer file.close(self.io);
 
-        file.writeAll(body) catch {
+        file.writeStreamingAll(self.io, body) catch {
             self.respondAndClose(idx, "500 Internal Server Error", "Failed to store upload");
             return;
         };
@@ -1245,7 +1257,7 @@ pub const Server = struct {
         var pending = &self.pending.items[idx];
         pending.write_state.deinit(self.allocator);
         pending.write_state = .{ .http = response };
-        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+        pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
 
         self.flushPendingWrite(idx) catch |e| {
             log.debug("Failed to flush queued HTTP response: {any}", .{e});
@@ -1262,7 +1274,7 @@ pub const Server = struct {
         var pending = &self.pending.items[idx];
         pending.write_state.deinit(self.allocator);
         pending.write_state = .{ .ws_upgrade = upgrade };
-        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+        pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
 
         self.flushPendingWrite(idx) catch |e| {
             log.debug("Failed to flush queued WS upgrade: {any}", .{e});
@@ -1287,7 +1299,7 @@ pub const Server = struct {
             };
             if (n == 0) return error.ConnectionClosed;
             buffer.sent += n;
-            pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+            pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
         }
         return true;
     }
@@ -1307,7 +1319,7 @@ pub const Server = struct {
                     };
                     if (n == 0) return error.ConnectionClosed;
                     body.sent += n;
-                    pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                    pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
                 }
                 return true;
             },
@@ -1319,7 +1331,7 @@ pub const Server = struct {
                     };
                     if (n == 0) return error.ConnectionClosed;
                     body.sent += n;
-                    pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                    pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
                 }
                 return true;
             },
@@ -1332,7 +1344,7 @@ pub const Server = struct {
                         };
                         if (n == 0) return error.ConnectionClosed;
                         file_body.chunk_sent += n;
-                        pending.deadline_ms = std.time.milliTimestamp() + WRITE_TIMEOUT_MS;
+                        pending.deadline_ms = nowMs(self.io) + WRITE_TIMEOUT_MS;
                         continue;
                     }
 
@@ -1340,7 +1352,10 @@ pub const Server = struct {
 
                     const chunk_cap_u64: u64 = @intCast(file_body.chunk.len);
                     const to_read: usize = @intCast(@min(chunk_cap_u64, file_body.remaining));
-                    const n_read = file_body.file.read(file_body.chunk[0..to_read]) catch return error.ReadFailed;
+                    const n_read = file_body.file.readStreaming(
+                        file_body.io,
+                        &.{file_body.chunk[0..to_read]},
+                    ) catch return error.ReadFailed;
                     if (n_read == 0) {
                         file_body.remaining = 0;
                         return true;

@@ -33,8 +33,8 @@ pub const SelectionBounds = struct {
 };
 
 /// Create a new terminal with the given dimensions
-pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Terminal {
-    return Terminal.init(allocator, .{
+pub fn init(io: std.Io, allocator: std.mem.Allocator, cols: u16, rows: u16) !Terminal {
+    return Terminal.init(io, allocator, .{
         .cols = cols,
         .rows = rows,
     });
@@ -128,12 +128,12 @@ pub fn selectAll(terminal: *Terminal) !bool {
 }
 
 test "terminal can be created" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 }
 
 test "terminal can print text" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     try t.printString("Hello from dullahan!");
@@ -145,7 +145,7 @@ test "terminal can print text" {
 }
 
 test "terminal wraps long lines" {
-    var t = try init(std.testing.allocator, 10, 5);
+    var t = try init(std.testing.io, std.testing.allocator, 10, 5);
     defer t.deinit(std.testing.allocator);
 
     try t.printString("This is a very long line that should wrap");
@@ -162,14 +162,14 @@ test "terminal wraps long lines" {
 // ============================================================================
 
 test "hasSelection returns false initially" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     try std.testing.expect(!hasSelection(&t));
 }
 
 test "setSelection and getSelection roundtrip" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     // Write some text so we have content to select
@@ -192,7 +192,7 @@ test "setSelection and getSelection roundtrip" {
 }
 
 test "getSelectionText returns correct text" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     // Write some text
@@ -210,7 +210,7 @@ test "getSelectionText returns correct text" {
 }
 
 test "clearSelection clears selection" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     try t.printString("Hello World!");
@@ -225,7 +225,7 @@ test "clearSelection clears selection" {
 }
 
 test "selectAll selects entire content" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     try t.printString("Hello World!");
@@ -244,7 +244,7 @@ test "selectAll selects entire content" {
 }
 
 test "selectAll returns false on empty terminal" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     // Don't write anything - terminal is empty
@@ -254,7 +254,7 @@ test "selectAll returns false on empty terminal" {
 }
 
 test "setSelection with rectangle mode" {
-    var t = try init(std.testing.allocator, 80, 24);
+    var t = try init(std.testing.io, std.testing.allocator, 80, 24);
     defer t.deinit(std.testing.allocator);
 
     try t.printString("AAABBB\n");

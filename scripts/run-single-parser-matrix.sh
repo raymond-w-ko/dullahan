@@ -3,9 +3,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-(
-  cd server
-  zig build
-)
+make server
 
 ./server/zig-out/bin/dullahan test single-parser-matrix "$@"

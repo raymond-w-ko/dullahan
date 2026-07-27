@@ -264,7 +264,7 @@ fn appendTestStoredZlib(out: *std.ArrayListUnmanaged(u8), allocator: std.mem.All
 }
 
 fn allocTestPngHeader(allocator: std.mem.Allocator, width: u32, height: u32) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     errdefer out.deinit(allocator);
     try out.appendSlice(allocator, "\x89PNG\r\n\x1a\n");
 
@@ -284,7 +284,7 @@ fn allocTestPngHeader(allocator: std.mem.Allocator, width: u32, height: u32) ![]
     defer allocator.free(raw);
     @memset(raw, 0);
 
-    var idat: std.ArrayListUnmanaged(u8) = .{};
+    var idat: std.ArrayListUnmanaged(u8) = .empty;
     defer idat.deinit(allocator);
     try appendTestStoredZlib(&idat, allocator, raw);
     try appendTestPngChunk(&out, allocator, "IDAT", idat.items);

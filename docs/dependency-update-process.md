@@ -16,8 +16,8 @@ What it does:
 After update:
 
 ```bash
-cd server && zig build test
-cd ../client && bun run typecheck
+make test-server
+cd client && bun run typecheck
 cd .. && make build
 ```
 

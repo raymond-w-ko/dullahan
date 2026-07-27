@@ -129,10 +129,10 @@ pub fn allocImageKey(
     height: u32,
     data: []const u8,
 ) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
-    errdefer out.deinit(allocator);
-    try writeImageKey(out.writer(allocator), pane_id, image_id, imageFormat(raw_format), width, height, data);
-    return out.toOwnedSlice(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
+    defer out.deinit();
+    try writeImageKey(&out.writer, pane_id, image_id, imageFormat(raw_format), width, height, data);
+    return out.toOwnedSlice();
 }
 
 fn parseImageKey(raw: []const u8) ?ImageKey {
@@ -262,7 +262,7 @@ pub fn putManifest(
     payload: *msgpack.Payload,
     pane: *Pane,
 ) !void {
-    var list: std.ArrayListUnmanaged(ManifestEntry) = .{};
+    var list: std.ArrayListUnmanaged(ManifestEntry) = .empty;
     defer list.deinit(allocator);
 
     const storage = &pane.terminal.screens.active.kitty_images;
@@ -520,7 +520,7 @@ test "manifest entries sort deterministically" {
 
 test "kitty rgb transmit and display produces manifest entry" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 9, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 9, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b_Ga=T,t=d,f=24,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
@@ -540,7 +540,7 @@ test "kitty png transmit and display produces manifest entry" {
     png_decoder.install();
 
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 10, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 10, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b_Ga=T,t=d,f=100,i=1,p=1,c=3,r=2,q=1;");
@@ -569,7 +569,7 @@ test "kitty png transmit and display produces manifest entry" {
 
 test "kitty rgba transmit and display produces manifest entry" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 11, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 11, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b_Ga=T,t=d,f=32,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
@@ -594,7 +594,7 @@ test "kitty rgba transmit and display produces manifest entry" {
 
 test "kitty image response survives active screen switch" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 18, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 18, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b_Ga=T,t=d,f=24,s=1,v=1,i=1,p=1,c=3,r=2,q=1;");
@@ -625,7 +625,7 @@ fn feedTestIterm2Image(pane: *Pane) !void {
 
 test "iterm2 single file ST anchors after preceding text and serves png" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 12, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 12, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("A\x1b]1337;File=inline=1;width=2;height=1;preserveAspectRatio=0:");
@@ -653,7 +653,7 @@ test "iterm2 single file ST anchors after preceding text and serves png" {
 
 test "iterm2 multipart image creates one placement" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 13, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 13, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");
@@ -670,7 +670,7 @@ test "iterm2 multipart image creates one placement" {
 
 test "iterm2 invalid image payloads are ignored" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 14, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 14, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b]1337;File=inline=1;width=2;height=1:not-base64\x07");
@@ -684,7 +684,7 @@ test "iterm2 invalid image payloads are ignored" {
 
 test "iterm2 images are cleared by erase display complete" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 15, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 15, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try feedTestIterm2Image(&pane);
@@ -696,7 +696,7 @@ test "iterm2 images are cleared by erase display complete" {
 
 test "iterm2 images are cleared by common clear sequence" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 16, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 16, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try feedTestIterm2Image(&pane);
@@ -708,7 +708,7 @@ test "iterm2 images are cleared by common clear sequence" {
 
 test "iterm2 images are cleared by full reset" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 17, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 17, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try feedTestIterm2Image(&pane);
@@ -720,7 +720,7 @@ test "iterm2 images are cleared by full reset" {
 
 test "iterm2 pending multipart is aborted by erase display complete" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 19, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 19, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");
@@ -735,7 +735,7 @@ test "iterm2 pending multipart is aborted by erase display complete" {
 
 test "iterm2 pending multipart is aborted by full reset" {
     const allocator = std.testing.allocator;
-    var pane = try Pane.init(allocator, .{ .id = 20, .cols = 80, .rows = 24 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .id = 20, .cols = 80, .rows = 24 });
     defer pane.deinit();
 
     try pane.feed("\x1b]1337;MultipartFile=inline=1;width=3;height=2;preserveAspectRatio=0\x07");

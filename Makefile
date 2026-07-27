@@ -1,41 +1,50 @@
-.PHONY: all build clean dev prod server client fmt themes theme-db update-themes update-ghostty dist install coverage coverage-server coverage-client
+.PHONY: all build clean dev prod server client test-server fmt themes theme-db update-themes update-ghostty dist install coverage coverage-server coverage-client check-zig
 
 all: build
 
 UNAME_S := $(shell uname -s)
 HAS_NIX := $(shell command -v nix-shell >/dev/null 2>&1 && echo 1)
 HAS_NIX_DARWIN := $(shell command -v darwin-rebuild >/dev/null 2>&1 && echo 1)
-ZIG_0152_HOME := $(firstword $(wildcard $(HOME)/zig-*-0.15.2) $(HOME)/zig-x86_64-linux-0.15.2)
-ZIG_0152_BIN := $(ZIG_0152_HOME)/bin
-NIX_ZIG_0152_EXPR := 'with import <nixpkgs> {}; mkShell { packages = [ ((callPackage $(CURDIR)/scripts/nix/zig {})."0.15") ]; }'
+EXPECTED_ZIG_VERSION := 0.16.0
+ZIG_0160_HOME := $(firstword $(wildcard $(HOME)/zig-*-${EXPECTED_ZIG_VERSION}) $(HOME)/zig-x86_64-linux-${EXPECTED_ZIG_VERSION})
+ZIG_0160_BIN := $(ZIG_0160_HOME)/bin
+NIX_ZIG_0160_EXPR := 'with import <nixpkgs> {}; mkShell { packages = [ ((callPackage $(CURDIR)/scripts/nix/zig {})."0.16") ]; }'
 
 ifeq ($(UNAME_S),Darwin)
 ifneq ($(HAS_NIX),)
 ifneq ($(HAS_NIX_DARWIN),)
-RUN_ZIG = nix-shell -E $(NIX_ZIG_0152_EXPR) --run 'env NIX_CFLAGS_COMPILE= zig
-RUN_ZIG_END = '
+RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_0160_EXPR) --run 'env NIX_CFLAGS_COMPILE=
+RUN_ZIG_ENV_END = '
 endif
 endif
 endif
 
-ifeq ($(RUN_ZIG),)
+ifeq ($(RUN_ZIG_ENV),)
 ifneq ($(HAS_NIX),)
 ifeq ($(UNAME_S),Linux)
-RUN_ZIG = nix-shell -p zig_0_15 --run 'env NIX_CFLAGS_COMPILE= zig
-RUN_ZIG_END = '
+RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_0160_EXPR) --run 'env NIX_CFLAGS_COMPILE=
+RUN_ZIG_ENV_END = '
 endif
 endif
 endif
 
-ifeq ($(RUN_ZIG),)
-ifneq ($(wildcard $(ZIG_0152_BIN)/zig),)
-RUN_ZIG = PATH="$(ZIG_0152_BIN):$(PATH)" zig
-else ifneq ($(wildcard $(ZIG_0152_HOME)/zig),)
-RUN_ZIG = PATH="$(ZIG_0152_HOME):$(PATH)" zig
-else
-RUN_ZIG = zig
+ifeq ($(RUN_ZIG_ENV),)
+ifneq ($(wildcard $(ZIG_0160_BIN)/zig),)
+RUN_ZIG_ENV = PATH="$(ZIG_0160_BIN):$(PATH)"
+else ifneq ($(wildcard $(ZIG_0160_HOME)/zig),)
+RUN_ZIG_ENV = PATH="$(ZIG_0160_HOME):$(PATH)"
 endif
 endif
+
+RUN_ZIG = $(RUN_ZIG_ENV) zig
+RUN_ZIG_END = $(RUN_ZIG_ENV_END)
+
+check-zig:
+	@version="$$($(RUN_ZIG) version$(RUN_ZIG_END))"; \
+	if [ "$$version" != "$(EXPECTED_ZIG_VERSION)" ]; then \
+		echo "error: Zig $(EXPECTED_ZIG_VERSION) required; found $$version"; \
+		exit 1; \
+	fi
 
 # =============================================================================
 # Debug builds (default)
@@ -43,8 +52,11 @@ endif
 
 build: server client
 
-server: theme-db
+server: check-zig theme-db
 	cd server && $(RUN_ZIG) build$(RUN_ZIG_END)
+
+test-server: check-zig
+	cd server && $(RUN_ZIG) build test$(RUN_ZIG_END)
 
 client: themes
 	cd client && bun run build
@@ -67,7 +79,7 @@ dist-client-assets: themes
 	@echo "Client assets prepared for embedding"
 
 # Build server with embedded client assets (includes theme-db for OSC color queries)
-dist-server-embedded: theme-db
+dist-server-embedded: check-zig theme-db
 	cd server && $(RUN_ZIG) build -Doptimize=ReleaseFast$(RUN_ZIG_END)
 	@mkdir -p dist
 	cp server/zig-out/bin/dullahan dist/
@@ -116,15 +128,15 @@ update-themes:
 	bun scripts/update-themes.ts
 	$(MAKE) theme-db
 
-update-ghostty:
-	./scripts/update-ghostty.sh
+update-ghostty: check-zig
+	$(RUN_ZIG_ENV) ./scripts/update-ghostty.sh$(RUN_ZIG_ENV_END)
 
 clean:
 	cd server && rm -rf zig-out .zig-cache
 	cd client && rm -rf dist
 	rm -rf dist coverage
 
-fmt:
+fmt: check-zig
 	$(RUN_ZIG) fmt server/src/$(RUN_ZIG_END)
 
 # =============================================================================
@@ -137,7 +149,7 @@ coverage: coverage-server coverage-client
 	@echo "  Server: Module-level test coverage shown above"
 	@echo "  Client: Line-level coverage from bun shown above"
 
-coverage-server:
+coverage-server: check-zig
 	@echo "=== Server Test Coverage (Module-level) ==="
 	@cd server && $(RUN_ZIG) build test-bin -Doptimize=Debug$(RUN_ZIG_END)
 	@server/zig-out/bin/test 2>&1 | awk -F'[. ]' ' \

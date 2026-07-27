@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 const constants = @import("constants.zig");
 const paths = @import("paths.zig");
 
@@ -144,8 +145,9 @@ pub const Response = struct {
     }
 
     pub fn format(self: Response, allocator: std.mem.Allocator) ![]u8 {
-        var list: std.ArrayListUnmanaged(u8) = .{};
-        const writer = list.writer(allocator);
+        var list = std.Io.Writer.Allocating.init(allocator);
+        defer list.deinit();
+        const writer = &list.writer;
 
         if (self.success) {
             try writer.writeAll("OK: ");
@@ -159,22 +161,22 @@ pub const Response = struct {
         }
         try writer.writeAll("\n");
 
-        return list.toOwnedSlice(allocator);
+        return list.toOwnedSlice();
     }
 };
 
 /// Check if a server is already running by reading PID file
-fn isServerRunning(pid_path: []const u8) bool {
-    const file = std.fs.cwd().openFile(pid_path, .{}) catch return false;
-    defer file.close();
+fn isServerRunning(io: std.Io, pid_path: []const u8) bool {
+    const file = std.Io.Dir.cwd().openFile(io, pid_path, .{}) catch return false;
+    defer file.close(io);
 
     var buf: [20]u8 = undefined;
-    const n = file.readAll(&buf) catch return false;
+    const n = file.readStreaming(io, &.{&buf}) catch return false;
     const pid_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
     const pid = std.fmt.parseInt(posix.pid_t, pid_str, 10) catch return false;
 
     // Check if process exists (kill with signal 0)
-    posix.kill(pid, 0) catch |e| switch (e) {
+    posix.kill(pid, @enumFromInt(0)) catch |e| switch (e) {
         error.ProcessNotFound => return false,
         error.PermissionDenied => return true, // Process exists but we can't signal it
         else => return false,
@@ -184,61 +186,62 @@ fn isServerRunning(pid_path: []const u8) bool {
 
 /// Server-side socket listener
 pub const Server = struct {
+    io: std.Io,
     socket: posix.socket_t,
     config: Config,
 
-    pub fn init(config: Config) !Server {
+    pub fn init(io: std.Io, config: Config) !Server {
         const socket_path = config.getSocketPath();
         const pid_path = config.getPidPath();
 
         // Ensure temp directory exists
-        paths.ensureTempDir() catch |e| {
+        paths.ensureTempDir(io) catch |e| {
             return e;
         };
 
         // Check if another server is already running via PID file
-        if (isServerRunning(pid_path)) {
+        if (isServerRunning(io, pid_path)) {
             return error.AddressInUse;
         }
 
         // Remove existing socket file if present (stale from crashed server)
-        std.fs.cwd().deleteFile(socket_path) catch |e| switch (e) {
+        std.Io.Dir.cwd().deleteFile(io, socket_path) catch |e| switch (e) {
             error.FileNotFound => {},
             else => return e,
         };
 
-        const socket = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
-        errdefer posix.close(socket);
+        const socket = try posix_compat.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
+        errdefer _ = posix.system.close(socket);
 
         var addr: posix.sockaddr.un = .{ .path = undefined };
         @memset(&addr.path, 0);
         @memcpy(addr.path[0..socket_path.len], socket_path);
 
-        try posix.bind(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
-        try posix.listen(socket, 5);
+        try posix_compat.bind(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un));
+        try posix_compat.listen(socket, 5);
 
-        return .{ .socket = socket, .config = config };
+        return .{ .io = io, .socket = socket, .config = config };
     }
 
     pub fn deinit(self: *Server) void {
-        posix.close(self.socket);
-        std.fs.cwd().deleteFile(self.config.getSocketPath()) catch {};
-        std.fs.cwd().deleteFile(self.config.getPidPath()) catch {};
+        _ = posix.system.close(self.socket);
+        std.Io.Dir.cwd().deleteFile(self.io, self.config.getSocketPath()) catch {};
+        std.Io.Dir.cwd().deleteFile(self.io, self.config.getPidPath()) catch {};
     }
 
     pub fn writePidFile(self: *Server) !void {
-        const file = try std.fs.cwd().createFile(self.config.getPidPath(), .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().createFile(self.io, self.config.getPidPath(), .{});
+        defer file.close(self.io);
         const pid = std.c.getpid();
         var buf: [20]u8 = undefined;
         const slice = std.fmt.bufPrint(&buf, "{d}", .{pid}) catch unreachable;
-        try file.writeAll(slice);
+        try file.writeStreamingAll(self.io, slice);
     }
 
     /// Accept a connection and read command (blocking)
     pub fn acceptCommand(self: *Server, allocator: std.mem.Allocator) !struct { conn: posix.socket_t, parsed: ParsedCommand } {
-        const conn = try posix.accept(self.socket, null, null, 0);
-        errdefer posix.close(conn);
+        const conn = try posix_compat.accept(self.socket, null, null, 0);
+        errdefer _ = posix.system.close(conn);
 
         var buf: [constants.buffer.general]u8 = undefined;
         const n = try posix.read(conn, &buf);
@@ -249,8 +252,8 @@ pub const Server = struct {
             const resp = Response.err("Unknown command. Use 'help' for available commands.");
             const formatted = try resp.format(allocator);
             defer allocator.free(formatted);
-            _ = posix.write(conn, formatted) catch {};
-            posix.close(conn);
+            _ = posix_compat.write(conn, formatted) catch {};
+            _ = posix.system.close(conn);
             return error.UnknownCommand;
         };
 
@@ -294,8 +297,8 @@ pub const Server = struct {
 
         // Connection available - accept it
         if (poll_fds[0].revents & posix.POLL.IN != 0) {
-            const conn = try posix.accept(self.socket, null, null, 0);
-            errdefer posix.close(conn);
+            const conn = try posix_compat.accept(self.socket, null, null, 0);
+            errdefer _ = posix.system.close(conn);
 
             var stack_buf: [constants.buffer.general]u8 = undefined;
             const n = try posix.read(conn, &stack_buf);
@@ -310,8 +313,8 @@ pub const Server = struct {
                 const resp = Response.err("Unknown command. Use 'help' for available commands.");
                 const formatted = try resp.format(allocator);
                 defer allocator.free(formatted);
-                _ = posix.write(conn, formatted) catch {};
-                posix.close(conn);
+                _ = posix_compat.write(conn, formatted) catch {};
+                _ = posix.system.close(conn);
                 allocator.free(heap_buf);
                 return error.UnknownCommand;
             };
@@ -327,31 +330,32 @@ pub const Server = struct {
         _ = self;
         const formatted = try response.format(allocator);
         defer allocator.free(formatted);
-        _ = try posix.write(conn, formatted);
-        posix.close(conn);
+        _ = try posix_compat.write(conn, formatted);
+        _ = posix.system.close(conn);
     }
 };
 
 /// Client-side socket connection
 pub const Client = struct {
+    io: std.Io,
     config: Config,
 
-    pub fn init(config: Config) Client {
-        return .{ .config = config };
+    pub fn init(io: std.Io, config: Config) Client {
+        return .{ .io = io, .config = config };
     }
 
     /// Check if server is running by reading PID file
     pub fn isServerRunning(self: *Client) bool {
-        const file = std.fs.cwd().openFile(self.config.getPidPath(), .{}) catch return false;
-        defer file.close();
+        const file = std.Io.Dir.cwd().openFile(self.io, self.config.getPidPath(), .{}) catch return false;
+        defer file.close(self.io);
 
         var buf: [20]u8 = undefined;
-        const n = file.readAll(&buf) catch return false;
+        const n = file.readStreaming(self.io, &.{&buf}) catch return false;
         const pid_str = std.mem.trim(u8, buf[0..n], &std.ascii.whitespace);
         const pid = std.fmt.parseInt(posix.pid_t, pid_str, 10) catch return false;
 
         // Check if process exists (kill with signal 0)
-        posix.kill(pid, 0) catch |e| switch (e) {
+        posix.kill(pid, @enumFromInt(0)) catch |e| switch (e) {
             error.ProcessNotFound => return false,
             error.PermissionDenied => return true, // Process exists but we can't signal it
             else => return false,
@@ -366,35 +370,35 @@ pub const Client = struct {
 
     /// Send command with optional data payload and receive response
     pub fn sendCommandWithData(self: *Client, command: Command, data: ?[]const u8, allocator: std.mem.Allocator) ![]u8 {
-        const socket = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
-        defer posix.close(socket);
+        const socket = try posix_compat.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0);
+        defer _ = posix.system.close(socket);
 
         // Set receive timeout
         const timeout = posix.timeval{
             .sec = @intCast(self.config.timeout_ms / 1000),
             .usec = @intCast((self.config.timeout_ms % 1000) * 1000),
         };
-        try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&timeout));
+        try posix_compat.setsockopt(socket, posix.SOL.SOCKET, posix.SO.RCVTIMEO, std.mem.asBytes(&timeout));
 
         var addr: posix.sockaddr.un = .{ .path = undefined };
         @memset(&addr.path, 0);
         const socket_path = self.config.getSocketPath();
         @memcpy(addr.path[0..socket_path.len], socket_path);
 
-        posix.connect(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
+        posix_compat.connect(socket, @ptrCast(&addr), @sizeOf(posix.sockaddr.un)) catch {
             return error.ServerNotRunning;
         };
 
         // Send command (with optional data)
         const cmd_name = @tagName(command);
-        _ = try posix.write(socket, cmd_name);
+        _ = try posix_compat.write(socket, cmd_name);
         if (data) |d| {
-            _ = try posix.write(socket, " ");
-            _ = try posix.write(socket, d);
+            _ = try posix_compat.write(socket, " ");
+            _ = try posix_compat.write(socket, d);
         }
 
         // Read response
-        var response: std.ArrayListUnmanaged(u8) = .{};
+        var response: std.ArrayListUnmanaged(u8) = .empty;
         var buf: [1024]u8 = undefined;
         while (true) {
             const n = posix.read(socket, &buf) catch |e| switch (e) {

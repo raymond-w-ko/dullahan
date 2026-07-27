@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 const builtin = @import("builtin");
 const ghostty = @import("ghostty-vt");
 const Terminal = ghostty.Terminal;
@@ -71,6 +72,9 @@ pub const Pane = struct {
     /// Allocator used for this pane
     allocator: std.mem.Allocator,
 
+    /// I/O capability used by terminal and pane-owned resources
+    io: std.Io,
+
     /// Whether this pane is active/focused
     active: bool = true,
 
@@ -96,7 +100,7 @@ pub const Pane = struct {
 
     /// Timestamp (nanoseconds) when sync mode was enabled
     /// Used for timeout detection (1 second max)
-    sync_output_start_ns: ?i128 = null,
+    sync_output_start_ns: ?std.Io.Timestamp = null,
 
     /// PTY for this pane (null if no shell spawned)
     pty: ?Pty = null,
@@ -113,7 +117,8 @@ pub const Pane = struct {
 
     /// Debug capture file for recording PTY output as hex
     /// Set via startCapture(), cleared via stopCapture()
-    capture_file: ?std.fs.File = null,
+    capture_writer: ?std.Io.File.Writer = null,
+    capture_buffer: [4096]u8 = undefined,
 
     /// VT stream parser - persists between feed() calls to handle split escape sequences
     /// Uses our custom stream handler that routes query events (DA1, DSR, OSC 10/11)
@@ -207,18 +212,18 @@ pub const Pane = struct {
     const ScreenIdentity = struct {
         active_key: @TypeOf(@as(Terminal, undefined).screens.active_key),
         first_page_serial: u64,
-        page_serial_min: u64,
+        page_serial_epoch: u64,
     };
 
-    pub fn init(allocator: std.mem.Allocator, opts: Options) !Pane {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, opts: Options) !Pane {
         var default_modes: ghostty.modes.ModePacked = .{};
         // default_modes.grapheme_cluster = true;
         default_modes.cursor_blinking = true;
 
-        var terminal = try Terminal.init(allocator, .{
+        var terminal = try Terminal.init(io, allocator, .{
             .cols = opts.cols,
             .rows = opts.rows,
-            .max_scrollback = constants.terminal.scrollback_limit,
+            .max_scrollback_bytes = constants.terminal.scrollback_limit,
             .default_modes = default_modes,
             .kitty_image_storage_limit = constants.images.kitty_storage_limit,
         });
@@ -244,14 +249,17 @@ pub const Pane = struct {
             .rows = opts.rows,
             .id = opts.id,
             .allocator = allocator,
+            .io = io,
             .dirty_rows = std.AutoHashMap(u64, void).init(allocator),
-            .clipboard = ClipboardHandler.init(allocator),
+            .clipboard = ClipboardHandler.init(io, allocator),
             .sync_output_allowed = opts.allow_sync_output,
             // vt_stream is lazily initialized in feed() - see comment on field
         };
     }
 
     pub fn deinit(self: *Pane) void {
+        self.stopCapture();
+
         // Close PTY FIRST - this sends SIGHUP to the shell and causes it to exit
         // Must happen before waitpid or the shell may be blocked reading from PTY
         if (self.pty) |*pty| {
@@ -263,7 +271,7 @@ pub const Pane = struct {
         // Now reap the child process
         if (self.child_pid) |pid| {
             log.debug("Waiting for child process {d}", .{pid});
-            process.reapChild(pid);
+            process.reapChild(self.io, pid);
             log.debug("Child process cleanup complete", .{});
         }
 
@@ -316,7 +324,7 @@ pub const Pane = struct {
 
         // Resolve shell path once and reuse it for respawns.
         if (self.shell_path == null) {
-            const shell_info = shell.detectShell();
+            const shell_info = shell.detectShell(self.io);
             self.shell_path = try self.allocator.dupe(u8, shell_info.path);
             log.info("Selected shell '{s}' for pane {d} (source: {s})", .{
                 shell_info.path,
@@ -370,7 +378,7 @@ pub const Pane = struct {
                 const written = pty.write(remaining) catch |err| {
                     if (err == error.WouldBlock) {
                         // PTY buffer full, yield and retry
-                        std.Thread.sleep(1_000_000); // 1ms
+                        try self.io.sleep(.fromMilliseconds(1), .awake);
                         continue;
                     }
                     return err;
@@ -433,8 +441,8 @@ pub const Pane = struct {
     /// - Routes notification events (bell, title, clipboard) to this pane
     pub fn feed(self: *Pane, data: []const u8) !void {
         // Write to capture file if enabled
-        if (self.capture_file) |file| {
-            self.writeCaptureHex(file, data);
+        if (self.capture_writer) |*writer| {
+            self.writeCaptureHex(&writer.interface, data);
         }
 
         // Use persistent VT stream with our custom handler to process escape sequences.
@@ -559,7 +567,7 @@ pub const Pane = struct {
             const was_enabled = self.sync_output_enabled;
             if (sync_mode) {
                 // Mode just enabled - record start time
-                self.sync_output_start_ns = std.time.nanoTimestamp();
+                self.sync_output_start_ns = std.Io.Timestamp.now(self.io, .awake);
                 log.debug("Pane {d}: Sync output enabled", .{self.id});
             } else {
                 // Mode just disabled - clear timeout
@@ -707,7 +715,7 @@ pub const Pane = struct {
             .csi_16_t => std.fmt.bufPrint(&buf, "\x1b[6;{d};{d}t", .{ cell_height, cell_width }),
             .csi_18_t => std.fmt.bufPrint(&buf, "\x1b[8;{d};{d}t", .{ rows, cols }),
             .csi_21_t => {
-                var list: std.ArrayListUnmanaged(u8) = .{};
+                var list: std.ArrayListUnmanaged(u8) = .empty;
                 defer list.deinit(self.allocator);
                 list.appendSlice(self.allocator, "\x1b]l") catch {
                     log.warn("Failed to allocate XTWINOPS title response prefix", .{});
@@ -1262,7 +1270,7 @@ pub const Pane = struct {
 
         self.cols = cols;
         self.rows = rows;
-        try self.terminal.resize(self.allocator, cols, rows);
+        try self.terminal.resize(self.allocator, .{ .cols = cols, .rows = rows });
         if (cell_width) |cw| {
             if (cell_height) |ch| {
                 if (cw > 0 and ch > 0) {
@@ -1381,7 +1389,7 @@ pub const Pane = struct {
         return .{
             .active_key = self.terminal.screens.active_key,
             .first_page_serial = first_pin.node.serial,
-            .page_serial_min = pages.page_serial_min,
+            .page_serial_epoch = pages.page_serial_epoch,
         };
     }
 
@@ -1398,18 +1406,18 @@ pub const Pane = struct {
 
         if (current.active_key != previous.active_key or
             current.first_page_serial != previous.first_page_serial or
-            current.page_serial_min != previous.page_serial_min)
+            current.page_serial_epoch != previous.page_serial_epoch)
         {
             log.debug(
-                "Screen identity changed after {s}: key {s}->{s}, first serial {d}->{d}, min serial {d}->{d}; forcing full resync",
+                "Screen identity changed after {s}: key {s}->{s}, first serial {d}->{d}, epoch {d}->{d}; forcing full resync",
                 .{
                     reason,
                     @tagName(previous.active_key),
                     @tagName(current.active_key),
                     previous.first_page_serial,
                     current.first_page_serial,
-                    previous.page_serial_min,
-                    current.page_serial_min,
+                    previous.page_serial_epoch,
+                    current.page_serial_epoch,
                 },
             );
             self.forceFullResync(reason);
@@ -1767,34 +1775,35 @@ pub const Pane = struct {
 
     /// Start capturing PTY output to a file as hex
     pub fn startCapture(self: *Pane, path: []const u8) !void {
-        if (self.capture_file != null) {
+        if (self.capture_writer != null) {
             return error.AlreadyCapturing;
         }
 
-        const file = try std.fs.cwd().createFile(path, .{});
-        self.capture_file = file;
+        const file = try std.Io.Dir.cwd().createFile(self.io, path, .{});
+        self.capture_writer = file.writer(self.io, &self.capture_buffer);
 
         // Write header
-        file.writeAll("# Dullahan PTY capture - hex dump\n") catch {};
-        file.writeAll("# Format: [timestamp_ms] offset: hex bytes | ascii\n\n") catch {};
+        self.capture_writer.?.interface.writeAll("# Dullahan PTY capture - hex dump\n") catch {};
+        self.capture_writer.?.interface.writeAll("# Format: [timestamp_ms] offset: hex bytes | ascii\n\n") catch {};
+        self.capture_writer.?.interface.flush() catch {};
 
         log.info("Started capture to {s}", .{path});
     }
 
     /// Stop capturing PTY output
     pub fn stopCapture(self: *Pane) void {
-        if (self.capture_file) |file| {
-            file.writeAll("\n# End of capture\n") catch {};
-            file.close();
-            self.capture_file = null;
+        if (self.capture_writer) |*writer| {
+            writer.interface.writeAll("\n# End of capture\n") catch {};
+            writer.interface.flush() catch {};
+            writer.file.close(self.io);
+            self.capture_writer = null;
             log.info("Stopped capture", .{});
         }
     }
 
     /// Write data to capture file as hex dump
-    fn writeCaptureHex(self: *Pane, file: std.fs.File, data: []const u8) void {
-        _ = self;
-        const timestamp = std.time.milliTimestamp();
+    fn writeCaptureHex(self: *Pane, file_writer: *std.Io.Writer, data: []const u8) void {
+        const timestamp = std.Io.Timestamp.now(self.io, .real).toMilliseconds();
 
         // Write in 16-byte rows using a buffer
         var buf: [256]u8 = undefined;
@@ -1804,33 +1813,33 @@ pub const Pane = struct {
             const row = data[offset..end];
 
             // Format the line into buffer
-            var fbs = std.io.fixedBufferStream(&buf);
-            const w = fbs.writer();
+            var writer: std.Io.Writer = .fixed(&buf);
 
             // Timestamp and offset
-            std.fmt.format(w, "[{d}] {x:0>4}: ", .{ timestamp, offset }) catch return;
+            writer.print("[{d}] {x:0>4}: ", .{ timestamp, offset }) catch return;
 
             // Hex bytes
             for (row) |byte| {
-                std.fmt.format(w, "{x:0>2} ", .{byte}) catch return;
+                writer.print("{x:0>2} ", .{byte}) catch return;
             }
 
             // Padding for short rows
             var pad: usize = 16 - row.len;
             while (pad > 0) : (pad -= 1) {
-                w.writeAll("   ") catch return;
+                writer.writeAll("   ") catch return;
             }
 
             // ASCII representation
-            w.writeAll("| ") catch return;
+            writer.writeAll("| ") catch return;
             for (row) |byte| {
                 const c: u8 = if (byte >= 32 and byte < 127) byte else '.';
-                std.fmt.format(w, "{c}", .{c}) catch return;
+                writer.print("{c}", .{c}) catch return;
             }
-            w.writeAll("\n") catch return;
+            writer.writeAll("\n") catch return;
 
             // Write to file
-            file.writeAll(fbs.getWritten()) catch return;
+            file_writer.writeAll(writer.buffered()) catch return;
+            file_writer.flush() catch return;
 
             offset = end;
         }
@@ -1839,19 +1848,16 @@ pub const Pane = struct {
 
 // Tests
 test "pane can be created" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try std.testing.expectEqual(@as(u16, 80), pane.cols);
     try std.testing.expectEqual(@as(u16, 24), pane.rows);
-    try std.testing.expectEqual(
-        constants.terminal.scrollback_limit,
-        pane.terminal.screens.active.pages.maxSize(),
-    );
+    try std.testing.expectEqual(@as(usize, 24), pane.terminal.screens.active.pages.scrollbar().total);
 }
 
 test "pane can feed data" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.feed("Hello, World!\r\n");
@@ -1863,7 +1869,7 @@ test "pane can feed data" {
 }
 
 test "dirty row tracking" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 5 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 5 });
     defer pane.deinit();
 
     // Initially no dirty rows
@@ -1888,7 +1894,7 @@ test "dirty row tracking" {
 }
 
 test "palette-only changes invalidate viewport rows" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 5 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 5 });
     defer pane.deinit();
 
     // Start from a clean dirty set.
@@ -1902,7 +1908,7 @@ test "palette-only changes invalidate viewport rows" {
 }
 
 test "terminal reset forces full resync for stale row ids" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 3 });
     defer pane.deinit();
 
     try pane.feed("before reset\r\n");
@@ -1915,7 +1921,7 @@ test "terminal reset forces full resync for stale row ids" {
 }
 
 test "alternate screen switch forces full resync for stale row ids" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 3 });
     defer pane.deinit();
 
     try pane.feed("primary");
@@ -1928,7 +1934,7 @@ test "alternate screen switch forces full resync for stale row ids" {
 }
 
 test "resize preserves cursor after blank cells during reflow" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 3 });
     defer pane.deinit();
 
     try pane.feed("abc\x1b[6C");
@@ -1941,7 +1947,7 @@ test "resize preserves cursor after blank cells during reflow" {
 }
 
 test "selection snapshot does not survive terminal reset" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 10, .rows = 3 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 10, .rows = 3 });
     defer pane.deinit();
 
     try pane.feed("selection");
@@ -1955,7 +1961,7 @@ test "selection snapshot does not survive terminal reset" {
 }
 
 test "variation selectors attach to preceding grapheme codepoint" {
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 5, .rows = 5 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 5, .rows = 5 });
     defer pane.deinit();
 
     pane.terminal.modes.set(.grapheme_cluster, true);
@@ -1967,13 +1973,13 @@ test "variation selectors attach to preceding grapheme codepoint" {
 
     const list_cell = pane.terminal.screens.active.pages.getCell(.{ .screen = .{ .x = 0, .y = 0 } }).?;
     const cell = list_cell.cell;
-    try std.testing.expectEqual(@as(u21, 0x1F3F4), cell.content.codepoint);
+    try std.testing.expectEqual(@as(u21, 0x1F3F4), cell.codepoint());
     try std.testing.expect(cell.hasGrapheme());
-    try std.testing.expectEqualSlices(u21, &.{ 0x200D, 0x2620, 0xFE0F }, list_cell.node.data.lookupGrapheme(cell).?);
+    try std.testing.expectEqualSlices(u21, &.{ 0x200D, 0x2620, 0xFE0F }, list_cell.node.page().lookupGrapheme(cell).?);
 }
 
 test "OSC title parsing" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Initially no title
@@ -2001,7 +2007,7 @@ test "OSC title parsing" {
 }
 
 test "bell detection" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Initially no bell
@@ -2021,7 +2027,7 @@ test "bell detection" {
 }
 
 test "bell detection skips OSC terminators" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // OSC 0 (set title) with BEL terminator - should NOT trigger bell
@@ -2048,7 +2054,7 @@ test "bell detection skips OSC terminators" {
 }
 
 test "mouse mode accessors" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Initially mouse reporting is disabled
@@ -2083,7 +2089,7 @@ test "mouse mode accessors" {
 }
 
 test "OSC 52 clipboard SET" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Initially no clipboard operations pending
@@ -2109,7 +2115,7 @@ test "OSC 52 clipboard SET" {
 }
 
 test "OSC 52 clipboard GET" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Feed OSC 52 GET with ST terminator: ESC ] 52 ; c ; ? ESC \
@@ -2128,7 +2134,7 @@ test "OSC 52 clipboard GET" {
 }
 
 test "OSC 52 clipboard GET waits for the final terminator across chunks" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.feed("\x1b]52;c;");
@@ -2141,7 +2147,7 @@ test "OSC 52 clipboard GET waits for the final terminator across chunks" {
 }
 
 test "OSC 52 clipboard with default kind" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Feed OSC 52 with empty kind (defaults to 'c')
@@ -2157,7 +2163,7 @@ test "OSC 52 clipboard with default kind" {
 test "OSC 52 clipboard single character kinds" {
     // Note: ghostty-vt only supports single-character clipboard kinds.
     // Multi-character kinds like "pc" are not supported by the standard parser.
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Test 'c' (clipboard)
@@ -2183,7 +2189,7 @@ test "OSC 52 clipboard single character kinds" {
 }
 
 test "OSC 133 shell integration basic" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Initially no shell event
@@ -2217,7 +2223,7 @@ test "OSC 133 shell integration basic" {
 }
 
 test "OSC 133 shell integration command_end with exit code" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     // Feed OSC 133 ; D ; 0 (command end with exit code 0)
@@ -2279,15 +2285,15 @@ fn readAvailableFromSlave(allocator: std.mem.Allocator, pty: *Pty) ![]u8 {
 fn attachResponsePipe(pane: *Pane) !void {
     if (pane.pty != null) return error.AlreadyHasPty;
 
-    const fds = try posix.pipe();
+    const fds = try posix_compat.pipe();
     errdefer {
-        posix.close(fds[0]);
-        posix.close(fds[1]);
+        _ = posix.system.close(fds[0]);
+        _ = posix.system.close(fds[1]);
     }
 
-    const flags = try posix.fcntl(fds[0], posix.F.GETFL, 0);
+    const flags = try posix_compat.fcntl(fds[0], posix.F.GETFL, 0);
     const o_nonblock: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
-    _ = try posix.fcntl(fds[0], posix.F.SETFL, flags | o_nonblock);
+    _ = try posix_compat.fcntl(fds[0], posix.F.SETFL, flags | o_nonblock);
 
     pane.pty = .{
         .master = fds[1],
@@ -2296,7 +2302,7 @@ fn attachResponsePipe(pane: *Pane) !void {
 }
 
 test "OSC color queries preserve BEL and ST terminators" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
     try attachResponsePipe(&pane);
 
@@ -2320,7 +2326,7 @@ test "OSC color queries preserve BEL and ST terminators" {
 }
 
 test "split query sequences do not emit early and still respond when completed" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
     try attachResponsePipe(&pane);
 
@@ -2339,7 +2345,7 @@ test "split query sequences do not emit early and still respond when completed" 
 }
 
 test "DA and DSR queries route through the single parser" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
     try attachResponsePipe(&pane);
 
@@ -2365,7 +2371,7 @@ test "DA and DSR queries route through the single parser" {
 }
 
 test "split title sequence with BEL terminator updates title without triggering bell" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.feed("\x1b]2;Build");
@@ -2379,7 +2385,7 @@ test "split title sequence with BEL terminator updates title without triggering 
 }
 
 test "OSC 52 responses are written back to the terminal byte-for-byte" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
     try attachResponsePipe(&pane);
 
@@ -2391,7 +2397,7 @@ test "OSC 52 responses are written back to the terminal byte-for-byte" {
 }
 
 test "OSC 9 and OSC 777 notifications are captured" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.feed("\x1b]9;Hello from OSC 9!\x07");
@@ -2409,7 +2415,7 @@ test "OSC 9 and OSC 777 notifications are captured" {
 }
 
 test "OSC 9;4 progress reports update only when a sequence completes" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.feed("\x1b]9;4;1;25\x07");
@@ -2430,7 +2436,7 @@ test "OSC 9;4 progress reports update only when a sequence completes" {
 }
 
 test "shell pane respawns with same shell after child exits" {
-    var pane = try Pane.init(std.testing.allocator, .{});
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{});
     defer pane.deinit();
 
     try pane.spawnShell();
@@ -2441,7 +2447,7 @@ test "shell pane respawns with same shell after child exits" {
     _ = posix.kill(first_pid, posix.SIG.KILL) catch {};
     var waited_ms: usize = 0;
     while (pane.isAlive() and waited_ms < 2000) : (waited_ms += 10) {
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        try std.testing.io.sleep(.fromMilliseconds(10), .awake);
     }
     try std.testing.expect(!pane.isAlive());
 

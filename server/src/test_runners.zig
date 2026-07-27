@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 const builtin = @import("builtin");
 
 // Import dullahan modules for delta tests
@@ -131,27 +132,27 @@ pub fn printTestUsage() void {
 }
 
 /// Run the specified test command
-pub fn runTest(allocator: std.mem.Allocator, cmd: TestCommand, args: ?[]const u8) !void {
+pub fn runTest(io: std.Io, allocator: std.mem.Allocator, cmd: TestCommand, args: ?[]const u8) !void {
     switch (cmd) {
-        .@"keytest-kitty" => try runKeytestKitty(),
+        .@"keytest-kitty" => try runKeytestKitty(io),
         .@"keytest-bytes" => try runKeytestBytes(),
-        .@"delta-gen" => try runDeltaGen(allocator),
-        .@"shell-delta" => try runShellDelta(allocator),
-        .@"osc52-set" => try runOsc52Set(),
-        .@"osc52-get" => try runOsc52Get(),
+        .@"delta-gen" => try runDeltaGen(io, allocator),
+        .@"shell-delta" => try runShellDelta(io, allocator),
+        .@"osc52-set" => try runOsc52Set(io),
+        .@"osc52-get" => try runOsc52Get(io),
         .@"osc52-interactive" => try runOsc52Interactive(),
         .@"grapheme-test" => runGraphemeTest(),
-        .@"grapheme-debug" => try runGraphemeDebug(allocator),
+        .@"grapheme-debug" => try runGraphemeDebug(io, allocator),
         .@"hyperlink-test" => runHyperlinkTest(),
-        .@"toast-test" => runToastTest(),
-        .@"progress-test" => runProgressTest(),
-        .@"sync-test" => runSyncTest(),
+        .@"toast-test" => try runToastTest(io),
+        .@"progress-test" => try runProgressTest(io),
+        .@"sync-test" => try runSyncTest(io),
         .@"palette-256" => runPalette256Test(),
-        .@"kitty-image-test" => try kitty_image_test.run(allocator, args),
-        .@"iterm2-image-test" => try iterm2_image_test.run(allocator, args),
-        .@"single-parser-diag" => try runSingleParserDiag(allocator),
-        .@"single-parser-matrix" => try single_parser_matrix.run(allocator),
-        .@"kitty-keyboard-stress" => try kitty_keyboard_stress.run(allocator, args),
+        .@"kitty-image-test" => try kitty_image_test.run(io, allocator, args),
+        .@"iterm2-image-test" => try iterm2_image_test.run(io, allocator, args),
+        .@"single-parser-diag" => try runSingleParserDiag(io, allocator),
+        .@"single-parser-matrix" => try single_parser_matrix.run(io, allocator),
+        .@"kitty-keyboard-stress" => try kitty_keyboard_stress.run(io, allocator, args),
         .help => printTestUsage(),
     }
 }
@@ -167,9 +168,10 @@ const KITTY_DISABLE = "\x1b[<u";
 
 var kitty_running = true;
 var kitty_escape_count: u8 = 0;
-var kitty_log_file: ?std.fs.File = null;
+var kitty_log_writer: ?std.Io.File.Writer = null;
+var kitty_log_buffer: [4096]u8 = undefined;
 
-fn runKeytestKitty() !void {
+fn runKeytestKitty(io: std.Io) !void {
     const stdin_fd = posix.STDIN_FILENO;
     const stdout_fd = posix.STDOUT_FILENO;
 
@@ -178,10 +180,18 @@ fn runKeytestKitty() !void {
     kitty_escape_count = 0;
 
     // Ensure temp directory exists and open log file
-    paths.ensureTempDir() catch {};
+    paths.ensureTempDir(io) catch {};
     const log_path = paths.StaticPaths.keytestLog();
-    kitty_log_file = std.fs.createFileAbsolute(log_path, .{ .truncate = true }) catch null;
-    defer if (kitty_log_file) |f| f.close();
+    if (std.Io.Dir.createFileAbsolute(io, log_path, .{ .truncate = true })) |file| {
+        kitty_log_writer = file.writer(io, &kitty_log_buffer);
+    } else |_| {
+        kitty_log_writer = null;
+    }
+    defer if (kitty_log_writer) |*writer| {
+        writer.interface.flush() catch {};
+        writer.file.close(io);
+        kitty_log_writer = null;
+    };
 
     // Set raw mode
     const original = try posix.tcgetattr(stdin_fd);
@@ -198,12 +208,12 @@ fn runKeytestKitty() !void {
     defer posix.tcsetattr(stdin_fd, .NOW, original) catch {};
 
     // Enable Kitty protocol
-    _ = posix.write(stdout_fd, KITTY_ENABLE) catch {};
-    defer _ = posix.write(stdout_fd, KITTY_DISABLE) catch {};
+    _ = posix_compat.write(stdout_fd, KITTY_ENABLE) catch {};
+    defer _ = posix_compat.write(stdout_fd, KITTY_DISABLE) catch {};
 
     // Header
-    _ = posix.write(stdout_fd, "Kitty Keyboard Tester (ESC twice to exit)\n") catch {};
-    _ = posix.write(stdout_fd, "─────────────────────────────────────────\n") catch {};
+    _ = posix_compat.write(stdout_fd, "Kitty Keyboard Tester (ESC twice to exit)\n") catch {};
+    _ = posix_compat.write(stdout_fd, "─────────────────────────────────────────\n") catch {};
 
     var buf: [64]u8 = undefined;
     while (kitty_running) {
@@ -213,19 +223,19 @@ fn runKeytestKitty() !void {
         kittyParseAndPrint(stdout_fd, buf[0..n]);
     }
 
-    _ = posix.write(stdout_fd, "\nBye!\n") catch {};
+    _ = posix_compat.write(stdout_fd, "\nBye!\n") catch {};
 }
 
-fn runSingleParserDiag(allocator: std.mem.Allocator) !void {
-    try query_trace_runner.run(allocator);
+fn runSingleParserDiag(io: std.Io, allocator: std.mem.Allocator) !void {
+    try query_trace_runner.run(io, allocator);
 }
 
-fn runSingleParserDiagSmoke(allocator: std.mem.Allocator) ![]u8 {
-    return query_trace_runner.runSmoke(allocator);
+fn runSingleParserDiagSmoke(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    return query_trace_runner.runSmoke(io, allocator);
 }
 
 test "single-parser diagnostics smoke creates reusable artifacts" {
-    const artifact_dir = try runSingleParserDiagSmoke(std.testing.allocator);
+    const artifact_dir = try runSingleParserDiagSmoke(std.testing.io, std.testing.allocator);
     defer std.testing.allocator.free(artifact_dir);
 
     const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
@@ -239,26 +249,30 @@ test "single-parser diagnostics smoke creates reusable artifacts" {
     const first_response_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/01-osc11-bel-response.bin", .{artifact_dir});
     defer std.testing.allocator.free(first_response_path);
 
-    var manifest_file = try std.fs.openFileAbsolute(manifest_path, .{});
-    manifest_file.close();
-    var server_log_file = try std.fs.openFileAbsolute(server_log_path, .{});
-    server_log_file.close();
-    var pty_log_file = try std.fs.openFileAbsolute(pty_log_path, .{});
-    pty_log_file.close();
-    var request_file = try std.fs.openFileAbsolute(first_request_path, .{});
-    request_file.close();
-    var response_file = try std.fs.openFileAbsolute(first_response_path, .{});
-    response_file.close();
+    const io = std.testing.io;
+    var manifest_file = try std.Io.Dir.openFileAbsolute(io, manifest_path, .{});
+    manifest_file.close(io);
+    var server_log_file = try std.Io.Dir.openFileAbsolute(io, server_log_path, .{});
+    server_log_file.close(io);
+    var pty_log_file = try std.Io.Dir.openFileAbsolute(io, pty_log_path, .{});
+    pty_log_file.close(io);
+    var request_file = try std.Io.Dir.openFileAbsolute(io, first_request_path, .{});
+    request_file.close(io);
+    var response_file = try std.Io.Dir.openFileAbsolute(io, first_response_path, .{});
+    response_file.close(io);
 }
 
-fn appendSharedServerLog(line: []const u8) !void {
-    try paths.ensureTempDir();
-    var file = try std.fs.createFileAbsolute(paths.StaticPaths.log(), .{ .truncate = false });
-    defer file.close();
-    try file.seekFromEnd(0);
+fn appendSharedServerLog(io: std.Io, line: []const u8) !void {
+    try paths.ensureTempDir(io);
+    var file = try std.Io.Dir.createFileAbsolute(io, paths.StaticPaths.log(), .{ .truncate = false });
+    defer file.close(io);
     var buf: [512]u8 = undefined;
     const payload = try std.fmt.bufPrint(&buf, "[diag] {s}\n", .{line});
-    try file.writeAll(payload);
+    var writer_buf: [512]u8 = undefined;
+    var writer = file.writer(io, &writer_buf);
+    try writer.seekTo(try file.length(io));
+    try writer.interface.writeAll(payload);
+    try writer.interface.flush();
 }
 
 fn captureParserExchange(
@@ -309,9 +323,9 @@ fn captureParserExchange(
 }
 
 fn setNonBlocking(fd: posix.fd_t) !void {
-    const flags = try posix.fcntl(fd, posix.F.GETFL, 0);
+    const flags = try posix_compat.fcntl(fd, posix.F.GETFL, 0);
     const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
-    _ = try posix.fcntl(fd, posix.F.SETFL, flags | O_NONBLOCK);
+    _ = try posix_compat.fcntl(fd, posix.F.SETFL, flags | O_NONBLOCK);
 }
 
 fn setRawMode(fd: posix.fd_t) !void {
@@ -359,8 +373,8 @@ fn readAvailableFd(allocator: std.mem.Allocator, fd: posix.fd_t, timeout_ms: i32
 
 fn kittyParseAndPrint(fd: posix.fd_t, buf: []const u8) void {
     var out: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out);
-    const w = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&out);
+    const w = &writer;
 
     // Parse the input
     var key_name: []const u8 = "?";
@@ -474,15 +488,16 @@ fn kittyParseAndPrint(fd: posix.fd_t, buf: []const u8) void {
     // Raw bytes
     w.writeAll("  Bytes:") catch {};
     for (buf) |b| {
-        std.fmt.format(w, " {x:0>2}", .{b}) catch {};
+        w.print(" {x:0>2}", .{b}) catch {};
     }
     w.writeByte('\n') catch {};
 
-    _ = posix.write(fd, fbs.getWritten()) catch {};
+    _ = posix_compat.write(fd, writer.buffered()) catch {};
 
     // Also log
-    if (kitty_log_file) |f| {
-        _ = f.write(fbs.getWritten()) catch {};
+    if (kitty_log_writer) |*log_writer| {
+        log_writer.interface.writeAll(w.buffered()) catch {};
+        log_writer.interface.flush() catch {};
     }
 }
 
@@ -728,8 +743,8 @@ fn runKeytestBytes() !void {
     try posix.tcsetattr(stdin_fd, .NOW, raw);
     defer posix.tcsetattr(stdin_fd, .NOW, original) catch {};
 
-    _ = posix.write(stdout_fd, HIDE_CURSOR) catch {};
-    defer _ = posix.write(stdout_fd, SHOW_CURSOR) catch {};
+    _ = posix_compat.write(stdout_fd, HIDE_CURSOR) catch {};
+    defer _ = posix_compat.write(stdout_fd, SHOW_CURSOR) catch {};
 
     bytesRender(stdout_fd);
 
@@ -818,8 +833,8 @@ fn bytesClearWarning() void {
 }
 
 fn bytesSetWarning(seq: []const u8, len: usize) void {
-    var w = std.io.fixedBufferStream(&bytes_warning_buf);
-    const writer = w.writer();
+    var fixed_writer: std.Io.Writer = .fixed(&bytes_warning_buf);
+    const writer = &fixed_writer;
 
     writer.writeAll("Escape sequence: ") catch {};
     for (seq[0..len]) |b| {
@@ -829,21 +844,21 @@ fn bytesSetWarning(seq: []const u8, len: usize) void {
             writer.writeByte(b) catch {};
             writer.writeByte(' ') catch {};
         } else {
-            std.fmt.format(writer, "0x{X:0>2} ", .{b}) catch {};
+            writer.print("0x{X:0>2} ", .{b}) catch {};
         }
     }
 
-    bytes_warning_len = w.pos;
+    bytes_warning_len = writer.buffered().len;
 }
 
 fn bytesRender(fd: posix.fd_t) void {
     var buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var fixed_writer: std.Io.Writer = .fixed(&buf);
+    const w = &fixed_writer;
 
     w.writeAll(CLEAR) catch {};
     w.writeAll("Byte Coverage Tester") catch {};
-    std.fmt.format(w, " ({d}/256 received, press 'q' to quit)\n", .{bytes_total_received}) catch {};
+    w.print(" ({d}/256 received, press 'q' to quit)\n", .{bytes_total_received}) catch {};
 
     if (bytes_warning_len > 0) {
         w.writeAll(YELLOW) catch {};
@@ -863,7 +878,7 @@ fn bytesRender(fd: posix.fd_t) void {
             w.writeAll(DIM) catch {};
         }
 
-        std.fmt.format(w, "{X:0>2}:{s:<3}", .{ b, hint }) catch {};
+        w.print("{X:0>2}:{s:<3}", .{ b, hint }) catch {};
         w.writeAll(RESET) catch {};
 
         if ((byte_val + 1) % 8 == 0) {
@@ -876,7 +891,7 @@ fn bytesRender(fd: posix.fd_t) void {
     w.writeAll("\n") catch {};
     w.writeAll(DIM ++ "Note: ^X = Ctrl+X, 0x80-0xFF need special input methods\n" ++ RESET) catch {};
 
-    _ = posix.write(fd, fbs.getWritten()) catch {};
+    _ = posix_compat.write(fd, w.buffered()) catch {};
 }
 
 // =============================================================================
@@ -922,24 +937,24 @@ const delta_test_cases = [_]DeltaTestCase{
     },
 };
 
-fn runDeltaGen(allocator: std.mem.Allocator) !void {
+fn runDeltaGen(io: std.Io, allocator: std.mem.Allocator) !void {
     const out_dir = "test_fixtures/delta";
-    std.fs.cwd().makePath(out_dir) catch |e| {
+    std.Io.Dir.cwd().createDirPath(io, out_dir) catch |e| {
         if (e != error.PathAlreadyExists) return e;
     };
 
     for (delta_test_cases) |tc| {
-        try generateDeltaTestCase(allocator, out_dir, tc);
+        try generateDeltaTestCase(io, allocator, out_dir, tc);
     }
 
     log.info("Generated {d} test cases in {s}/", .{ delta_test_cases.len, out_dir });
     std.debug.print("Generated {d} test cases in {s}/\n", .{ delta_test_cases.len, out_dir });
 }
 
-fn generateDeltaTestCase(allocator: std.mem.Allocator, out_dir: []const u8, tc: DeltaTestCase) !void {
+fn generateDeltaTestCase(io: std.Io, allocator: std.mem.Allocator, out_dir: []const u8, tc: DeltaTestCase) !void {
     log.info("Generating test case: {s}", .{tc.name});
 
-    var pane = try Pane.init(allocator, .{
+    var pane = try Pane.init(io, allocator, .{
         .cols = tc.cols,
         .rows = tc.rows,
     });
@@ -978,8 +993,8 @@ fn generateDeltaTestCase(allocator: std.mem.Allocator, out_dir: []const u8, tc: 
     var meta_path_buf: [256]u8 = undefined;
     const meta_path = try std.fmt.bufPrint(&meta_path_buf, "{s}/{s}_meta.json", .{ out_dir, tc.name });
 
-    var meta_file = try std.fs.cwd().createFile(meta_path, .{});
-    defer meta_file.close();
+    var meta_file = try std.Io.Dir.cwd().createFile(io, meta_path, .{});
+    defer meta_file.close(io);
 
     var buf: [1024]u8 = undefined;
     const meta_json = try std.fmt.bufPrint(&buf,
@@ -997,26 +1012,26 @@ fn generateDeltaTestCase(allocator: std.mem.Allocator, out_dir: []const u8, tc: 
         gen_a,
         gen_b,
     });
-    try meta_file.writeAll(meta_json);
+    try meta_file.writeStreamingAll(io, meta_json);
 
     // Write files
     var path_buf: [256]u8 = undefined;
     const snapshot_a_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}_snapshot_a.bin", .{ out_dir, tc.name });
-    try deltaWriteFile(snapshot_a_path, snapshot_a);
+    try deltaWriteFile(io, snapshot_a_path, snapshot_a);
 
     const snapshot_b_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}_snapshot_b.bin", .{ out_dir, tc.name });
-    try deltaWriteFile(snapshot_b_path, snapshot_b);
+    try deltaWriteFile(io, snapshot_b_path, snapshot_b);
 
     const delta_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}_delta.bin", .{ out_dir, tc.name });
-    try deltaWriteFile(delta_path, delta);
+    try deltaWriteFile(io, delta_path, delta);
 
     log.info("  Written: {s}_*.bin", .{tc.name});
 }
 
-fn deltaWriteFile(path: []const u8, data: []const u8) !void {
-    var file = try std.fs.cwd().createFile(path, .{});
-    defer file.close();
-    try file.writeAll(data);
+fn deltaWriteFile(io: std.Io, path: []const u8, data: []const u8) !void {
+    var file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, data);
 }
 
 // =============================================================================
@@ -1025,8 +1040,8 @@ fn deltaWriteFile(path: []const u8, data: []const u8) !void {
 
 const UP_ARROW = "\x1b[A";
 
-fn runShellDelta(allocator: std.mem.Allocator) !void {
-    var pane = try Pane.init(allocator, .{
+fn runShellDelta(io: std.Io, allocator: std.mem.Allocator) !void {
+    var pane = try Pane.init(io, allocator, .{
         .cols = 80,
         .rows = 24,
     });
@@ -1038,7 +1053,7 @@ fn runShellDelta(allocator: std.mem.Allocator) !void {
     });
 
     // Try to find a shell
-    const shell_path = findShell() orelse {
+    const shell_path = findShell(io) orelse {
         std.debug.print("Error: Could not find a shell (tried fish, bash, zsh, sh)\n", .{});
         return error.NoShellFound;
     };
@@ -1060,7 +1075,7 @@ fn runShellDelta(allocator: std.mem.Allocator) !void {
 
     log.info("Waiting for shell prompt...", .{});
     std.debug.print("Waiting for shell prompt...\n", .{});
-    try shellWaitForOutput(allocator, &pane, 2000);
+    try shellWaitForOutput(&pane, 2000);
 
     log.info("Shell alive: {any}", .{pane.isAlive()});
 
@@ -1083,7 +1098,7 @@ fn runShellDelta(allocator: std.mem.Allocator) !void {
         try pane.writeInput(UP_ARROW);
         log.info("Sent UP arrow", .{});
 
-        try shellWaitForOutput(allocator, &pane, 500);
+        try shellWaitForOutput(&pane, 500);
 
         const gen_before = pane.generation;
         const dirty_count = pane.getDirtyRowCount();
@@ -1107,7 +1122,7 @@ fn runShellDelta(allocator: std.mem.Allocator) !void {
         }
 
         pane.clearDirtyRows();
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        try io.sleep(.fromMilliseconds(100), .awake);
     }
 
     log.info("\n=== Summary ===", .{});
@@ -1128,7 +1143,7 @@ fn runShellDelta(allocator: std.mem.Allocator) !void {
     }
 }
 
-fn findShell() ?[:0]const u8 {
+fn findShell(io: std.Io) ?[:0]const u8 {
     const shells = [_][:0]const u8{
         "/bin/bash",
         "/bin/zsh",
@@ -1138,28 +1153,27 @@ fn findShell() ?[:0]const u8 {
         "/usr/bin/sh",
     };
     for (shells) |shell| {
-        std.fs.accessAbsolute(shell, .{}) catch continue;
+        std.Io.Dir.accessAbsolute(io, shell, .{}) catch continue;
         return shell;
     }
     return null;
 }
 
-fn shellWaitForOutput(allocator: std.mem.Allocator, pane: *Pane, timeout_ms: u32) !void {
-    _ = allocator;
+fn shellWaitForOutput(pane: *Pane, timeout_ms: u32) !void {
     var buf: [4096]u8 = undefined;
     var total_read: usize = 0;
 
     const pty_fd = pane.getPtyFd() orelse return error.NoPty;
 
-    const start = std.time.milliTimestamp();
+    const start = std.Io.Timestamp.now(pane.io, .awake).toMilliseconds();
     const deadline = start + timeout_ms;
 
     var poll_fds = [_]posix.pollfd{
         .{ .fd = pty_fd, .events = posix.POLL.IN, .revents = 0 },
     };
 
-    while (std.time.milliTimestamp() < deadline) {
-        const remaining = @as(i32, @intCast(@max(0, deadline - std.time.milliTimestamp())));
+    while (std.Io.Timestamp.now(pane.io, .awake).toMilliseconds() < deadline) {
+        const remaining = @as(i32, @intCast(@max(0, deadline - std.Io.Timestamp.now(pane.io, .awake).toMilliseconds())));
         const ready = posix.poll(&poll_fds, remaining) catch break;
 
         if (ready == 0) break;
@@ -1269,7 +1283,7 @@ fn shellDecodeDelta(allocator: std.mem.Allocator, data: []const u8) !ShellDecode
     }
     defer allocator.free(decompressed);
 
-    var dirty_rows: std.ArrayListUnmanaged(ShellDirtyRow) = .{};
+    var dirty_rows: std.ArrayListUnmanaged(ShellDirtyRow) = .empty;
     errdefer {
         for (dirty_rows.items) |row| allocator.free(row.cells);
         dirty_rows.deinit(allocator);
@@ -1569,7 +1583,7 @@ const OSC_END_BEL = "\x07";
 const OSC_END_ST = "\x1b\\";
 
 /// Send a few preset OSC 52 SET sequences to test clipboard functionality
-fn runOsc52Set() !void {
+fn runOsc52Set(io: std.Io) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
     std.debug.print("OSC 52 SET Test - Sending clipboard sequences...\n\n", .{});
@@ -1578,25 +1592,25 @@ fn runOsc52Set() !void {
     const test1_text = "Hello from OSC 52!";
     const test1_b64 = "SGVsbG8gZnJvbSBPU0MgNTIh"; // base64 of "Hello from OSC 52!"
     std.debug.print("1. Setting clipboard 'c' to: \"{s}\"\n", .{test1_text});
-    _ = posix.write(stdout_fd, OSC_START ++ "c;" ++ test1_b64 ++ OSC_END_BEL) catch {};
+    _ = posix_compat.write(stdout_fd, OSC_START ++ "c;" ++ test1_b64 ++ OSC_END_BEL) catch {};
     std.debug.print("   Sent: ESC]52;c;<base64>BEL\n\n", .{});
 
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Test 2: Set primary 'p' with different text
     const test2_text = "Primary selection test";
     const test2_b64 = "UHJpbWFyeSBzZWxlY3Rpb24gdGVzdA=="; // base64 of "Primary selection test"
     std.debug.print("2. Setting primary 'p' to: \"{s}\"\n", .{test2_text});
-    _ = posix.write(stdout_fd, OSC_START ++ "p;" ++ test2_b64 ++ OSC_END_BEL) catch {};
+    _ = posix_compat.write(stdout_fd, OSC_START ++ "p;" ++ test2_b64 ++ OSC_END_BEL) catch {};
     std.debug.print("   Sent: ESC]52;p;<base64>BEL\n\n", .{});
 
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Test 3: Set clipboard with ST terminator instead of BEL
     const test3_text = "ST terminator test";
     const test3_b64 = "U1QgdGVybWluYXRvciB0ZXN0"; // base64 of "ST terminator test"
     std.debug.print("3. Setting clipboard 'c' with ST terminator: \"{s}\"\n", .{test3_text});
-    _ = posix.write(stdout_fd, OSC_START ++ "c;" ++ test3_b64 ++ OSC_END_ST) catch {};
+    _ = posix_compat.write(stdout_fd, OSC_START ++ "c;" ++ test3_b64 ++ OSC_END_ST) catch {};
     std.debug.print("   Sent: ESC]52;c;<base64>ESC\\\n\n", .{});
 
     std.debug.print("Done! Check the ClipboardBar in the client.\n", .{});
@@ -1605,22 +1619,22 @@ fn runOsc52Set() !void {
 }
 
 /// Send OSC 52 GET sequences to request clipboard content
-fn runOsc52Get() !void {
+fn runOsc52Get(io: std.Io) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
     std.debug.print("OSC 52 GET Test - Requesting clipboard content...\n\n", .{});
 
     // Request clipboard 'c'
     std.debug.print("1. Requesting clipboard 'c'...\n", .{});
-    _ = posix.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
+    _ = posix_compat.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
     std.debug.print("   Sent: ESC]52;c;?BEL\n", .{});
     std.debug.print("   (Response will be sent back as OSC 52 sequence)\n\n", .{});
 
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Request primary 'p'
     std.debug.print("2. Requesting primary 'p'...\n", .{});
-    _ = posix.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
+    _ = posix_compat.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
     std.debug.print("   Sent: ESC]52;p;?BEL\n", .{});
     std.debug.print("   (Response will be sent back as OSC 52 sequence)\n\n", .{});
 
@@ -1664,10 +1678,10 @@ fn runOsc52Interactive() !void {
             break;
         } else if (std.mem.eql(u8, input, "gc")) {
             std.debug.print("Requesting clipboard 'c'...\n", .{});
-            _ = posix.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
+            _ = posix_compat.write(stdout_fd, OSC_START ++ "c;?" ++ OSC_END_BEL) catch {};
         } else if (std.mem.eql(u8, input, "gp")) {
             std.debug.print("Requesting primary 'p'...\n", .{});
-            _ = posix.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
+            _ = posix_compat.write(stdout_fd, OSC_START ++ "p;?" ++ OSC_END_BEL) catch {};
         } else if (std.mem.startsWith(u8, input, "sc ")) {
             const text = input[3..];
             if (text.len > 0) {
@@ -1695,8 +1709,8 @@ fn runOsc52Interactive() !void {
 fn osc52SetClipboard(fd: posix.fd_t, kind: u8, text: []const u8) void {
     // Build OSC 52 SET sequence with base64-encoded text
     var out_buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
-    const w = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&out_buf);
+    const w = &writer;
 
     // ESC ] 52 ; <kind> ;
     w.writeAll("\x1b]52;") catch return;
@@ -1717,7 +1731,7 @@ fn osc52SetClipboard(fd: posix.fd_t, kind: u8, text: []const u8) void {
     // BEL terminator
     w.writeByte(0x07) catch return;
 
-    _ = posix.write(fd, fbs.getWritten()) catch {};
+    _ = posix_compat.write(fd, w.buffered()) catch {};
 }
 
 // =============================================================================
@@ -1802,7 +1816,7 @@ fn runGraphemeTest() void {
         \\
     ;
 
-    _ = posix.write(stdout_fd, output) catch {};
+    _ = posix_compat.write(stdout_fd, output) catch {};
 }
 
 // =============================================================================
@@ -1810,13 +1824,13 @@ fn runGraphemeTest() void {
 // =============================================================================
 
 /// Debug grapheme cluster detection by feeding emoji through the VT emulator
-fn runGraphemeDebug(allocator: std.mem.Allocator) !void {
+fn runGraphemeDebug(io: std.Io, allocator: std.mem.Allocator) !void {
     std.debug.print("\nGrapheme Debug Test\n", .{});
     std.debug.print("===================\n\n", .{});
     std.debug.print("Feeding emoji through VT emulator and inspecting grapheme data...\n\n", .{});
 
     // Create a pane (which includes a ghostty terminal)
-    var pane = try Pane.init(allocator, .{
+    var pane = try Pane.init(io, allocator, .{
         .cols = 80,
         .rows = 24,
     });
@@ -1870,7 +1884,7 @@ fn runGraphemeDebug(allocator: std.mem.Allocator) !void {
 
         // Get first row via pin
         if (pages.pin(.{ .viewport = .{ .x = 0, .y = 0 } })) |row_pin| {
-            const page = &row_pin.node.data;
+            const page = row_pin.node.page();
             const cells = row_pin.cells(.all);
 
             for (0..cells.len) |col_idx| {
@@ -1931,7 +1945,7 @@ fn runHyperlinkTest() void {
     const OSC8_START = ESC ++ "]8;;";
     const OSC8_END = ESC ++ "]8;;" ++ BEL;
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\OSC 8 Hyperlink Test
         \\====================
@@ -1944,66 +1958,66 @@ fn runHyperlinkTest() void {
     ) catch {};
 
     // Link 1: Basic HTTPS
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com" ++ BEL ++ "Click here for example.com" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\n   ") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com" ++ BEL ++ "Click here for example.com" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\n   ") catch {};
 
     // Link 2: Another HTTPS link
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://github.com" ++ BEL ++ "GitHub" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, " | ") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://google.com" ++ BEL ++ "Google" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, " | ") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://anthropic.com" ++ BEL ++ "Anthropic" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://github.com" ++ BEL ++ "GitHub" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, " | ") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://google.com" ++ BEL ++ "Google" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, " | ") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://anthropic.com" ++ BEL ++ "Anthropic" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\2. HTTP LINKS (unsecured)
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "http://example.org" ++ BEL ++ "HTTP link (example.org)" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "http://example.org" ++ BEL ++ "HTTP link (example.org)" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\3. MAILTO LINKS
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "mailto:test@example.com" ++ BEL ++ "test@example.com" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\n   ") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "mailto:support@example.com?subject=Hello" ++ BEL ++ "Email with subject" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "mailto:test@example.com" ++ BEL ++ "test@example.com" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\n   ") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "mailto:support@example.com?subject=Hello" ++ BEL ++ "Email with subject" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\4. TEL LINKS
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "tel:+1-555-123-4567" ++ BEL ++ "+1 (555) 123-4567" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "tel:+1-555-123-4567" ++ BEL ++ "+1 (555) 123-4567" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\5. FILE LINKS (local)
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "file:///tmp/test.txt" ++ BEL ++ "/tmp/test.txt" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "file:///tmp/test.txt" ++ BEL ++ "/tmp/test.txt" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\6. LINKS WITH SPECIAL CHARACTERS
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/path?query=hello%20world&foo=bar" ++ BEL ++ "URL with query params" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\n   ") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/path#section" ++ BEL ++ "URL with anchor" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/path?query=hello%20world&foo=bar" ++ BEL ++ "URL with query params" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\n   ") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/path#section" ++ BEL ++ "URL with anchor" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\7. LINK WITH ID PARAMETER (for grouping)
@@ -2011,46 +2025,46 @@ fn runHyperlinkTest() void {
     ) catch {};
 
     // Link with id parameter
-    _ = posix.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Grouped link 1" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, " | ") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Same link group" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Grouped link 1" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, " | ") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]8;id=link1;https://example.com" ++ BEL ++ "Same link group" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\8. LINK IN COLORED TEXT
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, "\x1b[31m") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/red" ++ BEL ++ "Red link" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\x1b[0m | \x1b[32m") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/green" ++ BEL ++ "Green link" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\x1b[0m | \x1b[34m") catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/blue" ++ BEL ++ "Blue link" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, "\x1b[0m") catch {};
+    _ = posix_compat.write(stdout_fd, "\x1b[31m") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/red" ++ BEL ++ "Red link" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\x1b[0m | \x1b[32m") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/green" ++ BEL ++ "Green link" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\x1b[0m | \x1b[34m") catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/blue" ++ BEL ++ "Blue link" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, "\x1b[0m") catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\9. ADJACENT LINKS
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://a.com" ++ BEL ++ "AAA" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://b.com" ++ BEL ++ "BBB" ++ OSC8_END) catch {};
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://c.com" ++ BEL ++ "CCC" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://a.com" ++ BEL ++ "AAA" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://b.com" ++ BEL ++ "BBB" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://c.com" ++ BEL ++ "CCC" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\10. LONG URL
         \\
     ) catch {};
 
-    _ = posix.write(stdout_fd, OSC8_START ++ "https://example.com/this/is/a/very/long/path/that/might/wrap/across/multiple/lines/in/the/terminal" ++ BEL ++ "Very long URL path" ++ OSC8_END) catch {};
+    _ = posix_compat.write(stdout_fd, OSC8_START ++ "https://example.com/this/is/a/very/long/path/that/might/wrap/across/multiple/lines/in/the/terminal" ++ BEL ++ "Very long URL path" ++ OSC8_END) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\Test complete!
@@ -2066,10 +2080,10 @@ fn runHyperlinkTest() void {
 // =============================================================================
 
 /// Display toast notifications via OSC 9 and OSC 777 escape sequences
-fn runToastTest() void {
+fn runToastTest(io: std.Io) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\Toast Notification Test
         \\=======================
@@ -2089,35 +2103,35 @@ fn runToastTest() void {
     const BEL = "\x07";
 
     // Test 1: OSC 9 - Simple notification (info type)
-    _ = posix.write(stdout_fd, "1. OSC 9: Simple info notification\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;Hello from OSC 9!" ++ BEL) catch {};
-    std.Thread.sleep(1_500_000_000); // 1.5 seconds
+    _ = posix_compat.write(stdout_fd, "1. OSC 9: Simple info notification\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;Hello from OSC 9!" ++ BEL) catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 2: OSC 777 - Notification with title (info type)
-    _ = posix.write(stdout_fd, "2. OSC 777: Notification with title\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Build Status;Compiling source files..." ++ BEL) catch {};
-    std.Thread.sleep(1_500_000_000);
+    _ = posix_compat.write(stdout_fd, "2. OSC 777: Notification with title\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]777;notify;Build Status;Compiling source files..." ++ BEL) catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 3: OSC 9 - Success notification
-    _ = posix.write(stdout_fd, "3. OSC 9: Success notification\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;Build complete! All tests passed." ++ BEL) catch {};
-    std.Thread.sleep(1_500_000_000);
+    _ = posix_compat.write(stdout_fd, "3. OSC 9: Success notification\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;Build complete! All tests passed." ++ BEL) catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 4: OSC 777 - Warning notification
-    _ = posix.write(stdout_fd, "4. OSC 777: Warning notification\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Warning;Deprecated API usage detected" ++ BEL) catch {};
-    std.Thread.sleep(1_500_000_000);
+    _ = posix_compat.write(stdout_fd, "4. OSC 777: Warning notification\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]777;notify;Warning;Deprecated API usage detected" ++ BEL) catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 5: OSC 777 - Error notification
-    _ = posix.write(stdout_fd, "5. OSC 777: Error notification\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]777;notify;Error;Build failed with 3 errors" ++ BEL) catch {};
-    std.Thread.sleep(1_500_000_000);
+    _ = posix_compat.write(stdout_fd, "5. OSC 777: Error notification\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]777;notify;Error;Build failed with 3 errors" ++ BEL) catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 6: OSC 9 - Done notification
-    _ = posix.write(stdout_fd, "6. OSC 9: Done notification\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;Task done successfully!" ++ BEL) catch {};
+    _ = posix_compat.write(stdout_fd, "6. OSC 9: Done notification\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;Task done successfully!" ++ BEL) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\Test complete!
@@ -2144,10 +2158,10 @@ fn runToastTest() void {
 // =============================================================================
 
 /// Display progress bar via OSC 9;4 escape sequences
-fn runProgressTest() void {
+fn runProgressTest(io: std.Io) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\Progress Bar Test (OSC 9;4)
         \\===========================
@@ -2168,41 +2182,41 @@ fn runProgressTest() void {
     const BEL = "\x07";
 
     // Test 1: Normal progress 0% to 100%
-    _ = posix.write(stdout_fd, "1. Normal progress (0% -> 100%)\n") catch {};
+    _ = posix_compat.write(stdout_fd, "1. Normal progress (0% -> 100%)\n") catch {};
     var i: u8 = 0;
     while (i <= 100) : (i += 10) {
         var buf: [32]u8 = undefined;
         const seq = std.fmt.bufPrint(&buf, ESC ++ "]9;4;1;{d}" ++ BEL, .{i}) catch continue;
-        _ = posix.write(stdout_fd, seq) catch {};
-        std.Thread.sleep(200_000_000); // 200ms
+        _ = posix_compat.write(stdout_fd, seq) catch {};
+        try io.sleep(.fromMilliseconds(200), .awake);
     }
-    std.Thread.sleep(500_000_000);
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Test 2: Indeterminate (animated)
-    _ = posix.write(stdout_fd, "2. Indeterminate progress (animated)\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;4;3" ++ BEL) catch {};
-    std.Thread.sleep(3_000_000_000); // 3 seconds
+    _ = posix_compat.write(stdout_fd, "2. Indeterminate progress (animated)\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;4;3" ++ BEL) catch {};
+    try io.sleep(.fromSeconds(3), .awake);
 
     // Test 3: Warning state
-    _ = posix.write(stdout_fd, "3. Warning state at 75%\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;4;4;75" ++ BEL) catch {};
-    std.Thread.sleep(2_000_000_000);
+    _ = posix_compat.write(stdout_fd, "3. Warning state at 75%\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;4;4;75" ++ BEL) catch {};
+    try io.sleep(.fromSeconds(2), .awake);
 
     // Test 4: Error state
-    _ = posix.write(stdout_fd, "4. Error state at 50%\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;4;2;50" ++ BEL) catch {};
-    std.Thread.sleep(2_000_000_000);
+    _ = posix_compat.write(stdout_fd, "4. Error state at 50%\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;4;2;50" ++ BEL) catch {};
+    try io.sleep(.fromSeconds(2), .awake);
 
     // Test 5: Back to normal, complete
-    _ = posix.write(stdout_fd, "5. Normal -> complete\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;4;1;100" ++ BEL) catch {};
-    std.Thread.sleep(1_000_000_000);
+    _ = posix_compat.write(stdout_fd, "5. Normal -> complete\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;4;1;100" ++ BEL) catch {};
+    try io.sleep(.fromSeconds(1), .awake);
 
     // Hide progress
-    _ = posix.write(stdout_fd, "6. Hiding progress bar\n") catch {};
-    _ = posix.write(stdout_fd, ESC ++ "]9;4;0" ++ BEL) catch {};
+    _ = posix_compat.write(stdout_fd, "6. Hiding progress bar\n") catch {};
+    _ = posix_compat.write(stdout_fd, ESC ++ "]9;4;0" ++ BEL) catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\Test complete!
@@ -2233,10 +2247,10 @@ const SYNC_END = "\x1b[?2026l"; // ESU - End Synchronized Update
 
 /// Test synchronized output mode (DECSET 2026)
 /// Tests both normal operation and timeout behavior
-fn runSyncTest() void {
+fn runSyncTest(io: std.Io) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\Synchronized Output Test (DECSET 2026)
         \\======================================
@@ -2255,83 +2269,83 @@ fn runSyncTest() void {
     ) catch {};
 
     // Test 1: Normal synchronized update
-    _ = posix.write(stdout_fd, "Test 1: Normal synchronized update\n") catch {};
-    _ = posix.write(stdout_fd, "-----------------------------------\n") catch {};
-    _ = posix.write(stdout_fd, "Enabling sync mode, writing 10 lines with 50ms delays...\n\n") catch {};
-    std.Thread.sleep(500_000_000); // 500ms pause before test
+    _ = posix_compat.write(stdout_fd, "Test 1: Normal synchronized update\n") catch {};
+    _ = posix_compat.write(stdout_fd, "-----------------------------------\n") catch {};
+    _ = posix_compat.write(stdout_fd, "Enabling sync mode, writing 10 lines with 50ms delays...\n\n") catch {};
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Enable sync mode
-    _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+    _ = posix_compat.write(stdout_fd, SYNC_BEGIN) catch {};
 
     // Write multiple lines with small sleeps (simulating TUI app drawing)
     var i: u8 = 1;
     while (i <= 10) : (i += 1) {
         var buf: [64]u8 = undefined;
         const line = std.fmt.bufPrint(&buf, "  [SYNC] Line {d:2}/10 - This should appear all at once\n", .{i}) catch continue;
-        _ = posix.write(stdout_fd, line) catch {};
-        std.Thread.sleep(50_000_000); // 50ms between writes
+        _ = posix_compat.write(stdout_fd, line) catch {};
+        try io.sleep(.fromMilliseconds(50), .awake);
     }
 
     // Disable sync mode - all lines should render atomically
-    _ = posix.write(stdout_fd, SYNC_END) catch {};
+    _ = posix_compat.write(stdout_fd, SYNC_END) catch {};
 
-    _ = posix.write(stdout_fd, "\nSync mode disabled - all 10 lines should have appeared at once!\n") catch {};
-    std.Thread.sleep(1_500_000_000); // 1.5s pause
+    _ = posix_compat.write(stdout_fd, "\nSync mode disabled - all 10 lines should have appeared at once!\n") catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 2: Multiple sync batches
-    _ = posix.write(stdout_fd, "\nTest 2: Multiple sync batches\n") catch {};
-    _ = posix.write(stdout_fd, "-----------------------------\n") catch {};
-    _ = posix.write(stdout_fd, "Three separate batches, each with sync mode...\n\n") catch {};
-    std.Thread.sleep(500_000_000);
+    _ = posix_compat.write(stdout_fd, "\nTest 2: Multiple sync batches\n") catch {};
+    _ = posix_compat.write(stdout_fd, "-----------------------------\n") catch {};
+    _ = posix_compat.write(stdout_fd, "Three separate batches, each with sync mode...\n\n") catch {};
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     var batch: u8 = 1;
     while (batch <= 3) : (batch += 1) {
-        _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+        _ = posix_compat.write(stdout_fd, SYNC_BEGIN) catch {};
 
         var j: u8 = 1;
         while (j <= 3) : (j += 1) {
             var buf: [80]u8 = undefined;
             const line = std.fmt.bufPrint(&buf, "  [BATCH {d}] Line {d}/3\n", .{ batch, j }) catch continue;
-            _ = posix.write(stdout_fd, line) catch {};
-            std.Thread.sleep(30_000_000); // 30ms
+            _ = posix_compat.write(stdout_fd, line) catch {};
+            try io.sleep(.fromMilliseconds(30), .awake);
         }
 
-        _ = posix.write(stdout_fd, SYNC_END) catch {};
-        std.Thread.sleep(300_000_000); // 300ms between batches
+        _ = posix_compat.write(stdout_fd, SYNC_END) catch {};
+        try io.sleep(.fromMilliseconds(300), .awake);
     }
 
-    _ = posix.write(stdout_fd, "\nEach batch of 3 lines should have appeared atomically.\n") catch {};
-    std.Thread.sleep(1_500_000_000);
+    _ = posix_compat.write(stdout_fd, "\nEach batch of 3 lines should have appeared atomically.\n") catch {};
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // Test 3: Malformed - missing end sequence (timeout test)
-    _ = posix.write(stdout_fd, "\nTest 3: Timeout test (malformed - missing SYNC_END)\n") catch {};
-    _ = posix.write(stdout_fd, "---------------------------------------------------\n") catch {};
-    _ = posix.write(stdout_fd, "Enabling sync mode but NOT disabling it.\n") catch {};
-    _ = posix.write(stdout_fd, "Server should timeout after 1 second and flush automatically.\n\n") catch {};
-    std.Thread.sleep(500_000_000);
+    _ = posix_compat.write(stdout_fd, "\nTest 3: Timeout test (malformed - missing SYNC_END)\n") catch {};
+    _ = posix_compat.write(stdout_fd, "---------------------------------------------------\n") catch {};
+    _ = posix_compat.write(stdout_fd, "Enabling sync mode but NOT disabling it.\n") catch {};
+    _ = posix_compat.write(stdout_fd, "Server should timeout after 1 second and flush automatically.\n\n") catch {};
+    try io.sleep(.fromMilliseconds(500), .awake);
 
     // Enable sync mode but DON'T disable it
-    _ = posix.write(stdout_fd, SYNC_BEGIN) catch {};
+    _ = posix_compat.write(stdout_fd, SYNC_BEGIN) catch {};
 
     var k: u8 = 1;
     while (k <= 5) : (k += 1) {
         var buf: [80]u8 = undefined;
         const line = std.fmt.bufPrint(&buf, "  [TIMEOUT TEST] Line {d}/5 - Waiting for timeout...\n", .{k}) catch continue;
-        _ = posix.write(stdout_fd, line) catch {};
-        std.Thread.sleep(100_000_000); // 100ms
+        _ = posix_compat.write(stdout_fd, line) catch {};
+        try io.sleep(.fromMilliseconds(100), .awake);
     }
 
     // NO SYNC_END here! Server should timeout after 1 second
-    _ = posix.write(stdout_fd, "\n  (Sync mode still enabled - waiting for 1 second timeout...)\n") catch {};
+    _ = posix_compat.write(stdout_fd, "\n  (Sync mode still enabled - waiting for 1 second timeout...)\n") catch {};
 
     // Wait for timeout (server has 1 second timeout)
-    std.Thread.sleep(1_500_000_000); // 1.5 seconds - should trigger timeout
+    try io.sleep(.fromMilliseconds(1500), .awake);
 
     // After timeout, these should appear immediately (sync mode auto-disabled)
-    _ = posix.write(stdout_fd, "\n  [AFTER TIMEOUT] If you see this, timeout worked!\n") catch {};
-    _ = posix.write(stdout_fd, "  [AFTER TIMEOUT] Sync mode was auto-disabled after 1 second.\n") catch {};
+    _ = posix_compat.write(stdout_fd, "\n  [AFTER TIMEOUT] If you see this, timeout worked!\n") catch {};
+    _ = posix_compat.write(stdout_fd, "  [AFTER TIMEOUT] Sync mode was auto-disabled after 1 second.\n") catch {};
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\Test complete!
@@ -2361,7 +2375,7 @@ fn runSyncTest() void {
 fn runPalette256Test() void {
     const stdout_fd = posix.STDOUT_FILENO;
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\256-Color Palette Test
         \\======================
@@ -2389,12 +2403,12 @@ fn runPalette256Test() void {
                 "\x1b[48;5;{d}m\x1b[38;5;{d}m BG[{d:0>3}] \x1b[0m \x1b[38;5;{d}mFG[{d:0>3}]\x1b[0m  ",
                 .{ idx, fg_idx, idx, idx, idx },
             ) catch continue;
-            _ = posix.write(stdout_fd, cell) catch {};
+            _ = posix_compat.write(stdout_fd, cell) catch {};
         }
-        _ = posix.write(stdout_fd, "\n") catch {};
+        _ = posix_compat.write(stdout_fd, "\n") catch {};
     }
 
-    _ = posix.write(stdout_fd,
+    _ = posix_compat.write(stdout_fd,
         \\
         \\
         \\Done.

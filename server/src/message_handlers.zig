@@ -1175,13 +1175,13 @@ fn handleImagePaste(el: *EventLoop, image_msg: ParsedImagePaste) void {
         return;
     }
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch |e| {
+    const file = std.Io.Dir.openFileAbsolute(el.io, path, .{}) catch |e| {
         log.warn("image_paste path open failed for pane {d}: {any}", .{ image_msg.paneId, e });
         return;
     };
-    defer file.close();
+    defer file.close(el.io);
 
-    const stat = file.stat() catch |e| {
+    const stat = file.stat(el.io) catch |e| {
         log.warn("image_paste stat failed for pane {d}: {any}", .{ image_msg.paneId, e });
         return;
     };

@@ -23,6 +23,7 @@ pub const ClipboardOp = struct {
 /// Clipboard handler for OSC 52 operations
 /// Manages pending SET/GET operations and timeouts
 pub const ClipboardHandler = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
 
     /// Pending OSC 52 clipboard SET operation
@@ -45,8 +46,8 @@ pub const ClipboardHandler = struct {
     /// Maximum allowed clipboard response size (100KB)
     pub const max_response_size: usize = 100_000;
 
-    pub fn init(allocator: std.mem.Allocator) ClipboardHandler {
-        return .{ .allocator = allocator };
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) ClipboardHandler {
+        return .{ .io = io, .allocator = allocator };
     }
 
     pub fn deinit(self: *ClipboardHandler) void {
@@ -111,7 +112,7 @@ pub const ClipboardHandler = struct {
     /// Check if a clipboard GET request has timed out
     pub fn hasGetTimedOut(self: *const ClipboardHandler) bool {
         if (self.get_timestamp_ms) |ts| {
-            const now = std.time.milliTimestamp();
+            const now = std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
             return (now - ts) > get_timeout_ms;
         }
         return false;
@@ -133,7 +134,7 @@ pub const ClipboardHandler = struct {
             log.debug("OSC 52 GET request: kind={c}", .{normalized_kind});
             clog.debug("OSC 52 GET parsed: pane={d} kind='{c}'", .{ pane_id, normalized_kind });
             self.pending_get = normalized_kind;
-            self.get_timestamp_ms = std.time.milliTimestamp();
+            self.get_timestamp_ms = std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
             return;
         }
 
@@ -203,7 +204,7 @@ pub const ClipboardHandler = struct {
 // ============================================================================
 
 test "ClipboardHandler init and deinit" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
+    var handler = ClipboardHandler.init(std.testing.io, std.testing.allocator);
     defer handler.deinit();
 
     try std.testing.expect(!handler.hasSet());
@@ -211,7 +212,7 @@ test "ClipboardHandler init and deinit" {
 }
 
 test "OSC 52 SET parsed" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
+    var handler = ClipboardHandler.init(std.testing.io, std.testing.allocator);
     defer handler.deinit();
 
     handler.handleOsc52Parsed('c', "SGVsbG8gV29ybGQ=", 0);
@@ -222,7 +223,7 @@ test "OSC 52 SET parsed" {
 }
 
 test "OSC 52 GET parsed" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
+    var handler = ClipboardHandler.init(std.testing.io, std.testing.allocator);
     defer handler.deinit();
 
     handler.handleOsc52Parsed('c', "?", 0);
@@ -235,7 +236,7 @@ test "OSC 52 GET parsed" {
 }
 
 test "OSC 52 normalized kind defaults to clipboard" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
+    var handler = ClipboardHandler.init(std.testing.io, std.testing.allocator);
     defer handler.deinit();
 
     handler.handleOsc52Parsed('x', "SGVsbG8=", 0);
@@ -251,7 +252,7 @@ test "formatResponse" {
 }
 
 test "clearSet frees memory" {
-    var handler = ClipboardHandler.init(std.testing.allocator);
+    var handler = ClipboardHandler.init(std.testing.io, std.testing.allocator);
     defer handler.deinit();
 
     handler.handleOsc52Parsed('c', "SGVsbG8=", 0);

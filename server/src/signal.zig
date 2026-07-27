@@ -24,7 +24,7 @@ pub fn requestShutdown() void {
 
 /// Signal handler function (called in signal context)
 /// Must use C calling convention for POSIX signal handling
-fn signalHandler(sig: c_int) callconv(.c) void {
+fn signalHandler(sig: posix.SIG) callconv(.c) void {
     _ = sig;
     // Set the atomic flag - this is async-signal-safe
     shutdown_requested.store(true, .release);

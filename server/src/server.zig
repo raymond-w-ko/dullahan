@@ -29,11 +29,11 @@ pub const RunConfig = struct {
     tls_key: ?[]const u8 = null,
 
     /// Get static_dir with fallback to ./client if it exists
-    pub fn getStaticDir(self: RunConfig) ?[]const u8 {
+    pub fn getStaticDir(self: RunConfig, io: std.Io) ?[]const u8 {
         if (self.static_dir) |dir| return dir;
 
         // Check if ./client exists
-        std.fs.cwd().access("client", .{}) catch return null;
+        std.Io.Dir.cwd().access(io, "client", .{}) catch return null;
         return "client";
     }
 
@@ -58,9 +58,9 @@ fn hexDigit(n: u8) u8 {
     return if (n < 10) @as(u8, '0') + n else @as(u8, 'a') + (n - 10);
 }
 
-fn generateTokenHex() [64]u8 {
+fn generateTokenHex(io: std.Io) ![64]u8 {
     var bytes: [32]u8 = undefined;
-    std.crypto.random.bytes(&bytes);
+    try io.randomSecure(&bytes);
 
     var out: [64]u8 = undefined;
     for (bytes, 0..) |b, i| {
@@ -70,26 +70,27 @@ fn generateTokenHex() [64]u8 {
     return out;
 }
 
-fn writeTokensFile(path: []const u8, master_token: []const u8, view_token: []const u8) !void {
-    var file = try std.fs.createFileAbsolute(path, .{
+fn writeTokensFile(io: std.Io, path: []const u8, master_token: []const u8, view_token: []const u8) !void {
+    const file = try std.Io.Dir.createFileAbsolute(io, path, .{
         .truncate = true,
-        .mode = 0o600,
+        .permissions = @enumFromInt(0o600),
     });
-    defer file.close();
+    defer file.close(io);
 
     var buf: [256]u8 = undefined;
     const contents = try std.fmt.bufPrint(&buf, "master={s}\nview={s}\n", .{ master_token, view_token });
-    try file.writeAll(contents);
+    try file.writeStreamingAll(io, contents);
 }
 
-fn readTokensFile(path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
-    const file = std.fs.openFileAbsolute(path, .{}) catch |e| switch (e) {
+fn readTokensFile(io: std.Io, path: []const u8, buf: []u8) !?struct { master: []const u8, view: []const u8 } {
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |e| switch (e) {
         error.FileNotFound => return null,
         else => return e,
     };
-    defer file.close();
+    defer file.close(io);
 
-    const n = try file.readAll(buf);
+    var reader = file.reader(io, &.{});
+    const n = try reader.interface.readSliceShort(buf);
     if (n == 0) return null;
 
     var master: ?[]const u8 = null;
@@ -127,7 +128,10 @@ fn printAuthUrlsFromCert(cert_path: []const u8, port: u16, master_token: []const
     }
 }
 
-pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, config: RunConfig) !void {
+    pty_log.init(io);
+    defer pty_log.deinit();
+
     // Detect Tailscale for remote access BEFORE signal handlers are installed.
     // This is important because the SIGCHLD handler auto-reaps children, which
     // conflicts with Child.wait() used in tailscale detection.
@@ -135,7 +139,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         tailscale.tailscale_mode_timeout_ms
     else
         tailscale.default_timeout_ms;
-    var tailscale_info = tailscale.detectWithTimeout(allocator, tailscale_timeout_ms);
+    var tailscale_info = tailscale.detectWithTimeout(io, allocator, tailscale_timeout_ms);
     defer if (tailscale_info) |*info| info.deinit();
 
     const bind_all = tailscale_info != null;
@@ -150,8 +154,8 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     }
 
     // Ensure runtime directories exist for logs/sockets (temp) and persistent config.
-    try paths.ensureTempDir();
-    paths.ensureConfigDir() catch |e| {
+    try paths.ensureTempDir(io);
+    paths.ensureConfigDir(io) catch |e| {
         log.warn("Failed to ensure config dir {s}: {any}", .{ paths.getConfigDir(), e });
     };
 
@@ -161,7 +165,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     var view_token: []const u8 = undefined;
     var reused_tokens = false;
 
-    const tokens_opt = readTokensFile(tokens_path, &tokens_buf) catch |e| blk: {
+    const tokens_opt = readTokensFile(io, tokens_path, &tokens_buf) catch |e| blk: {
         log.warn("Failed to read tokens file {s}: {any}", .{ tokens_path, e });
         break :blk null;
     };
@@ -171,19 +175,19 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         reused_tokens = true;
     } else {
         // Generate auth tokens for this server instance
-        const master_token_buf = generateTokenHex();
-        const view_token_buf = generateTokenHex();
+        const master_token_buf = try generateTokenHex(io);
+        const view_token_buf = try generateTokenHex(io);
         master_token = master_token_buf[0..];
         view_token = view_token_buf[0..];
 
         // Write tokens to temp file
-        writeTokensFile(tokens_path, master_token, view_token) catch |e| {
+        writeTokensFile(io, tokens_path, master_token, view_token) catch |e| {
             log.warn("Failed to write tokens file {s}: {any}", .{ tokens_path, e });
         };
     }
 
     // Create global pane registry
-    var pane_registry = PaneRegistry.init(allocator, .{
+    var pane_registry = PaneRegistry.init(io, allocator, .{
         .allow_sync_output = !config.no_sync_output,
     });
     defer pane_registry.deinit();
@@ -225,7 +229,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     // Keep the initial window active on startup
     session.active_window_id = initial_active_window_id;
 
-    var ipc_server = ipc.Server.init(config.ipc) catch |e| {
+    var ipc_server = ipc.Server.init(io, config.ipc) catch |e| {
         if (e == error.AddressInUse) {
             log.err("IPC socket {s} is already in use. Another server may be running.", .{config.ipc.getSocketPath()});
             std.debug.print("Error: IPC socket already in use. Is another dullahan running?\n", .{});
@@ -247,7 +251,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
         const cert_path = config.tls_cert.?;
         const key_path = config.tls_key.?;
 
-        tls_context = tls_wrapper.TlsContext.init(allocator, .{
+        tls_context = tls_wrapper.TlsContext.init(io, allocator, .{
             .cert_path = cert_path,
             .key_path = key_path,
         }) catch |e| {
@@ -261,9 +265,9 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
     defer if (tls_context) |*ctx| ctx.deinit();
 
     // Initialize HTTP server for WebSocket
-    const static_dir = config.getStaticDir();
+    const static_dir = config.getStaticDir(io);
     const tls_ctx_ptr: ?*tls_wrapper.TlsContext = if (tls_context != null) &tls_context.? else null;
-    var http_server = http.Server.init(allocator, config.ws_port, static_dir, bind_all, tls_ctx_ptr) catch |e| {
+    var http_server = http.Server.init(io, allocator, config.ws_port, static_dir, bind_all, tls_ctx_ptr) catch |e| {
         if (e == error.AddressInUse) {
             log.err("Port {d} is already in use. Another server may be running.", .{config.ws_port});
             std.debug.print("Error: Port {d} is already in use. Is another dullahan or ttyd running?\n", .{config.ws_port});
@@ -277,7 +281,7 @@ pub fn run(allocator: std.mem.Allocator, config: RunConfig) !void {
 
     // Initialize event loop
     const auth_store = try ws_proxy.AuthStore.init(allocator, master_token, view_token);
-    var event_loop = EventLoop.init(allocator, &ipc_server, &http_server, &session, config.no_delta, auth_store);
+    var event_loop = EventLoop.init(io, allocator, &ipc_server, &http_server, &session, config.no_delta, auth_store);
     defer event_loop.deinit();
 
     // Assign layouts to windows created before event loop

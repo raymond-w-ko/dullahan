@@ -115,8 +115,9 @@ fn handlePing(_: Context) ipc.Response {
 }
 
 fn handleStatus(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     const up = ctx.uptime;
     const hours = @divFloor(up, 3600);
@@ -149,7 +150,7 @@ fn handleStatus(ctx: Context) !ipc.Response {
         }
     }
 
-    const status_data = try buf.toOwnedSlice(ctx.alloc);
+    const status_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Server status", status_data);
 }
 
@@ -159,30 +160,32 @@ fn handleQuit(ctx: Context) ipc.Response {
 }
 
 fn handleHelp(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try writer.writeAll("Available commands:\n");
     inline for (std.meta.fields(ipc.Command)) |field| {
         const cmd: ipc.Command = @enumFromInt(field.value);
         try writer.print("  {s:<10} - {s}\n", .{ field.name, cmd.description() });
     }
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Help", result_data);
 }
 
 fn handleShell(ctx: Context) !ipc.Response {
-    const steps = try shell.getDetectionSteps(ctx.alloc);
+    const steps = try shell.getDetectionSteps(ctx.session.pane_registry.io, ctx.alloc);
     return ipc.Response.okWithData("Shell detection", steps);
 }
 
 fn handleDump(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     try writer.print("Server: up={d}s cmds={d}\n", .{ ctx.uptime, ctx.commands_processed });
     try ctx.session.dump(writer);
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("State dump", result_data);
 }
 
@@ -190,11 +193,12 @@ fn handleDumpRaw(ctx: Context) !ipc.Response {
     const pane = ctx.session.activePane() orelse
         return ipc.Response.err("No active pane");
 
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
     try pane.dumpRaw(writer);
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Raw cell dump", result_data);
 }
 
@@ -213,7 +217,7 @@ fn handleDebugCapture(ctx: Context) ipc.Response {
     pane.writeInput("claude\n") catch |e| {
         logRecoverable("capture test input", e);
     };
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    ctx.session.pane_registry.io.sleep(.fromMilliseconds(500), .awake) catch {};
     pane.stopCapture();
 
     var msg_buf: [256]u8 = undefined;
@@ -244,8 +248,9 @@ fn handlePtyLogOff(ctx: Context) ipc.Response {
 }
 
 fn handleTtySize(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     // Query stdin (fd 0) for terminal size
     const TIOCGWINSZ: u32 = if (builtin.os.tag == .macos) 0x40087468 else 0x5413;
@@ -277,13 +282,14 @@ fn handleTtySize(ctx: Context) !ipc.Response {
         try writer.print("  pane {d}: {d}x{d}\n", .{ pane.id, pane.cols, pane.rows });
     }
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Server console size", result_data);
 }
 
 fn handleLayouts(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     // Write JSON array of layout templates
     try writer.writeAll("[\n");
@@ -298,13 +304,14 @@ fn handleLayouts(ctx: Context) !ipc.Response {
     }
     try writer.writeAll("\n]");
 
-    const json_data = try buf.toOwnedSlice(ctx.alloc);
+    const json_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Available layouts", json_data);
 }
 
 fn handlePanes(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     // List all pane IDs from registry
     var pane_it = ctx.session.pane_registry.iterator();
@@ -319,13 +326,14 @@ fn handlePanes(ctx: Context) !ipc.Response {
         try writer.writeAll("(no panes)");
     }
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Pane IDs", result_data);
 }
 
 fn handleWindows(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     // JSON array of windows with pane IDs
     try writer.writeAll("[\n");
@@ -352,7 +360,7 @@ fn handleWindows(ctx: Context) !ipc.Response {
     }
     try writer.writeAll("\n]");
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Windows", result_data);
 }
 
@@ -471,8 +479,9 @@ fn handleClipboardGet(ctx: Context) ipc.Response {
 }
 
 fn handleDebugLog(ctx: Context) !ipc.Response {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    const writer = buf.writer(ctx.alloc);
+    var buf = std.Io.Writer.Allocating.init(ctx.alloc);
+    defer buf.deinit();
+    const writer = &buf.writer;
 
     const args = ctx.data orelse {
         // No args - show current config
@@ -490,7 +499,7 @@ fn handleDebugLog(ctx: Context) !ipc.Response {
         try writer.writeAll("  debug-log +clipboard     Enable only clipboard\n");
         try writer.writeAll("  debug-log off            Disable all logging\n");
         try writer.writeAll("  debug-log list           List all categories\n");
-        const result_data = try buf.toOwnedSlice(ctx.alloc);
+        const result_data = try buf.toOwnedSlice();
         return ipc.Response.okWithData("Debug logging status", result_data);
     };
 
@@ -507,7 +516,7 @@ fn handleDebugLog(ctx: Context) !ipc.Response {
         for (debug_config.ALL_CATEGORIES) |cat| {
             try writer.print("  {s}\n", .{cat.asText()});
         }
-        const result_data = try buf.toOwnedSlice(ctx.alloc);
+        const result_data = try buf.toOwnedSlice();
         return ipc.Response.okWithData("Debug categories", result_data);
     }
 
@@ -534,6 +543,6 @@ fn handleDebugLog(ctx: Context) !ipc.Response {
         try writer.writeAll("  (none)\n");
     }
 
-    const result_data = try buf.toOwnedSlice(ctx.alloc);
+    const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Debug config updated", result_data);
 }

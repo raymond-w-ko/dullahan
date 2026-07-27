@@ -24,7 +24,7 @@ pub const Window = struct {
     rows: u16,
 
     /// Pane IDs belonging to this window (order matters for layout)
-    pane_ids: std.ArrayListUnmanaged(u16) = .{},
+    pane_ids: std.ArrayListUnmanaged(u16) = .empty,
 
     /// Layout template ID (e.g., "3-col", "2x2")
     template_id: ?[]const u8 = null,
@@ -58,7 +58,7 @@ pub const Window = struct {
             .id = opts.id,
             .cols = opts.cols,
             .rows = opts.rows,
-            .pane_ids = .{},
+            .pane_ids = .empty,
             .allocator = allocator,
         };
     }

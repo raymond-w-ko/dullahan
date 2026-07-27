@@ -60,16 +60,17 @@ const WS_IDLE_PING_INTERVAL_MS: i64 = 15_000;
 const WS_IDLE_PONG_TIMEOUT_MS: i64 = 10_000;
 
 pub const EventLoop = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     ipc_server: *ipc.Server,
     http_server: *http.Server,
     session: *Session,
-    clients: std.ArrayListUnmanaged(ClientState) = .{},
+    clients: std.ArrayListUnmanaged(ClientState) = .empty,
     running: bool = true,
     auth_store: ws_proxy.AuthStore,
 
     // Server state for IPC commands
-    start_time: i64,
+    start_time: std.Io.Timestamp,
     commands_processed: u64 = 0,
 
     // Master/slave state: only one client can be master at a time
@@ -101,6 +102,7 @@ pub const EventLoop = struct {
     const FIXED_FD_COUNT = 2;
 
     pub fn init(
+        io: std.Io,
         allocator: std.mem.Allocator,
         ipc_server: *ipc.Server,
         http_server: *http.Server,
@@ -109,7 +111,7 @@ pub const EventLoop = struct {
         auth_store: ws_proxy.AuthStore,
     ) EventLoop {
         http_server.setPaneRegistry(session.pane_registry);
-        var layouts = layout_db.LayoutDb.init(allocator);
+        var layouts = layout_db.LayoutDb.init(io, allocator);
         layouts.load() catch |e| {
             logRecoverable("load layouts", e);
         };
@@ -119,11 +121,12 @@ pub const EventLoop = struct {
         }
 
         return .{
+            .io = io,
             .allocator = allocator,
             .ipc_server = ipc_server,
             .http_server = http_server,
             .session = session,
-            .start_time = std.time.timestamp(),
+            .start_time = std.Io.Timestamp.now(io, .awake),
             .layouts = layouts,
             .no_delta = no_delta,
             .auth_store = auth_store,
@@ -151,7 +154,7 @@ pub const EventLoop = struct {
     }
 
     pub fn uptime(self: *const EventLoop) i64 {
-        return std.time.timestamp() - self.start_time;
+        return self.start_time.untilNow(self.io, .awake).toSeconds();
     }
 
     // WebSocket proxy methods
@@ -499,7 +502,7 @@ pub const EventLoop = struct {
             var owned_ws = ws_conn;
             errdefer owned_ws.deinit();
 
-            var client = ClientState.init(self.allocator, owned_ws);
+            var client = ClientState.init(self.io, self.allocator, owned_ws);
             client.ws.setTimeouts(0);
             try self.clients.append(self.allocator, client);
             conn_log.info("Client connected, total: {d}", .{self.clients.items.len});
@@ -510,7 +513,7 @@ pub const EventLoop = struct {
         var client = &self.clients.items[client_idx];
         const frame = try client.ws.readFrame();
         defer self.allocator.free(frame.payload);
-        client.markRx(std.time.milliTimestamp());
+        client.markRx(std.Io.Timestamp.now(self.io, .awake).toMilliseconds());
 
         switch (frame.opcode) {
             .text => {
@@ -598,13 +601,12 @@ pub const EventLoop = struct {
     /// Check all panes for sync output timeouts and flush if exceeded.
     /// Called on each poll iteration to handle apps that forget to disable sync mode.
     fn checkSyncTimeouts(self: *EventLoop) void {
-        const now = std.time.nanoTimestamp();
         var pane_it = self.session.pane_registry.iterator();
         while (pane_it.next()) |pane_ptr| {
             const pane = pane_ptr.*;
             if (pane.sync_output_enabled) {
                 if (pane.sync_output_start_ns) |start| {
-                    if (now - start > SYNC_TIMEOUT_NS) {
+                    if (start.untilNow(self.io, .awake).toNanoseconds() > SYNC_TIMEOUT_NS) {
                         log.debug("Sync timeout for pane {d}", .{pane.id});
                         pane.forceSyncDisable();
                         self.broadcastPaneUpdate(pane) catch |e| {
@@ -617,7 +619,7 @@ pub const EventLoop = struct {
     }
 
     fn checkClientIdleTimeouts(self: *EventLoop) void {
-        const now = std.time.milliTimestamp();
+        const now = std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
         var client_idx = self.clients.items.len;
         while (client_idx > 0) {
             client_idx -= 1;

@@ -5,6 +5,8 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
+const net_compat = @import("net_compat.zig");
 const c = @cImport({
     @cInclude("openssl/ssl.h");
     @cInclude("openssl/err.h");
@@ -71,15 +73,15 @@ pub const TlsContext = struct {
     allocator: std.mem.Allocator,
 
     /// Initialize TLS context by loading certificate and key from PEM files
-    pub fn init(allocator: std.mem.Allocator, config: TlsConfig) !TlsContext {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, config: TlsConfig) !TlsContext {
         initOpenSsl();
 
         log.info("Loading TLS certificate from {s}", .{config.cert_path});
         log.info("Loading TLS key from {s}", .{config.key_path});
 
         // Check key file permissions (warn if world-readable)
-        if (std.fs.cwd().statFile(config.key_path)) |stat| {
-            const mode = stat.mode;
+        if (std.Io.Dir.cwd().statFile(io, config.key_path, .{})) |stat| {
+            const mode = @intFromEnum(stat.permissions);
             if (mode & 0o004 != 0) {
                 log.warn("TLS key file {s} is world-readable. Consider restricting permissions.", .{config.key_path});
             }
@@ -130,14 +132,14 @@ pub const TlsContext = struct {
 
     /// Perform TLS handshake on an accepted connection
     /// Returns a TLS connection wrapper
-    pub fn upgrade(self: *TlsContext, tcp_stream: std.net.Stream) !TlsConnection {
+    pub fn upgrade(self: *TlsContext, tcp_stream: net_compat.Stream) !TlsConnection {
         log.debug("Starting TLS handshake", .{});
 
         // Disable Nagle's algorithm for TLS connections
         // This ensures small writes (like delta updates) are sent immediately
         // rather than being buffered, which is critical for real-time terminal updates
         const nodelay: c_int = 1;
-        posix.setsockopt(
+        posix_compat.setsockopt(
             tcp_stream.handle,
             posix.IPPROTO.TCP,
             std.posix.TCP.NODELAY,
@@ -179,12 +181,12 @@ pub const TlsContext = struct {
 
     /// Begin a non-blocking TLS handshake.
     /// Call `TlsHandshake.advance()` until it returns true.
-    pub fn beginHandshake(self: *TlsContext, tcp_stream: std.net.Stream) !TlsHandshake {
+    pub fn beginHandshake(self: *TlsContext, tcp_stream: net_compat.Stream) !TlsHandshake {
         log.debug("Starting TLS handshake (non-blocking)", .{});
 
         // Disable Nagle's algorithm for TLS connections.
         const nodelay: c_int = 1;
-        posix.setsockopt(
+        posix_compat.setsockopt(
             tcp_stream.handle,
             posix.IPPROTO.TCP,
             std.posix.TCP.NODELAY,
@@ -218,7 +220,7 @@ pub const TlsContext = struct {
 /// Incremental TLS handshake state for poll/event-loop driven servers.
 pub const TlsHandshake = struct {
     ssl: *c.SSL,
-    tcp_stream: std.net.Stream,
+    tcp_stream: net_compat.Stream,
     completed: bool = false,
 
     /// Progress one step of TLS handshake.
@@ -276,7 +278,7 @@ pub const TlsHandshake = struct {
 /// TLS connection - wraps an OpenSSL SSL* connection
 pub const TlsConnection = struct {
     ssl: *c.SSL,
-    tcp_stream: std.net.Stream,
+    tcp_stream: net_compat.Stream,
 
     pub fn read(self: *TlsConnection, buf: []u8) !usize {
         if (buf.len == 0) return 0;
@@ -322,7 +324,7 @@ pub const TlsConnection = struct {
 
 /// Unified stream type that handles both plain TCP and TLS connections
 pub const Stream = union(enum) {
-    plain: std.net.Stream,
+    plain: net_compat.Stream,
     tls: TlsConnection,
 
     /// Read from the stream

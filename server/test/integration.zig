@@ -21,7 +21,7 @@ test "math module is accessible from library root" {
 
 test "session with registry can create window and panes" {
     // Create pane registry (global pane ownership)
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{
         .cols = 80,
         .rows = 24,
     });
@@ -61,7 +61,7 @@ test "session with registry can create window and panes" {
 }
 
 test "session hierarchy: session -> window -> pane navigation" {
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{});
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try dullahan.Session.init(std.testing.allocator, &registry, .{});
@@ -85,7 +85,7 @@ test "session hierarchy: session -> window -> pane navigation" {
 }
 
 test "multiple windows share pane registry" {
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{});
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try dullahan.Session.init(std.testing.allocator, &registry, .{});
@@ -127,7 +127,7 @@ test "multiple windows share pane registry" {
 // ============================================================================
 
 test "pane feed and content extraction" {
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{
         .cols = 40,
         .rows = 10,
     });
@@ -160,7 +160,7 @@ test "pane feed and content extraction" {
 }
 
 test "pane generation tracking across modules" {
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{});
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try dullahan.Session.init(std.testing.allocator, &registry, .{});
@@ -195,7 +195,7 @@ test "pane generation tracking across modules" {
 // ============================================================================
 
 test "closing window cleans up panes in registry" {
-    var registry = dullahan.PaneRegistry.init(std.testing.allocator, .{});
+    var registry = dullahan.PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try dullahan.Session.init(std.testing.allocator, &registry, .{});

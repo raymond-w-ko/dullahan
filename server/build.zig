@@ -12,9 +12,9 @@ const wuffs_defines = [_][]const u8{
     "WUFFS_CONFIG__MODULE__ZLIB",
 };
 
-fn pathExists(path: []const u8) bool {
-    if (!std.fs.path.isAbsolute(path)) return false;
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn pathExists(b: *std.Build, path: []const u8) bool {
+    if (!std.Io.Dir.path.isAbsolute(path)) return false;
+    std.Io.Dir.accessAbsolute(b.graph.io, path, .{}) catch return false;
     return true;
 }
 
@@ -30,7 +30,7 @@ fn resolveOpenSslPrefix(b: *std.Build, openssl_dir: ?[]const u8) ?[]const u8 {
 
     for (candidates) |prefix| {
         const header = b.pathJoin(&.{ prefix, "include", "openssl", "ssl.h" });
-        if (pathExists(header)) return prefix;
+        if (pathExists(b, header)) return prefix;
     }
 
     return null;
@@ -38,7 +38,7 @@ fn resolveOpenSslPrefix(b: *std.Build, openssl_dir: ?[]const u8) ?[]const u8 {
 
 fn linkOpenSsl(
     b: *std.Build,
-    step: *std.Build.Step.Compile,
+    module: *std.Build.Module,
     target: std.Build.ResolvedTarget,
     openssl_dir: ?[]const u8,
     openssl_include_dir: ?[]const u8,
@@ -62,14 +62,14 @@ fn linkOpenSsl(
     }
 
     if (include_dir) |path| {
-        if (pathExists(path)) step.addIncludePath(.{ .cwd_relative = path });
+        if (pathExists(b, path)) module.addIncludePath(.{ .cwd_relative = path });
     }
     if (lib_dir) |path| {
-        if (pathExists(path)) step.addLibraryPath(.{ .cwd_relative = path });
+        if (pathExists(b, path)) module.addLibraryPath(.{ .cwd_relative = path });
     }
 
-    step.linkSystemLibrary2("ssl", .{ .use_pkg_config = .yes });
-    step.linkSystemLibrary2("crypto", .{ .use_pkg_config = .yes });
+    module.linkSystemLibrary("ssl", .{ .use_pkg_config = .yes });
+    module.linkSystemLibrary("crypto", .{ .use_pkg_config = .yes });
 }
 
 pub fn build(b: *std.Build) void {
@@ -158,8 +158,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.linkLibC();
-    linkOpenSsl(b, exe, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    exe.root_module.link_libc = true;
+    linkOpenSsl(b, exe.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
 
     b.installArtifact(exe);
 
@@ -181,16 +181,16 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = dullahan_mod,
     });
-    mod_tests.linkLibC();
-    linkOpenSsl(b, mod_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    mod_tests.root_module.link_libc = true;
+    linkOpenSsl(b, mod_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     // Test the executable's root module
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
     });
-    exe_tests.linkLibC();
-    linkOpenSsl(b, exe_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    exe_tests.root_module.link_libc = true;
+    linkOpenSsl(b, exe_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // Integration tests (separate test/ directory)
@@ -204,8 +204,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    integration_tests.linkLibC();
-    linkOpenSsl(b, integration_tests, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    integration_tests.root_module.link_libc = true;
+    linkOpenSsl(b, integration_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // `zig build test` runs all tests (unit + integration)

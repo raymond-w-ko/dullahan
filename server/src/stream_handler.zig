@@ -250,6 +250,7 @@ pub const Handler = struct {
             .apc_start => self.apc.start(),
             .apc_end => try self.apcEnd(),
             .apc_put => self.apc.feed(self.pane.allocator, value),
+            .apc_put_slice => self.apc.feedSlice(self.pane.allocator, value.bytes),
 
             // =================================================================
             // Ignored events (queries we don't respond to, or no-ops)
@@ -331,12 +332,11 @@ pub const Handler = struct {
             },
             .decrqss => |decrqss| {
                 var response: [128]u8 = undefined;
-                var stream = std.io.fixedBufferStream(&response);
-                const writer = stream.writer();
+                var writer: std.Io.Writer = .fixed(&response);
 
                 const prefix_fmt = "\x1bP{d}$r";
                 const prefix_len = std.fmt.comptimePrint(prefix_fmt, .{0}).len;
-                stream.pos = prefix_len;
+                writer.end = prefix_len;
 
                 switch (decrqss) {
                     .none => {
@@ -344,8 +344,8 @@ pub const Handler = struct {
                     },
                     .sgr => {
                         log.debug("DECRQSS: SGR", .{});
-                        const buf = try self.terminal.printAttributes(stream.buffer[stream.pos..]);
-                        stream.pos += buf.len;
+                        const buf = try self.terminal.printAttributes(response[writer.end..]);
+                        writer.end += buf.len;
                         try writer.writeByte('m');
                     },
                     .decscusr => {
@@ -377,10 +377,10 @@ pub const Handler = struct {
                     },
                 }
 
-                const valid = stream.pos > prefix_len;
+                const valid = writer.end > prefix_len;
                 try writer.writeAll("\x1b\\");
                 _ = try std.fmt.bufPrint(response[0..prefix_len], prefix_fmt, .{@intFromBool(valid)});
-                self.pane.writeResponse(response[0..stream.pos]) catch |e| {
+                self.pane.writeResponse(writer.buffered()) catch |e| {
                     log.warn("Failed to send DECRQSS response: {any}", .{e});
                 };
             },
@@ -397,7 +397,7 @@ pub const Handler = struct {
         if (comptime @hasDecl(ghostty.kitty.graphics, "Command")) {
             switch (cmd) {
                 .kitty => |*kitty_cmd| {
-                    if (self.terminal.kittyGraphics(self.pane.allocator, kitty_cmd)) |resp| {
+                    if (self.terminal.kittyGraphics(self.pane.io, self.pane.allocator, kitty_cmd)) |resp| {
                         var buf: [1024]u8 = undefined;
                         var writer: std.Io.Writer = .fixed(&buf);
                         try resp.encode(&writer);
@@ -844,19 +844,17 @@ pub const Handler = struct {
     /// Key/value are hex-encoded per XTGETTCAP spec.
     fn sendXtgettcapResponse(self: *Handler, key_hex: []const u8, value: []const u8) !void {
         var buf: [512]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
-        const writer = stream.writer();
+        var writer: std.Io.Writer = .fixed(&buf);
 
         try writer.writeAll("\x1bP1+r");
         try writer.writeAll(key_hex);
         if (value.len > 0) {
             try writer.writeByte('=');
-            try writeHex(writer, value);
+            try writeHex(&writer, value);
         }
         try writer.writeAll("\x1b\\");
 
-        const out = stream.buffer[0..stream.pos];
-        try self.pane.writeResponse(out);
+        try self.pane.writeResponse(writer.buffered());
     }
 };
 

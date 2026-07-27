@@ -10,6 +10,7 @@ pub const terminal = @import("terminal.zig");
 pub const ipc = @import("ipc.zig");
 pub const server = @import("server.zig");
 pub const cli = @import("cli.zig");
+pub const shell = @import("shell.zig");
 
 // WebSocket/HTTP server
 pub const http = @import("http.zig");

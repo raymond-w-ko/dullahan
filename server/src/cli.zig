@@ -28,10 +28,11 @@ pub const CliArgs = struct {
     tls_key: ?[]const u8 = null, // TLS private key path
     background: bool = false, // Run server in background (daemonize)
 
-    pub fn parse(allocator: std.mem.Allocator) !CliArgs {
+    pub fn parse(allocator: std.mem.Allocator, process_args: std.process.Args) !CliArgs {
         var args = CliArgs{};
 
-        var arg_iter = std.process.args();
+        var arg_iter = try process_args.iterateAllocator(allocator);
+        defer arg_iter.deinit();
         _ = arg_iter.skip(); // Skip program name
 
         while (arg_iter.next()) |arg| {
@@ -46,7 +47,7 @@ pub const CliArgs = struct {
                 if (arg_iter.next()) |test_arg| {
                     if (test_runners.TestCommand.fromString(test_arg)) |cmd| {
                         args.test_command = cmd;
-                        var data_parts: std.ArrayListUnmanaged([]const u8) = .{};
+                        var data_parts: std.ArrayListUnmanaged([]const u8) = .empty;
                         defer data_parts.deinit(allocator);
                         while (arg_iter.next()) |data_arg| {
                             data_parts.append(allocator, data_arg) catch {};
@@ -69,7 +70,7 @@ pub const CliArgs = struct {
             {
                 // Commands that take arguments: collect remaining args
                 args.command = ipc.Command.fromString(arg);
-                var data_parts: std.ArrayListUnmanaged([]const u8) = .{};
+                var data_parts: std.ArrayListUnmanaged([]const u8) = .empty;
                 defer data_parts.deinit(allocator);
                 while (arg_iter.next()) |data_arg| {
                     data_parts.append(allocator, data_arg) catch {};
@@ -155,7 +156,7 @@ pub fn printUsage() void {
     , .{});
 }
 
-pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
+pub fn runClient(io: std.Io, allocator: std.mem.Allocator, args: CliArgs) !void {
     const command = args.command orelse {
         std.debug.print("Error: No command specified. Use --help for usage.\n", .{});
         return error.NoCommand;
@@ -165,7 +166,7 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
     paths.setPort(args.ws_port);
 
     // Ensure temp directory exists
-    paths.ensureTempDir() catch |e| {
+    paths.ensureTempDir(io) catch |e| {
         std.debug.print("Error: Could not create temp directory: {}\n", .{e});
         return e;
     };
@@ -176,7 +177,7 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
         .timeout_ms = args.timeout_ms,
     };
 
-    var client = ipc.Client.init(config);
+    var client = ipc.Client.init(io, config);
 
     // Check if server is running
     if (!client.isServerRunning()) {
@@ -186,16 +187,16 @@ pub fn runClient(allocator: std.mem.Allocator, args: CliArgs) !void {
         }
 
         std.debug.print("Server not running. Starting...\n", .{});
-        try spawnServer(allocator, args);
+        try spawnServer(io, allocator, args);
 
         // Wait a bit for server to start
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        try io.sleep(.fromMilliseconds(100), .awake);
 
         // Retry connection a few times
         var retries: u8 = 10;
         while (retries > 0) : (retries -= 1) {
             if (client.isServerRunning()) break;
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            try io.sleep(.fromMilliseconds(100), .awake);
         }
 
         if (!client.isServerRunning()) {
@@ -259,7 +260,7 @@ fn readStdin(allocator: std.mem.Allocator) ![]u8 {
     const stdin_fd = posix.STDIN_FILENO;
 
     // Read all stdin into buffer
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     var read_buf: [constants.buffer.general]u8 = undefined;
@@ -280,13 +281,19 @@ fn readStdin(allocator: std.mem.Allocator) ![]u8 {
     return buf.toOwnedSlice(allocator);
 }
 
-fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {
+fn spawnServer(io: std.Io, allocator: std.mem.Allocator, args: CliArgs) !void {
     // Get path to self
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path = try std.fs.selfExePath(&self_path_buf);
+    var self_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const self_path_len = try std.process.executablePath(io, &self_path_buf);
+    const self_path = self_path_buf[0..self_path_len];
 
-    var argv: std.ArrayListUnmanaged([]const u8) = .{};
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     defer argv.deinit(allocator);
+    var owned_args: std.ArrayListUnmanaged([]u8) = .empty;
+    defer {
+        for (owned_args.items) |arg| allocator.free(arg);
+        owned_args.deinit(allocator);
+    }
 
     try argv.append(allocator, self_path);
     try argv.append(allocator, "serve");
@@ -294,22 +301,22 @@ fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {
     if (args.socket_path) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--socket={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.pid_path) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--pid={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.static_dir) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--static-dir={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.ws_port != 7681) {
         var buf: [64]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--port={d}", .{args.ws_port}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.pty_log) {
         try argv.append(allocator, "--pty-log");
@@ -323,23 +330,34 @@ fn spawnServer(allocator: std.mem.Allocator, args: CliArgs) !void {
     if (args.tls_cert) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--tls-cert={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.tls_key) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--tls-key={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
 
-    var child = std.process.Child.init(argv.items, allocator);
-
-    // Detach from parent
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-
-    try child.spawn();
+    _ = try std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
 
     // Don't wait - let it run in background
     // The child process will daemonize itself
+}
+
+fn appendOwnedArg(
+    allocator: std.mem.Allocator,
+    argv: *std.ArrayListUnmanaged([]const u8),
+    owned_args: *std.ArrayListUnmanaged([]u8),
+    value: []const u8,
+) !void {
+    const owned = try allocator.dupe(u8, value);
+    errdefer allocator.free(owned);
+    try owned_args.append(allocator, owned);
+    errdefer _ = owned_args.pop();
+    try argv.append(allocator, owned);
 }

@@ -27,6 +27,9 @@ pub const PaneRegistry = struct {
     /// Allocator for panes
     allocator: std.mem.Allocator,
 
+    /// I/O capability shared by owned panes
+    io: std.Io,
+
     /// Default dimensions for new panes
     default_cols: u16,
     default_rows: u16,
@@ -38,10 +41,11 @@ pub const PaneRegistry = struct {
         allow_sync_output: bool = true,
     };
 
-    pub fn init(allocator: std.mem.Allocator, opts: Options) PaneRegistry {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, opts: Options) PaneRegistry {
         return .{
             .panes = std.AutoHashMap(u16, *Pane).init(allocator),
             .allocator = allocator,
+            .io = io,
             .default_cols = opts.cols,
             .default_rows = opts.rows,
             .default_allow_sync_output = opts.allow_sync_output,
@@ -78,7 +82,7 @@ pub const PaneRegistry = struct {
         errdefer self.allocator.destroy(pane_ptr);
 
         // Initialize pane with assigned ID
-        pane_ptr.* = try Pane.init(self.allocator, .{
+        pane_ptr.* = try Pane.init(self.io, self.allocator, .{
             .cols = opts.cols,
             .rows = opts.rows,
             .id = pane_id,
@@ -168,7 +172,7 @@ pub const PaneRegistry = struct {
 
 // Tests
 test "pane registry can create and get panes" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     const id1 = try registry.create();
@@ -188,7 +192,7 @@ test "pane registry can create and get panes" {
 }
 
 test "pane registry can destroy panes" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     const id = try registry.create();
@@ -200,7 +204,7 @@ test "pane registry can destroy panes" {
 }
 
 test "pane registry respects dimensions" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{ .cols = 120, .rows = 40 });
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{ .cols = 120, .rows = 40 });
     defer registry.deinit();
 
     const id = try registry.create();

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 
 fn firstArg(args: ?[]const u8) []const u8 {
     const raw = args orelse return "/tmp/dullahan-image-test.png";
@@ -12,7 +13,7 @@ fn firstArg(args: ?[]const u8) []const u8 {
 fn writeAllFd(fd: posix.fd_t, bytes: []const u8) !void {
     var offset: usize = 0;
     while (offset < bytes.len) {
-        const written = try posix.write(fd, bytes[offset..]);
+        const written = try posix_compat.write(fd, bytes[offset..]);
         if (written == 0) return error.WriteFailed;
         offset += written;
     }
@@ -150,11 +151,11 @@ const ImageTestCase = struct {
     blank_after: u32,
 };
 
-pub fn run(allocator: std.mem.Allocator, args: ?[]const u8) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const path = firstArg(args);
     const stdout_fd = posix.STDOUT_FILENO;
 
-    const seed_data = std.fs.cwd().readFileAlloc(allocator, path, 32 * 1024 * 1024) catch |e| {
+    const seed_data = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(32 * 1024 * 1024)) catch |e| {
         std.debug.print("kitty-image-test: failed to read {s}: {}\n", .{ path, e });
         std.debug.print("Try: wget -O /tmp/dullahan-image-test.png https://upload.wikimedia.org/wikipedia/commons/3/3f/PNG_icon.png\n", .{});
         return e;

@@ -8,20 +8,20 @@ const std = @import("std");
 const Pane = @import("pane.zig").Pane;
 const verification_harness = @import("verification_harness.zig");
 
-pub fn run(allocator: std.mem.Allocator) !void {
-    const artifact_dir = try runSmoke(allocator);
+pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
+    const artifact_dir = try runSmoke(io, allocator);
     defer allocator.free(artifact_dir);
     std.debug.print("single-parser matrix artifacts: {s}\n", .{artifact_dir});
 }
 
-pub fn runSmoke(allocator: std.mem.Allocator) ![]u8 {
-    var harness = try verification_harness.Harness.init(allocator, .{
+pub fn runSmoke(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    var harness = try verification_harness.Harness.init(io, allocator, .{
         .label = "single-parser-matrix",
         .debug_config = "+all,-delta",
     });
     defer harness.deinit();
 
-    var pane = try Pane.init(allocator, .{ .cols = 80, .rows = 24, .id = 1 });
+    var pane = try Pane.init(io, allocator, .{ .cols = 80, .rows = 24, .id = 1 });
     defer pane.deinit();
     try harness.attachFakePty(&pane);
 
@@ -208,6 +208,6 @@ test "single parser matrix smoke completes and preserves artifacts" {
 
     const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
     defer std.testing.allocator.free(manifest_path);
-    var manifest_file = try std.fs.openFileAbsolute(manifest_path, .{});
-    manifest_file.close();
+    var manifest_file = try std.Io.Dir.openFileAbsolute(std.testing.io, manifest_path, .{});
+    manifest_file.close(std.testing.io);
 }

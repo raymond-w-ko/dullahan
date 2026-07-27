@@ -2,19 +2,19 @@
     .name = .dullahan,
     .version = "0.0.1",
     .fingerprint = 0xbf95c78e9ce4f53f, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .ghostty = .{
-            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#f815f8459421e4b53e6c4b9ba559a74e9dc62798",
-            .hash = "ghostty-1.3.2-dev-5UdBC2SEGwXH3Dje9ZqcgrubzolQfoQCIAnfOU4oyNHq",
+            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#5a35415a5d59a117e654735ca5a01f876dec5841",
+            .hash = "ghostty-1.3.2-dev-5UdBC6MnJgX_ZWlagLj1t4Y397aPWMoPTJZONSE86XQ_",
         },
         .@"zig-msgpack" = .{
-            .url = "git+https://github.com/zigcc/zig-msgpack#47c15d217efebd17a585dd04125f9b6b6f659d5a",
-            .hash = "zig_msgpack-0.0.14-evvueGolBQBs_m726tBf4ISJQqC926AM96EtxZy9LUaI",
+            .url = "git+https://github.com/zigcc/zig-msgpack#e5d5f8604cf7aa50593df8e450686a269a7299c6",
+            .hash = "zig_msgpack-0.0.14-evvueL5SBQACmim6j6klQ9wWIIG_UxGlPvVYdiNy0KT8",
         },
         .snappy = .{
-            .url = "git+https://github.com/ChainSafe/snappy.zig#206a3019ed9f5cb1e382bddca9a51d7c3e7d8cd3",
-            .hash = "snappy-0.1.0-n4Aaqtw4AAA1bcVRSEh4ERJs4_Tjzph4cXEMPdYtQbeA",
+            .url = "git+https://github.com/ChainSafe/snappy.zig#713942410426051da6107a955b29f3f152815622",
+            .hash = "snappy-0.1.0-n4AaquQ4AADQScvw9-i6SJvZTTagvxmGgGKnat4T_a4e",
         },
         .wuffs = .{
             .url = "https://deps.files.ghostty.org/wuffs-122037b39d577ec2db3fd7b2130e7b69ef6cc1807d68607a7c232c958315d381b5cd.tar.gz",

@@ -5,11 +5,13 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 const builtin = @import("builtin");
 
 const c = @cImport({
     @cInclude("sys/ioctl.h");
     @cInclude("sys/stat.h"); // stat() for directory check
+    @cInclude("fcntl.h");
     if (builtin.os.tag == .macos) {
         @cInclude("util.h"); // openpty() on macOS
     } else {
@@ -55,22 +57,14 @@ pub const Pty = struct {
         }
 
         // Set CLOEXEC on master so it's not inherited by child
-        const fd_flags = posix.fcntl(master, posix.F.GETFD, 0) catch {
+        const fd_flags = c.fcntl(master, c.F_GETFD, @as(c_int, 0));
+        if (fd_flags < 0 or c.fcntl(master, c.F_SETFD, fd_flags | c.FD_CLOEXEC) < 0)
             return error.OpenPtyFailed;
-        };
-        _ = posix.fcntl(master, posix.F.SETFD, fd_flags | posix.FD_CLOEXEC) catch {
-            return error.OpenPtyFailed;
-        };
 
         // Set non-blocking on master for poll-based event loop
-        const fl_flags = posix.fcntl(master, posix.F.GETFL, 0) catch {
+        const fl_flags = c.fcntl(master, c.F_GETFL, @as(c_int, 0));
+        if (fl_flags < 0 or c.fcntl(master, c.F_SETFL, fl_flags | c.O_NONBLOCK) < 0)
             return error.OpenPtyFailed;
-        };
-        // O_NONBLOCK = 0x4 on macOS, 0x800 on Linux
-        const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
-        _ = posix.fcntl(master, posix.F.SETFL, fl_flags | O_NONBLOCK) catch {
-            return error.OpenPtyFailed;
-        };
 
         // Enable UTF-8 mode
         var attrs: c.termios = undefined;
@@ -110,17 +104,19 @@ pub const Pty = struct {
 
     /// Write to the master side of the PTY (sends input to child)
     pub fn write(self: *Pty, data: []const u8) !usize {
-        return posix.write(self.master, data);
+        return posix_compat.write(self.master, data);
     }
 
     /// Spawn a child process connected to this PTY
     pub fn spawn(self: *Pty, argv: []const [:0]const u8, env: ?[*:null]const ?[*:0]const u8) Error!posix.pid_t {
-        const pid = posix.fork() catch return error.ForkFailed;
+        const fork_result = c.fork();
+        if (fork_result < 0) return error.ForkFailed;
+        const pid: posix.pid_t = @intCast(fork_result);
 
         if (pid == 0) {
             // Child process
             resetChildSignalHandlers();
-            self.childSetup() catch posix.exit(1);
+            self.childSetup() catch std.c._exit(1);
 
             // Set terminal environment variables
             setTerminalEnv();
@@ -133,10 +129,12 @@ pub const Pty = struct {
             argv_buf[argv.len] = null;
 
             const argv_ptr: [*:null]const ?[*:0]const u8 = &argv_buf;
-            const env_ptr = env orelse @as([*:null]const ?[*:0]const u8, @ptrCast(std.c.environ));
-
-            _ = posix.execvpeZ(argv_buf[0].?, argv_ptr, env_ptr) catch {};
-            posix.exit(1);
+            if (env) |env_ptr| {
+                _ = c.execve(argv_buf[0].?, @ptrCast(argv_ptr), @ptrCast(env_ptr));
+            } else {
+                _ = c.execvp(argv_buf[0].?, @ptrCast(argv_ptr));
+            }
+            std.c._exit(1);
         }
 
         // Parent: close slave fd, we only need master
@@ -191,7 +189,7 @@ fn setTerminalEnv() void {
 
     // Set TERM to xterm-ghostty for terminfo lookup
     _ = c.setenv("TERM", "xterm-ghostty", 1);
-    
+
     // Set TERMINFO only if Ghostty.app terminfo directory exists
     const terminfo_path = "/Applications/Ghostty.app/Contents/Resources/terminfo";
     var stat_buf: c.struct_stat = undefined;

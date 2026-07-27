@@ -12,6 +12,7 @@ const Pty = @import("pty.zig").Pty;
 const dlog = @import("dlog.zig");
 const paths = @import("paths.zig");
 const pty_log = @import("pty_log.zig");
+const posix_compat = @import("posix_compat.zig");
 
 pub const Options = struct {
     label: []const u8,
@@ -71,6 +72,7 @@ const Manifest = struct {
 };
 
 pub const Harness = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     label: []u8,
     debug_config: []u8,
@@ -82,20 +84,21 @@ pub const Harness = struct {
     previous_pty_log_enabled: bool,
     server_log_offset: u64,
     pty_log_offset: u64,
-    captures: std.ArrayListUnmanaged(CaptureRecord) = .{},
+    captures: std.ArrayListUnmanaged(CaptureRecord) = .empty,
     capture_index: usize = 0,
     finished: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator, options: Options) !Harness {
-        dlog.init();
-        try paths.ensureTempDir();
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, options: Options) !Harness {
+        dlog.init(io, null);
+        pty_log.init(io);
+        try paths.ensureTempDir(io);
 
         var previous_config_buf: [256]u8 = undefined;
         const previous_config = dlog.getConfigString(&previous_config_buf);
         const previous_pty_log_enabled = pty_log.isEnabled();
 
-        const server_log_offset = fileSizeOrZero(paths.StaticPaths.log());
-        const pty_log_offset = if (previous_pty_log_enabled) fileSizeOrZero(pty_log.getLogPath()) else 0;
+        const server_log_offset = fileSizeOrZero(io, paths.StaticPaths.log());
+        const pty_log_offset = if (previous_pty_log_enabled) fileSizeOrZero(io, pty_log.getLogPath()) else 0;
 
         const label_slug = try slugify(allocator, options.label);
         errdefer allocator.free(label_slug);
@@ -106,11 +109,11 @@ pub const Harness = struct {
             .{
                 paths.getTempDir(),
                 label_slug,
-                std.time.milliTimestamp(),
+                std.Io.Timestamp.now(io, .real).toMilliseconds(),
             },
         );
         errdefer allocator.free(artifact_dir);
-        try std.fs.makeDirAbsolute(artifact_dir);
+        try std.Io.Dir.createDirAbsolute(io, artifact_dir, .default_dir);
 
         const manifest_path = try std.fmt.allocPrint(allocator, "{s}/manifest.json", .{artifact_dir});
         errdefer allocator.free(manifest_path);
@@ -134,6 +137,7 @@ pub const Harness = struct {
         allocator.free(label_slug);
 
         return .{
+            .io = io,
             .allocator = allocator,
             .label = label_owned,
             .debug_config = debug_config_owned,
@@ -176,10 +180,10 @@ pub const Harness = struct {
     pub fn attachFakePty(self: *Harness, pane: *Pane) !void {
         _ = self;
         if (pane.pty != null) return error.AlreadyHasPty;
-        const fds = try std.posix.pipe();
+        const fds = try posix_compat.pipe();
         errdefer {
-            std.posix.close(fds[0]);
-            std.posix.close(fds[1]);
+            _ = std.posix.system.close(fds[0]);
+            _ = std.posix.system.close(fds[1]);
         }
         try setNonBlocking(fds[0]);
         pane.pty = .{
@@ -207,11 +211,11 @@ pub const Harness = struct {
         const response_file = try std.fmt.allocPrint(self.allocator, "{s}-response.bin", .{prefix});
         errdefer self.allocator.free(response_file);
 
-        try writeFileAbsolute(request_file, request);
+        try writeFileAbsolute(self.io, request_file, request);
         try pane.feed(request);
         const response = try readAvailableFromFd(self.allocator, pty.slave, 25);
         errdefer self.allocator.free(response);
-        try writeFileAbsolute(response_file, response);
+        try writeFileAbsolute(self.io, response_file, response);
 
         const snapshot = try snapshotPane(self.allocator, pane);
         errdefer freePaneSnapshot(self.allocator, &snapshot);
@@ -238,8 +242,8 @@ pub const Harness = struct {
         if (self.finished) return self.artifact_dir;
         defer self.restoreLoggingState();
 
-        try copyFileTail(paths.StaticPaths.log(), self.server_log_offset, self.server_log_artifact);
-        try copyFileTail(pty_log.getLogPath(), self.pty_log_offset, self.pty_log_artifact);
+        try copyFileTail(self.io, paths.StaticPaths.log(), self.server_log_offset, self.server_log_artifact);
+        try copyFileTail(self.io, pty_log.getLogPath(), self.pty_log_offset, self.pty_log_artifact);
         try self.writeManifest();
         self.finished = true;
         return self.artifact_dir;
@@ -256,12 +260,12 @@ pub const Harness = struct {
             .captures = self.captures.items,
         };
 
-        const file = try std.fs.createFileAbsolute(self.manifest_path, .{ .truncate = true });
-        defer file.close();
+        const file = try std.Io.Dir.createFileAbsolute(self.io, self.manifest_path, .{ .truncate = true });
+        defer file.close(self.io);
         const payload = try std.json.Stringify.valueAlloc(self.allocator, manifest, .{ .whitespace = .indent_2 });
         defer self.allocator.free(payload);
-        try file.writeAll(payload);
-        try file.writeAll("\n");
+        try file.writeStreamingAll(self.io, payload);
+        try file.writeStreamingAll(self.io, "\n");
     }
 
     fn restoreLoggingState(self: *Harness) void {
@@ -355,9 +359,12 @@ fn slugify(allocator: std.mem.Allocator, label: []const u8) ![]u8 {
 }
 
 fn setNonBlocking(fd: std.posix.fd_t) !void {
-    const current = try std.posix.fcntl(fd, std.posix.F.GETFL, 0);
+    const current_result = std.posix.system.fcntl(fd, std.posix.F.GETFL, @as(usize, 0));
+    if (std.posix.errno(current_result) != .SUCCESS) return error.FcntlFailed;
+    const current: usize = @intCast(current_result);
     const o_nonblock: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
-    _ = try std.posix.fcntl(fd, std.posix.F.SETFL, current | o_nonblock);
+    const set_result = std.posix.system.fcntl(fd, std.posix.F.SETFL, current | o_nonblock);
+    if (std.posix.errno(set_result) != .SUCCESS) return error.FcntlFailed;
 }
 
 fn readAvailableFromFd(allocator: std.mem.Allocator, fd: std.posix.fd_t, timeout_ms: i32) ![]u8 {
@@ -389,36 +396,37 @@ fn readAvailableFromFd(allocator: std.mem.Allocator, fd: std.posix.fd_t, timeout
     return out.toOwnedSlice(allocator);
 }
 
-fn writeFileAbsolute(path: []const u8, bytes: []const u8) !void {
-    const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
-    defer file.close();
-    try file.writeAll(bytes);
+fn writeFileAbsolute(io: std.Io, path: []const u8, bytes: []const u8) !void {
+    const file = try std.Io.Dir.createFileAbsolute(io, path, .{ .truncate = true });
+    defer file.close(io);
+    try file.writeStreamingAll(io, bytes);
 }
 
-fn copyFileTail(source_path: []const u8, start_offset: u64, dest_path: []const u8) !void {
-    const dest = try std.fs.createFileAbsolute(dest_path, .{ .truncate = true });
-    defer dest.close();
+fn copyFileTail(io: std.Io, source_path: []const u8, start_offset: u64, dest_path: []const u8) !void {
+    const dest = try std.Io.Dir.createFileAbsolute(io, dest_path, .{ .truncate = true });
+    defer dest.close(io);
 
-    const source = std.fs.openFileAbsolute(source_path, .{}) catch return;
-    defer source.close();
+    const source = std.Io.Dir.openFileAbsolute(io, source_path, .{}) catch return;
+    defer source.close(io);
 
-    const stat = try source.stat();
-    if (stat.size <= start_offset) return;
+    if (try source.length(io) <= start_offset) return;
 
-    try source.seekTo(start_offset);
+    var reader_buffer: [4096]u8 = undefined;
+    var reader = source.reader(io, &reader_buffer);
+    try reader.seekTo(start_offset);
 
     var buf: [4096]u8 = undefined;
     while (true) {
-        const n = try source.read(&buf);
+        const n = try reader.interface.readSliceShort(&buf);
         if (n == 0) break;
-        try dest.writeAll(buf[0..n]);
+        try dest.writeStreamingAll(io, buf[0..n]);
     }
 }
 
-fn fileSizeOrZero(path: []const u8) u64 {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return 0;
-    defer file.close();
-    return (file.stat() catch return 0).size;
+fn fileSizeOrZero(io: std.Io, path: []const u8) u64 {
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch return 0;
+    defer file.close(io);
+    return file.length(io) catch return 0;
 }
 
 fn detectTerminator(bytes: []const u8) []const u8 {
@@ -429,47 +437,47 @@ fn detectTerminator(bytes: []const u8) []const u8 {
 }
 
 fn allocHexString(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
-    var out = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer out.deinit(allocator);
-    const writer = out.writer(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
     for (bytes, 0..) |byte, idx| {
-        if (idx != 0) try out.appendSlice(allocator, " ");
+        if (idx != 0) try writer.writeByte(' ');
         try writer.print("{x:0>2}", .{byte});
     }
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 fn allocHumanString(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
-    var out = try std.ArrayList(u8).initCapacity(allocator, 0);
-    defer out.deinit(allocator);
-    const writer = out.writer(allocator);
+    var out = std.Io.Writer.Allocating.init(allocator);
+    defer out.deinit();
+    const writer = &out.writer;
     for (bytes) |byte| {
         switch (byte) {
-            '\\' => try out.appendSlice(allocator, "\\\\"),
-            '"' => try out.appendSlice(allocator, "\\\""),
-            '\n' => try out.appendSlice(allocator, "\\n"),
-            '\r' => try out.appendSlice(allocator, "\\r"),
-            '\t' => try out.appendSlice(allocator, "\\t"),
+            '\\' => try writer.writeAll("\\\\"),
+            '"' => try writer.writeAll("\\\""),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
             else => {
                 if (byte >= 32 and byte < 127) {
-                    try out.append(allocator, byte);
+                    try writer.writeByte(byte);
                 } else {
                     try writer.print("\\x{x:0>2}", .{byte});
                 }
             },
         }
     }
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 test "capture harness records BEL and ST query responses" {
-    var harness = try Harness.init(std.testing.allocator, .{
+    var harness = try Harness.init(std.testing.io, std.testing.allocator, .{
         .label = "unit-trace",
         .debug_config = "+all,-delta",
     });
     defer harness.deinit();
 
-    var pane = try Pane.init(std.testing.allocator, .{ .cols = 40, .rows = 10, .id = 77 });
+    var pane = try Pane.init(std.testing.io, std.testing.allocator, .{ .cols = 40, .rows = 10, .id = 77 });
     defer pane.deinit();
     try harness.attachFakePty(&pane);
 

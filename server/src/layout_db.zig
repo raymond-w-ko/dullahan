@@ -119,12 +119,14 @@ pub const LayoutTemplate = struct {
 
 /// Layout database
 pub const LayoutDb = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
-    templates: std.ArrayListUnmanaged(LayoutTemplate) = .{},
+    templates: std.ArrayListUnmanaged(LayoutTemplate) = .empty,
     loaded: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator) LayoutDb {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator) LayoutDb {
         return .{
+            .io = io,
             .allocator = allocator,
         };
     }
@@ -173,13 +175,14 @@ pub const LayoutDb = struct {
     fn loadFromFile(self: *LayoutDb) !bool {
         const path = paths.StaticPaths.layouts();
 
-        const file = std.fs.openFileAbsolute(path, .{}) catch |e| switch (e) {
+        const file = std.Io.Dir.openFileAbsolute(self.io, path, .{}) catch |e| switch (e) {
             error.FileNotFound => return false,
             else => return e,
         };
-        defer file.close();
+        defer file.close(self.io);
 
-        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024); // 1MB max
+        var reader = file.reader(self.io, &.{});
+        const content = try reader.interface.allocRemaining(self.allocator, .limited(1024 * 1024));
         defer self.allocator.free(content);
 
         try self.parseJson(content);
@@ -276,25 +279,24 @@ pub const LayoutDb = struct {
     }
 
     /// Writer type for JSON serialization
-    const JsonWriter = std.ArrayListUnmanaged(u8).Writer;
-    const WriteError = std.mem.Allocator.Error;
+    const JsonWriter = std.Io.Writer;
+    const WriteError = std.Io.Writer.Error;
 
     /// Save layouts to JSON file
     fn saveToFile(self: *LayoutDb) !void {
-        try paths.ensureConfigDir();
+        try paths.ensureConfigDir(self.io);
 
         const path = paths.StaticPaths.layouts();
 
         // Build JSON in memory
-        var buf: std.ArrayListUnmanaged(u8) = .{};
-        defer buf.deinit(self.allocator);
-        var writer = buf.writer(self.allocator);
-        try writeJson(self.templates.items, &writer);
+        var buf = std.Io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        try writeJson(self.templates.items, &buf.writer);
 
         // Write to file
-        const file = try std.fs.createFileAbsolute(path, .{});
-        defer file.close();
-        try file.writeAll(buf.items);
+        const file = try std.Io.Dir.createFileAbsolute(self.io, path, .{});
+        defer file.close(self.io);
+        try file.writeStreamingAll(self.io, buf.written());
     }
 
     /// Write layouts as JSON to a writer
@@ -524,7 +526,7 @@ test "LayoutNode.countPanes" {
 }
 
 test "LayoutDb creates defaults" {
-    var db = LayoutDb.init(std.testing.allocator);
+    var db = LayoutDb.init(std.testing.io, std.testing.allocator);
     defer db.deinit();
 
     try db.createDefaults();

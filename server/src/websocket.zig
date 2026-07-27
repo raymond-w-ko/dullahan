@@ -3,6 +3,7 @@
 //! Implements RFC 6455 WebSocket protocol for terminal communication.
 
 const std = @import("std");
+const posix_compat = @import("posix_compat.zig");
 const Sha1 = std.crypto.hash.Sha1;
 const base64 = std.base64;
 const builtin = @import("builtin");
@@ -83,7 +84,7 @@ pub fn unmaskPayload(data: []u8, masking_key: [4]u8) void {
 
 /// Create a WebSocket frame (server -> client, no masking)
 pub fn createFrame(allocator: std.mem.Allocator, opcode: Opcode, payload: []const u8) ![]u8 {
-    var frame: std.ArrayListUnmanaged(u8) = .{};
+    var frame: std.ArrayListUnmanaged(u8) = .empty;
     errdefer frame.deinit(allocator);
 
     // First byte: FIN + opcode
@@ -125,8 +126,8 @@ pub fn computeAcceptKey(client_key: []const u8) [28]u8 {
 pub const Connection = struct {
     stream: tls_wrapper.Stream,
     allocator: std.mem.Allocator,
-    read_buf: std.ArrayListUnmanaged(u8) = .{},
-    write_buf: std.ArrayListUnmanaged(u8) = .{},
+    read_buf: std.ArrayListUnmanaged(u8) = .empty,
+    write_buf: std.ArrayListUnmanaged(u8) = .empty,
 
     const max_write_buffer: usize = 8 * 1024 * 1024; // 8MB per client
 
@@ -135,7 +136,7 @@ pub const Connection = struct {
         // TCP keepalive: detect dead connections after machine sleep
         const fd = stream.handle();
         const keepalive_enable: c_int = 1;
-        std.posix.setsockopt(
+        posix_compat.setsockopt(
             fd,
             std.posix.SOL.SOCKET,
             std.posix.SO.KEEPALIVE,
@@ -148,7 +149,7 @@ pub const Connection = struct {
             .sec = 10,
             .usec = 0,
         };
-        std.posix.setsockopt(
+        posix_compat.setsockopt(
             fd,
             std.posix.SOL.SOCKET,
             std.posix.SO.SNDTIMEO,
@@ -156,15 +157,15 @@ pub const Connection = struct {
         ) catch {};
 
         // Set non-blocking for poll-based event loop.
-        const fl_flags = std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch 0;
+        const fl_flags = posix_compat.fcntl(fd, std.posix.F.GETFL, 0) catch 0;
         const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
-        _ = std.posix.fcntl(fd, std.posix.F.SETFL, fl_flags | O_NONBLOCK) catch {};
+        _ = posix_compat.fcntl(fd, std.posix.F.SETFL, fl_flags | O_NONBLOCK) catch {};
 
         return .{
             .stream = stream,
             .allocator = allocator,
-            .read_buf = .{},
-            .write_buf = .{},
+            .read_buf = .empty,
+            .write_buf = .empty,
         };
     }
 
@@ -185,7 +186,7 @@ pub const Connection = struct {
             .sec = @intCast(timeout_ms / 1000),
             .usec = @intCast((timeout_ms % 1000) * 1000),
         };
-        std.posix.setsockopt(
+        posix_compat.setsockopt(
             self.stream.handle(),
             std.posix.SOL.SOCKET,
             std.posix.SO.RCVTIMEO,
@@ -199,7 +200,7 @@ pub const Connection = struct {
             .sec = @intCast(timeout_ms / 1000),
             .usec = @intCast((timeout_ms % 1000) * 1000),
         };
-        std.posix.setsockopt(
+        posix_compat.setsockopt(
             self.stream.handle(),
             std.posix.SOL.SOCKET,
             std.posix.SO.SNDTIMEO,
@@ -248,14 +249,11 @@ pub const Connection = struct {
                 }
             }
 
-            const parsed = parseFrameHeader(self.read_buf.items) catch |e| switch (e) {
-                error.InsufficientData => {
-                    if (try self.readMore()) |_| {} else {
-                        return error.WouldBlock;
-                    }
-                    continue;
-                },
-                else => return e,
+            const parsed = parseFrameHeader(self.read_buf.items) catch {
+                if (try self.readMore()) |_| {} else {
+                    return error.WouldBlock;
+                }
+                continue;
             };
 
             const header = parsed.header;

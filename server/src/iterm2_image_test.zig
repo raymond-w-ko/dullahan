@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 const png_encoder = @import("png_encoder.zig");
 
 const default_path = "/tmp/dullahan-image-test.png";
@@ -25,16 +26,16 @@ fn firstArg(args: ?[]const u8) []const u8 {
     return it.next() orelse default_path;
 }
 
-fn readSeed(allocator: std.mem.Allocator, args: ?[]const u8) ![]u8 {
+fn readSeed(io: std.Io, allocator: std.mem.Allocator, args: ?[]const u8) ![]u8 {
     const path = firstArg(args);
-    return std.fs.cwd().readFileAlloc(allocator, path, max_seed_bytes) catch
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_seed_bytes)) catch
         try allocator.dupe(u8, "dullahan-iterm2-image-test");
 }
 
 fn writeAllFd(fd: posix.fd_t, bytes: []const u8) !void {
     var offset: usize = 0;
     while (offset < bytes.len) {
-        const written = try posix.write(fd, bytes[offset..]);
+        const written = try posix_compat.write(fd, bytes[offset..]);
         if (written == 0) return error.WriteFailed;
         offset += written;
     }
@@ -111,10 +112,10 @@ fn writeMultipartFile(
     try writeAllFd(fd, "\x1b]1337;FileEnd\x07");
 }
 
-pub fn run(allocator: std.mem.Allocator, args: ?[]const u8) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
-    const seed_data = try readSeed(allocator, args);
+    const seed_data = try readSeed(io, allocator, args);
     defer allocator.free(seed_data);
 
     const image_width = 160;

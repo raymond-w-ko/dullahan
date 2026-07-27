@@ -330,33 +330,15 @@ pub const Session = struct {
     pub fn runCommand(self: *Session, argv: []const []const u8) !void {
         const pane = self.activePane() orelse return error.NoActivePane;
 
-        var child = std.process.Child.init(argv, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-
-        try child.spawn();
-
-        // Read stdout and feed to terminal
-        if (child.stdout) |stdout| {
-            var buf: [4096]u8 = undefined;
-            while (true) {
-                const n = stdout.read(&buf) catch break;
-                if (n == 0) break;
-                try pane.feed(buf[0..n]);
-            }
-        }
-
-        // Read stderr and feed to terminal
-        if (child.stderr) |stderr| {
-            var buf: [4096]u8 = undefined;
-            while (true) {
-                const n = stderr.read(&buf) catch break;
-                if (n == 0) break;
-                try pane.feed(buf[0..n]);
-            }
-        }
-
-        _ = try child.wait();
+        const result = try std.process.run(self.allocator, self.pane_registry.io, .{
+            .argv = argv,
+            .stdout_limit = .limited(16 * 1024 * 1024),
+            .stderr_limit = .limited(16 * 1024 * 1024),
+        });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+        try pane.feed(result.stdout);
+        try pane.feed(result.stderr);
     }
 
     /// Run a command in the active pane using a PTY (passes isatty() checks)
@@ -407,7 +389,7 @@ pub const Session = struct {
 
 // Tests
 test "session init creates empty session" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try Session.init(std.testing.allocator, &registry, .{});
@@ -418,7 +400,7 @@ test "session init creates empty session" {
 }
 
 test "session createWindow works" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try Session.init(std.testing.allocator, &registry, .{});
@@ -440,7 +422,7 @@ test "session createWindow works" {
 }
 
 test "session pane lookup works" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
     _ = try registry.create(); // pane 0
 
@@ -456,7 +438,7 @@ test "session pane lookup works" {
 }
 
 test "session can run command" {
-    var registry = PaneRegistry.init(std.testing.allocator, .{});
+    var registry = PaneRegistry.init(std.testing.io, std.testing.allocator, .{});
     defer registry.deinit();
 
     var session = try Session.init(std.testing.allocator, &registry, .{});

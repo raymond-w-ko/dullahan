@@ -100,11 +100,11 @@ pub fn encodeRgba(
     const filtered = try rgbaScanlines(allocator, data, format, width, height);
     defer allocator.free(filtered);
 
-    var zlib: std.ArrayListUnmanaged(u8) = .{};
+    var zlib: std.ArrayListUnmanaged(u8) = .empty;
     defer zlib.deinit(allocator);
     try appendStoredZlib(&zlib, allocator, filtered);
 
-    var png: std.ArrayListUnmanaged(u8) = .{};
+    var png: std.ArrayListUnmanaged(u8) = .empty;
     errdefer png.deinit(allocator);
     try png.appendSlice(allocator, "\x89PNG\r\n\x1a\n");
 
@@ -148,15 +148,15 @@ test "encodes RGBA and preserves alpha" {
 
 test "encodes multiple rows" {
     const data = [_]u8{
-        255, 0, 0,
-        0, 255, 0,
-        0, 0, 255,
+        255, 0,   0,
+        0,   255, 0,
+        0,   0,   255,
         255, 255, 255,
     };
     try expectRoundTrip(&data, .rgb, &.{
-        255, 0, 0, 255,
-        0, 255, 0, 255,
-        0, 0, 255, 255,
+        255, 0,   0,   255,
+        0,   255, 0,   255,
+        0,   0,   255, 255,
         255, 255, 255, 255,
     }, 2, 2);
 }

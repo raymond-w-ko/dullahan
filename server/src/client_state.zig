@@ -45,8 +45,8 @@ pub const ClientState = struct {
     /// Timestamp when last idle ping was sent.
     last_ping_sent_ms: i64 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
-        const now = std.time.milliTimestamp();
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, ws: websocket.Connection) ClientState {
+        const now = std.Io.Timestamp.now(io, .awake).toMilliseconds();
         return .{
             .ws = ws,
             .pane_generations = std.AutoHashMap(u16, u64).init(allocator),

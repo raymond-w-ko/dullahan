@@ -14,21 +14,32 @@ const std = @import("std");
 const paths = @import("paths.zig");
 
 /// Global state
-var log_file: ?std.fs.File = null;
+var app_io: ?std.Io = null;
+var log_writer: ?std.Io.File.Writer = null;
+var log_buffer: [8192]u8 = undefined;
 var enabled: bool = false;
-var mutex: std.Thread.Mutex = .{};
+var mutex: std.Io.Mutex = .init;
+
+pub fn init(io: std.Io) void {
+    app_io = io;
+}
+
+fn currentIo() std.Io {
+    return app_io orelse std.Io.Threaded.global_single_threaded.io();
+}
 
 /// Enable or disable PTY traffic logging
 pub fn setEnabled(value: bool) void {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = currentIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
     enabled = value;
 
-    if (value and log_file == null) {
-        initLogFile();
+    if (value and log_writer == null) {
+        initLogFile(io);
     }
-    if (log_file != null) {
-        writeControlEvent(if (value) "pty_log_enabled" else "pty_log_disabled");
+    if (log_writer != null) {
+        writeControlEvent(io, if (value) "pty_log_enabled" else "pty_log_disabled");
     }
 }
 
@@ -44,21 +55,18 @@ pub fn getLogPath() []const u8 {
 
 /// Initialize the log file (called when first enabled)
 /// Truncates any existing log file.
-fn initLogFile() void {
-    if (log_file != null) return;
+fn initLogFile(io: std.Io) void {
+    if (log_writer != null) return;
 
     // Ensure temp directory exists
-    paths.ensureTempDir() catch return;
+    paths.ensureTempDir(io) catch return;
 
     const path = paths.StaticPaths.ptyTraffic();
-
-    // Open with truncation - each enable starts fresh
-    const fd = std.posix.open(
-        path,
-        .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true },
-        0o644,
-    ) catch return;
-    log_file = .{ .handle = fd };
+    const file = std.Io.Dir.createFileAbsolute(io, path, .{
+        .truncate = true,
+        .permissions = @enumFromInt(0o644),
+    }) catch return;
+    log_writer = file.writer(io, &log_buffer);
 }
 
 const Direction = enum {
@@ -89,45 +97,37 @@ pub fn logRecv(pane_id: u16, data: []const u8) void {
 
 /// Internal helper to format and log PTY traffic
 fn logTraffic(direction: Direction, origin: Origin, pane_id: u16, data: []const u8) void {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = currentIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
     if (!enabled) return;
 
-    if (log_file == null) {
-        initLogFile();
+    if (log_writer == null) {
+        initLogFile(io);
     }
 
-    const file = log_file orelse return;
-
-    file.seekFromEnd(0) catch {};
-
-    writeLogLine(file, direction, origin, pane_id, data);
+    writeLogLine(io, direction, origin, pane_id, data);
 }
 
-fn writeControlEvent(event: []const u8) void {
-    const file = log_file orelse return;
-    var buf: [512]u8 = undefined;
-    var fw = file.writerStreaming(&buf);
-    var w = &fw.interface;
-    defer w.flush() catch {};
-
-    const ts_ms = std.time.milliTimestamp();
+fn writeControlEvent(io: std.Io, event: []const u8) void {
+    const writer = if (log_writer) |*writer| writer else return;
+    const w = &writer.interface;
+    const ts_ms = std.Io.Timestamp.now(io, .real).toMilliseconds();
     w.print("{{\"ts_ms\":{d},\"event\":\"{s}\"}}\n", .{ ts_ms, event }) catch return;
+    w.flush() catch {};
 }
 
-fn writeLogLine(file: std.fs.File, direction: Direction, origin: Origin, pane_id: u16, data: []const u8) void {
-    var buf: [8192]u8 = undefined;
-    var fw = file.writerStreaming(&buf);
-    var w = &fw.interface;
-    defer w.flush() catch {};
+fn writeLogLine(io: std.Io, direction: Direction, origin: Origin, pane_id: u16, data: []const u8) void {
+    const writer = if (log_writer) |*writer| writer else return;
+    const w = &writer.interface;
     const dir_str = if (direction == .send) "send" else "recv";
     const origin_str = switch (origin) {
         .program => "program",
         .input => "input",
         .response => "response",
     };
-    const ts_ms = std.time.milliTimestamp();
+    const ts_ms = std.Io.Timestamp.now(io, .real).toMilliseconds();
     const slice = data;
 
     w.print(
@@ -141,6 +141,7 @@ fn writeLogLine(file: std.fs.File, direction: Direction, origin: Origin, pane_id
     writeHumanString(w, slice) catch return;
     w.writeAll("\"}") catch return;
     w.writeByte('\n') catch return;
+    w.flush() catch {};
 }
 
 fn writeBytesArray(w: *std.Io.Writer, data: []const u8) !void {
@@ -171,11 +172,14 @@ fn writeHumanString(w: *std.Io.Writer, data: []const u8) !void {
 
 /// Close the log file (for cleanup)
 pub fn deinit() void {
-    mutex.lock();
-    defer mutex.unlock();
+    const io = currentIo();
+    mutex.lockUncancelable(io);
+    defer mutex.unlock(io);
 
-    if (log_file) |file| {
-        file.close();
-        log_file = null;
+    if (log_writer) |*writer| {
+        writer.interface.flush() catch {};
+        writer.file.close(io);
+        log_writer = null;
     }
+    app_io = null;
 }

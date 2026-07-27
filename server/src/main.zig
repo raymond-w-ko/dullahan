@@ -10,9 +10,7 @@ const test_runners = dullahan.test_runners;
 const dlog = dullahan.dlog;
 const os_name = dullahan.os_name;
 const png_decoder = dullahan.png_decoder;
-
-// Custom logging to file (path determined at runtime from paths module)
-var log_file: ?std.fs.File = null;
+const shell = dullahan.shell;
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -25,56 +23,26 @@ fn fileLog(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    // Lazy init log file
-    if (log_file == null) {
-        // Ensure temp directory exists
-        paths.ensureTempDir() catch return;
-
-        const log_path = paths.StaticPaths.log();
-        log_file = std.fs.createFileAbsolute(log_path, .{
-            .truncate = false,
-        }) catch return;
-        // Seek to end for append
-        log_file.?.seekFromEnd(0) catch {};
-    }
-
-    const file = log_file orelse return;
-
-    // Get timestamp
-    const ts = std.time.timestamp();
-    const level_str = comptime level.asText();
-    const scope_str = if (scope == .default) "" else @tagName(scope);
-
-    // Format into buffer, then write
-    var buf: [4096]u8 = undefined;
-    const prefix = if (scope_str.len > 0)
-        std.fmt.bufPrint(&buf, "[{d}] {s} ({s}): ", .{ ts, level_str, scope_str }) catch return
-    else
-        std.fmt.bufPrint(&buf, "[{d}] {s}: ", .{ ts, level_str }) catch return;
-
-    file.writeAll(prefix) catch return;
-
-    var msg_buf: [4096]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, format ++ "\n", args) catch return;
-    file.writeAll(msg) catch return;
+    dlog.stdLog(level, scope, format, args);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // Resolve OS name once before any other startup work.
-    os_name.init();
+    os_name.init(init.io);
     png_decoder.install();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = init.gpa;
 
-    const args = try cli.CliArgs.parse(allocator);
+    const args = try cli.CliArgs.parse(allocator, init.minimal.args);
 
     // Ensure temp file paths include the requested port.
     paths.setPort(args.ws_port);
+    paths.setHome(init.environ_map.get("HOME"));
+    shell.init(init.environ_map.get("SHELL"));
 
     // Initialize debug logging (loads DULLAHAN_DEBUG env var)
-    dlog.init();
+    dlog.init(init.io, init.environ_map.get("DULLAHAN_DEBUG"));
+    defer dlog.deinit();
 
     if (args.help) {
         cli.printUsage();
@@ -83,14 +51,14 @@ pub fn main() !void {
 
     if (args.test_command) |test_cmd| {
         // Run test utility
-        test_runners.runTest(allocator, test_cmd, args.test_args) catch |e| {
+        test_runners.runTest(init.io, allocator, test_cmd, args.test_args) catch |e| {
             std.debug.print("Test error: {}\n", .{e});
             std.process.exit(1);
         };
     } else if (args.serve) {
         // If --background/-d flag, spawn ourselves without the flag and exit
         if (args.background) {
-            try spawnBackground(allocator, args);
+            try spawnBackground(init.io, allocator, args);
             return;
         }
 
@@ -108,10 +76,10 @@ pub fn main() !void {
             .tls_cert = args.tls_cert,
             .tls_key = args.tls_key,
         };
-        try server.run(allocator, config);
+        try server.run(init.io, allocator, config);
     } else if (args.command != null) {
         // Run as client
-        cli.runClient(allocator, args) catch {
+        cli.runClient(init.io, allocator, args) catch {
             // Error already printed
             std.process.exit(1);
         };
@@ -121,14 +89,20 @@ pub fn main() !void {
 }
 
 /// Spawn server in background (for --background/-d flag)
-fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
+fn spawnBackground(io: std.Io, allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     // Get path to self
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path = try std.fs.selfExePath(&self_path_buf);
+    var self_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const self_path_len = try std.process.executablePath(io, &self_path_buf);
+    const self_path = self_path_buf[0..self_path_len];
 
     // Build argv without --background/-d flag
-    var argv: std.ArrayListUnmanaged([]const u8) = .{};
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
     defer argv.deinit(allocator);
+    var owned_args: std.ArrayListUnmanaged([]u8) = .empty;
+    defer {
+        for (owned_args.items) |arg| allocator.free(arg);
+        owned_args.deinit(allocator);
+    }
 
     try argv.append(allocator, self_path);
     try argv.append(allocator, "serve");
@@ -136,22 +110,22 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     if (args.socket_path) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--socket={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.pid_path) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--pid={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.static_dir) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--static-dir={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.ws_port != 7681) {
         var buf: [64]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--port={d}", .{args.ws_port}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.pty_log) {
         try argv.append(allocator, "--pty-log");
@@ -165,22 +139,20 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     if (args.tls_cert) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--tls-cert={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
     if (args.tls_key) |p| {
         var buf: [512]u8 = undefined;
         const opt = std.fmt.bufPrint(&buf, "--tls-key={s}", .{p}) catch unreachable;
-        try argv.append(allocator, try allocator.dupe(u8, opt));
+        try appendOwnedArg(allocator, &argv, &owned_args, opt);
     }
 
-    var child = std.process.Child.init(argv.items, allocator);
-
-    // Detach from parent
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-
-    try child.spawn();
+    _ = try std.process.spawn(io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
 
     std.debug.print("Server started in background\n", .{});
 
@@ -189,9 +161,9 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     const max_attempts: u32 = 60;
     var attempt: u32 = 0;
     while (attempt < max_attempts) : (attempt += 1) {
-        const file = std.fs.openFileAbsolute(tokens_path, .{}) catch |e| switch (e) {
+        const file = std.Io.Dir.openFileAbsolute(io, tokens_path, .{}) catch |e| switch (e) {
             error.FileNotFound => {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                try io.sleep(.fromMilliseconds(50), .awake);
                 continue;
             },
             else => {
@@ -199,19 +171,20 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
                 return;
             },
         };
-        defer file.close();
+        defer file.close(io);
 
         var buf: [256]u8 = undefined;
-        const n = file.readAll(&buf) catch |e| {
+        var file_reader = file.reader(io, &.{});
+        const n = file_reader.interface.readSliceShort(&buf) catch |e| {
             std.debug.print("Warning: failed to read tokens file {s}: {any}\n", .{ tokens_path, e });
             return;
         };
         if (n == 0) {
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            try io.sleep(.fromMilliseconds(50), .awake);
             continue;
         }
         const parsed = parseTokensBuffer(buf[0..n]) orelse {
-            std.Thread.sleep(50 * std.time.ns_per_ms);
+            try io.sleep(.fromMilliseconds(50), .awake);
             continue;
         };
 
@@ -226,6 +199,19 @@ fn spawnBackground(allocator: std.mem.Allocator, args: cli.CliArgs) !void {
     }
 
     std.debug.print("Warning: tokens file not ready: {s}\n", .{tokens_path});
+}
+
+fn appendOwnedArg(
+    allocator: std.mem.Allocator,
+    argv: *std.ArrayListUnmanaged([]const u8),
+    owned_args: *std.ArrayListUnmanaged([]u8),
+    value: []const u8,
+) !void {
+    const owned = try allocator.dupe(u8, value);
+    errdefer allocator.free(owned);
+    try owned_args.append(allocator, owned);
+    errdefer _ = owned_args.pop();
+    try argv.append(allocator, owned);
 }
 
 fn certHostFromPath(cert_path: []const u8) []const u8 {

@@ -95,7 +95,7 @@ pub const ImageResponse = struct {
 };
 
 pub const Store = struct {
-    entries: std.ArrayListUnmanaged(Entry) = .{},
+    entries: std.ArrayListUnmanaged(Entry) = .empty,
     next_id: u32 = 1,
     next_placement_id: u32 = 1,
     total_bytes: usize = 0,
@@ -262,7 +262,7 @@ pub const DisplayOptions = struct {
 
 const Multipart = struct {
     options: DisplayOptions,
-    data: std.ArrayListUnmanaged(u8) = .{},
+    data: std.ArrayListUnmanaged(u8) = .empty,
     anchor: ?Anchor = null,
 
     fn deinit(self: *Multipart, allocator: std.mem.Allocator, terminal: *Terminal) void {
@@ -274,7 +274,7 @@ const Multipart = struct {
 
 pub const Parser = struct {
     state: State = .normal,
-    osc_buf: std.ArrayListUnmanaged(u8) = .{},
+    osc_buf: std.ArrayListUnmanaged(u8) = .empty,
     multipart: ?Multipart = null,
 
     pub fn deinit(self: *Parser, allocator: std.mem.Allocator, terminal: *Terminal) void {
@@ -314,7 +314,7 @@ pub const Parser = struct {
         pane_id: u16,
         generation: u64,
     ) !void {
-        var out: std.ArrayListUnmanaged(u8) = .{};
+        var out: std.ArrayListUnmanaged(u8) = .empty;
         defer out.deinit(allocator);
 
         for (data) |byte| {
@@ -506,7 +506,7 @@ pub const Parser = struct {
         const anchor = multipart.anchor orelse return error.InvalidData;
         multipart.anchor = null;
         const data = try multipart.data.toOwnedSlice(allocator);
-        multipart.data = .{};
+        multipart.data = .empty;
         validateSize(multipart.options, data.len) catch |err| {
             allocator.free(data);
             untrackAnchor(terminal, anchor);

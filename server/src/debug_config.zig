@@ -63,8 +63,7 @@ pub const Config = struct {
 
     /// Format current config as string (for status display)
     pub fn format(self: *const Config, buf: []u8) []const u8 {
-        var fbs = std.io.fixedBufferStream(buf);
-        const writer = fbs.writer();
+        var writer: std.Io.Writer = .fixed(buf);
 
         if (self.all_enabled) {
             writer.writeAll("+all") catch return "";
@@ -86,7 +85,7 @@ pub const Config = struct {
             return "(disabled)";
         }
 
-        return fbs.getWritten();
+        return writer.buffered();
     }
 
     /// List enabled categories
@@ -106,7 +105,21 @@ pub const Config = struct {
 
 /// Global configuration (runtime mutable)
 var config: Config = .{};
-var config_mutex: std.Thread.Mutex = .{};
+var config_mutex: std.Io.Mutex = .init;
+var config_io: ?std.Io = null;
+
+fn io() std.Io {
+    return config_io orelse std.Io.Threaded.global_single_threaded.io();
+}
+
+pub fn init(io_impl: std.Io, env_value: ?[]const u8) void {
+    config_io = io_impl;
+    loadFromEnv(env_value);
+}
+
+pub fn deinit() void {
+    config_io = null;
+}
 
 /// Parse Wine-style debug config string
 /// Examples: "+all,-mouse", "+mouse,+keyboard", "-all,+connection"
@@ -170,22 +183,24 @@ pub fn parse(value: []const u8) Config {
 }
 
 /// Load config from environment variable
-pub fn loadFromEnv() void {
-    const env_value = std.posix.getenv("DULLAHAN_DEBUG") orelse return;
-    setConfig(parse(env_value));
+pub fn loadFromEnv(env_value: ?[]const u8) void {
+    const value = env_value orelse return;
+    setConfig(parse(value));
 }
 
 /// Get current config
 pub fn getConfig() Config {
-    config_mutex.lock();
-    defer config_mutex.unlock();
+    const io_impl = io();
+    config_mutex.lockUncancelable(io_impl);
+    defer config_mutex.unlock(io_impl);
     return config;
 }
 
 /// Set config at runtime
 pub fn setConfig(new_config: Config) void {
-    config_mutex.lock();
-    defer config_mutex.unlock();
+    const io_impl = io();
+    config_mutex.lockUncancelable(io_impl);
+    defer config_mutex.unlock(io_impl);
     config = new_config;
 }
 
@@ -196,22 +211,25 @@ pub fn setConfigString(value: []const u8) void {
 
 /// Check if a category is enabled (thread-safe)
 pub fn isEnabled(cat: Category) bool {
-    config_mutex.lock();
-    defer config_mutex.unlock();
+    const io_impl = io();
+    config_mutex.lockUncancelable(io_impl);
+    defer config_mutex.unlock(io_impl);
     return config.isEnabled(cat);
 }
 
 /// Check if any logging is enabled
 pub fn isAnyEnabled() bool {
-    config_mutex.lock();
-    defer config_mutex.unlock();
+    const io_impl = io();
+    config_mutex.lockUncancelable(io_impl);
+    defer config_mutex.unlock(io_impl);
     return config.isAnyEnabled();
 }
 
 /// Get current config string for display
 pub fn getConfigString(buf: []u8) []const u8 {
-    config_mutex.lock();
-    defer config_mutex.unlock();
+    const io_impl = io();
+    config_mutex.lockUncancelable(io_impl);
+    defer config_mutex.unlock(io_impl);
     return config.format(buf);
 }
 

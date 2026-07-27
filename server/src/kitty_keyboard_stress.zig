@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const posix_compat = @import("posix_compat.zig");
 
 const keyboard = @import("keyboard.zig");
 const Pane = @import("pane.zig").Pane;
@@ -13,20 +14,20 @@ const da1_response = "\x1b[?62;22;52c";
 const alt_enter_legacy = "\x1b\r";
 const alt_enter_kitty = "\x1b[13;3u";
 
-pub fn run(allocator: std.mem.Allocator, args: ?[]const u8) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator, args: ?[]const u8) !void {
     const iterations = try parseIterations(args);
-    try runIterations(allocator, iterations);
+    try runIterations(io, allocator, iterations);
     std.debug.print("Kitty keyboard negotiation stress passed: {d} iterations\n", .{iterations});
 }
 
-pub fn runIterations(allocator: std.mem.Allocator, iterations: usize) !void {
-    var pane = try Pane.init(allocator, .{ .cols = 80, .rows = 24, .id = 1 });
+pub fn runIterations(io: std.Io, allocator: std.mem.Allocator, iterations: usize) !void {
+    var pane = try Pane.init(io, allocator, .{ .cols = 80, .rows = 24, .id = 1 });
     defer pane.deinit();
 
-    const fds = try posix.pipe();
+    const fds = try posix_compat.pipe();
     errdefer {
-        posix.close(fds[0]);
-        posix.close(fds[1]);
+        _ = posix.system.close(fds[0]);
+        _ = posix.system.close(fds[1]);
     }
     pane.pty = .{
         .master = fds[1],

@@ -54,11 +54,13 @@ Wire protocol:
 
 ### Prerequisites
 
-- Zig `0.15.2`
+- Zig `0.16.0`
 - Bun
 - OpenSSL headers/libs available to Zig
 
 macOS usually means Homebrew `openssl@3`. The build already checks common Homebrew prefixes.
+Make targets select the repository's Zig 0.16 Nix package when Nix is available,
+otherwise a local 0.16.0 install, and reject any other compiler version.
 
 ### Build
 
@@ -208,7 +210,7 @@ make update-ghostty
 Focused checks:
 
 ```bash
-cd server && zig build test
+make test-server
 cd client && bun run typecheck
 cd protocol && bun test
 ```

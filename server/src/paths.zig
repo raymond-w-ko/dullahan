@@ -8,10 +8,15 @@
 //!   - Config files: ~/.config/dullahan/
 
 const std = @import("std");
-const posix = std.posix;
 
 const default_port: u16 = 7681;
 var port_value: u16 = default_port;
+var home_value: ?[]const u8 = null;
+
+pub fn setHome(home: ?[]const u8) void {
+    home_value = home;
+    StaticPaths.layouts_initialized = false;
+}
 
 pub fn setPort(port: u16) void {
     if (port_value == port) return;
@@ -45,8 +50,14 @@ pub fn getTempDir() []const u8 {
     };
 
     if (!S.initialized) {
-        const uid = posix.getuid();
-        S.len = (std.fmt.bufPrint(&S.buf, "/tmp/dullahan-{d}", .{uid}) catch "/tmp/dullahan-0").len;
+        const uid = std.c.getuid();
+        const path = std.fmt.bufPrint(&S.buf, "/tmp/dullahan-{d}", .{uid}) catch {
+            const fallback = "/tmp/dullahan-0";
+            @memcpy(S.buf[0..fallback.len], fallback);
+            S.initialized = true;
+            return S.buf[0..fallback.len];
+        };
+        S.len = path.len;
         S.initialized = true;
     }
 
@@ -56,21 +67,15 @@ pub fn getTempDir() []const u8 {
 /// Ensure the temp directory exists, creating it if necessary.
 /// Directory is created with mode 0o700 (owner-only access) for security.
 /// Returns error if directory cannot be created.
-pub fn ensureTempDir() !void {
+pub fn ensureTempDir(io: std.Io) !void {
     const dir_path = getTempDir();
+    const permissions: std.Io.File.Permissions = @enumFromInt(0o700);
 
-    // Use posix.mkdir directly to set restrictive permissions (0o700 = rwx------)
-    // This prevents other users from accessing socket, logs, etc.
-    var path_buf: [128]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{dir_path}) catch return error.NameTooLong;
-
-    posix.mkdir(path_z, 0o700) catch |e| switch (e) {
+    std.Io.Dir.createDirAbsolute(io, dir_path, permissions) catch |e| switch (e) {
         error.PathAlreadyExists => {
-            // Directory exists - ensure permissions are correct
-            // (in case it was created with wrong perms previously)
-            // Note: Use fchmodat with AT.FDCWD, not Dir.chmod() which
-            // tries to open "." and fchmod, failing with EBADF on some systems (WSL)
-            posix.fchmodat(posix.AT.FDCWD, path_z, 0o700, 0) catch {};
+            var dir = try std.Io.Dir.openDirAbsolute(io, dir_path, .{ .iterate = true });
+            defer dir.close(io);
+            dir.setPermissions(io, permissions) catch {};
         },
         else => return e,
     };
@@ -87,7 +92,7 @@ pub fn getConfigDir() []const u8 {
 
     if (!S.initialized) {
         // Try HOME environment variable
-        if (std.posix.getenv("HOME")) |home| {
+        if (home_value) |home| {
             S.len = (std.fmt.bufPrint(&S.buf, "{s}/.config/dullahan", .{home}) catch {
                 // Fallback to /tmp
                 S.len = (std.fmt.bufPrint(&S.buf, "/tmp/dullahan-config", .{}) catch return "/tmp/dullahan-config").len;
@@ -106,32 +111,9 @@ pub fn getConfigDir() []const u8 {
 
 /// Ensure the config directory exists, creating it if necessary.
 /// Creates parent directories as needed (~/.config/).
-pub fn ensureConfigDir() !void {
+pub fn ensureConfigDir(io: std.Io) !void {
     const dir_path = getConfigDir();
-
-    // Try to create the directory (and parents if needed)
-    std.fs.makeDirAbsolute(dir_path) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        error.FileNotFound => {
-            // Parent doesn't exist, try creating ~/.config first
-            if (std.posix.getenv("HOME")) |home| {
-                var parent_buf: [256]u8 = undefined;
-                const parent = std.fmt.bufPrint(&parent_buf, "{s}/.config", .{home}) catch return e;
-                std.fs.makeDirAbsolute(parent) catch |e2| switch (e2) {
-                    error.PathAlreadyExists => {},
-                    else => return e2,
-                };
-                // Now try the config dir again
-                std.fs.makeDirAbsolute(dir_path) catch |e3| switch (e3) {
-                    error.PathAlreadyExists => {},
-                    else => return e3,
-                };
-            } else {
-                return e;
-            }
-        },
-        else => return e,
-    };
+    try std.Io.Dir.cwd().createDirPath(io, dir_path);
 }
 
 /// Get full path for a file in the temp directory.

@@ -4,7 +4,7 @@ This documents Zig 0.16.0 changes relevant to moving Dullahan and its
 `ghostty-vt` dependency from Zig 0.15.2.
 
 Zig 0.16.0 was released on 2026-04-14. Ghostty `main` at
-`739603b8a2b643b167031a99718127cc0ca311a5` (checked 2026-07-27) declares
+`5a35415a5d59a117e654735ca5a01f876dec5841` (checked 2026-07-27) declares
 `.minimum_zig_version = "0.16.0"`.
 
 Primary sources:
@@ -13,9 +13,9 @@ Primary sources:
 - [Zig 0.16.0 language reference](https://ziglang.org/documentation/0.16.0/)
 - [Zig 0.16.0 standard library reference](https://ziglang.org/documentation/0.16.0/std/)
 - [Zig 0.16.0 source archive](https://ziglang.org/download/0.16.0/zig-0.16.0.tar.xz)
-- [Ghostty `build.zig.zon` at researched commit](https://github.com/ghostty-org/ghostty/blob/739603b8a2b643b167031a99718127cc0ca311a5/build.zig.zon)
-- [Ghostty 0.16 entrypoint pattern](https://github.com/ghostty-org/ghostty/blob/739603b8a2b643b167031a99718127cc0ca311a5/src/main_ghostty.zig)
-- [Ghostty 0.16 process-global state pattern](https://github.com/ghostty-org/ghostty/blob/739603b8a2b643b167031a99718127cc0ca311a5/src/global.zig)
+- [Ghostty `build.zig.zon` at researched commit](https://github.com/ghostty-org/ghostty/blob/5a35415a5d59a117e654735ca5a01f876dec5841/build.zig.zon)
+- [Ghostty 0.16 entrypoint pattern](https://github.com/ghostty-org/ghostty/blob/5a35415a5d59a117e654735ca5a01f876dec5841/src/main_ghostty.zig)
+- [Ghostty 0.16 process-global state pattern](https://github.com/ghostty-org/ghostty/blob/5a35415a5d59a117e654735ca5a01f876dec5841/src/global.zig)
 
 This is a migration guide, not a complete release summary. Prefer compiler
 errors and installed 0.16.0 standard library source over memory or old examples.
@@ -506,13 +506,14 @@ I/O capability is needed.
 
 ### zig-msgpack compatibility
 
-Dullahan's pinned `zig-msgpack` commit already contains an explicit Zig 0.16
-compatibility `BufferStream`; it avoids removed `FixedBufferStream`. This is
-good evidence of intended support, but still run serialization, delta, malformed
-input, and limit tests after the compiler bump.
+Do not trust one compatibility shim as proof that a dependency supports 0.16.
+Dullahan's old `zig-msgpack` pin had an explicit 0.16 `BufferStream`, but other
+source still initialized unmanaged `std.ArrayList` values with `.{}`. Zig 0.16
+requires `.empty`. Current upstream `main` fixes both areas, so this migration
+also moved the pin to `e5d5f8604cf7aa50593df8e450686a269a7299c6`.
 
 Pinned source:
-[zig-msgpack `compat.zig`](https://github.com/zigcc/zig-msgpack/blob/47c15d217efebd17a585dd04125f9b6b6f659d5a/src/compat.zig)
+[zig-msgpack `compat.zig`](https://github.com/zigcc/zig-msgpack/blob/e5d5f8604cf7aa50593df8e450686a269a7299c6/src/compat.zig)
 
 ---
 
@@ -1117,6 +1118,32 @@ An owned fd can be represented as `std.Io.File`, but its `.flags.nonblocking`
 field must match the descriptor and exactly one owner may close it. Do not wrap
 an fd temporarily, call `File.close(io)`, then also close the original fd.
 
+### Ghostty `main` API changes encountered
+
+These are Ghostty changes at the researched commit, not Zig language changes.
+They arrived with the 0.16 migration and compiler errors alone do not explain
+their semantics:
+
+- `Terminal.init` now takes `io` before the allocator.
+- `Terminal.Options.max_scrollback` became `max_scrollback_bytes`; Ghostty also
+  supports `max_scrollback_lines`.
+- `Terminal.resize(allocator, cols, rows)` became
+  `Terminal.resize(allocator, .{ .cols = cols, .rows = rows })`.
+- `Terminal.kittyGraphics` now takes `io`.
+- VT streams can emit `.apc_put_slice`; handlers must feed `value.bytes` into
+  the same APC accumulator used by `.apc_put`, or split Kitty graphics payloads
+  are lost.
+- `PageList.Node.data` is no longer direct page storage. Use `node.page()` while
+  obeying Ghostty pin/lifetime rules.
+- Read cell codepoints with `cell.codepoint()` instead of reaching through
+  `cell.content.codepoint`.
+- `PageList.maxSize()` was removed when byte and line limits were unified.
+  Public runtime mutators are `setMaxBytes` and `setMaxLines`; tests should not
+  inspect the private limit representation.
+- Reset generation tracking now uses `page_serial_epoch` rather than
+  `page_serial_min`. Consumers using page serials to invalidate caches must
+  include the epoch.
+
 ### Build and dependencies
 
 - `server/build.zig`
@@ -1125,9 +1152,9 @@ an fd temporarily, call `File.close(io)`, then also close the original fd.
   - set minimum Zig version to 0.16.0 with Ghostty pin
   - accept new dependency hashes only after verifying resolved source
 - pinned `zig-msgpack`
-  - already contains 0.16 compatibility code
+  - use current upstream commit; old pin's partial compatibility layer was not enough
 - pinned Snappy wrapper
-  - minimum version metadata says 0.14.1, not proof of 0.16 compatibility
+  - use current upstream commit; minimum version metadata alone is not proof of 0.16 compatibility
 - Wuffs
   - C source, but build and translated bindings still need verification
 

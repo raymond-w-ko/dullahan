@@ -10,6 +10,13 @@ cd "$(dirname "$0")/.."
 
 DEPS_DIR="deps/ghostty"
 SERVER_DIR="server"
+EXPECTED_ZIG_VERSION="0.16.0"
+
+actual_zig_version="$(zig version)"
+if [ "$actual_zig_version" != "$EXPECTED_ZIG_VERSION" ]; then
+    echo "error: Zig $EXPECTED_ZIG_VERSION required; found $actual_zig_version" >&2
+    exit 1
+fi
 
 echo "=== Updating ghostty dependency ==="
 
@@ -45,4 +52,4 @@ echo "=== Done ==="
 echo "Dependency updated in server/build.zig.zon"
 echo "Source checkout at $DEPS_DIR (commit: $COMMIT)"
 echo ""
-echo "Run 'cd server && zig build test' to verify."
+echo "Run 'make test-server' to verify."

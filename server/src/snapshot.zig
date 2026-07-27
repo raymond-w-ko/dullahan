@@ -274,7 +274,7 @@ const CanonicalStyleTable = struct {
     fn init(allocator: std.mem.Allocator) CanonicalStyleTable {
         return .{
             .key_to_id = std.AutoHashMap([14]u8, u16).init(allocator),
-            .ordered_styles = .{},
+            .ordered_styles = .empty,
         };
     }
 
@@ -389,7 +389,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
     // Collect grapheme data for cells with multi-codepoint characters
     // We use a dynamic list since graphemes are typically sparse
-    var grapheme_list: std.ArrayListUnmanaged(u8) = .{};
+    var grapheme_list: std.ArrayListUnmanaged(u8) = .empty;
     defer grapheme_list.deinit(allocator);
     var grapheme_count: u32 = 0;
 
@@ -398,7 +398,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
     // Collect hyperlink data for cells with OSC 8 links
     // Format: [count: u32 LE] [cell_index: u32 LE, url_len: u16 LE, url: url_len bytes UTF-8]...
-    var hyperlink_list: std.ArrayListUnmanaged(u8) = .{};
+    var hyperlink_list: std.ArrayListUnmanaged(u8) = .empty;
     defer hyperlink_list.deinit(allocator);
     var hyperlink_count: u32 = 0;
 
@@ -430,9 +430,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
         // Get cells for this row
         const cells = row_pin.cells(.all);
-
-        // Get page for style and grapheme lookups (must use THIS row's page)
-        const page = &row_pin.node.data;
+        const page = row_pin.node.page();
 
         // Per-row cache because style_id lookups are page-local.
         var row_style_ids = std.AutoHashMap(u16, u16).init(allocator);
@@ -454,7 +452,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
                     if (row_style_ids.get(cell.style_id)) |cached_id| {
                         break :blk cached_id;
                     }
-                    const style = page.styles.get(page.memory, cell.style_id);
+                    const style = row_pin.style(cell);
                     const encoded = encodeStyle(style);
                     const interned = try styles.intern(allocator, encoded);
                     try row_style_ids.put(cell.style_id, interned);
@@ -465,7 +463,7 @@ fn getCellBytesAndStyles(allocator: std.mem.Allocator, pane: *Pane) !CellsAndSty
 
             // Check for grapheme clusters (additional codepoints beyond the first)
             if (cell.hasGrapheme()) {
-                if (page.lookupGrapheme(cell)) |extra_cps| {
+                if (row_pin.grapheme(cell)) |extra_cps| {
                     if (extra_cps.len > 0 and extra_cps.len <= 255) {
                         // Write: cell_index (u32 LE), num_codepoints (u8), codepoints (3 bytes each)
                         // Cell index (little-endian u32)
@@ -917,9 +915,9 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         id: u64,
         y: i32, // viewport y, or -1 for off-screen rows
     };
-    var viewport_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
+    var viewport_dirty: std.ArrayListUnmanaged(DirtyEntry) = .empty;
     defer viewport_dirty.deinit(allocator);
-    var offscreen_dirty: std.ArrayListUnmanaged(DirtyEntry) = .{};
+    var offscreen_dirty: std.ArrayListUnmanaged(DirtyEntry) = .empty;
     defer offscreen_dirty.deinit(allocator);
 
     if (!empty) {
@@ -956,7 +954,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
     defer styles.deinit(allocator);
 
     // Collect row payloads into a list first (since some may be skipped)
-    var row_payloads: std.ArrayListUnmanaged(msgpack.Payload) = .{};
+    var row_payloads: std.ArrayListUnmanaged(msgpack.Payload) = .empty;
     defer row_payloads.deinit(allocator);
 
     // Add viewport rows first (visible, high priority)
@@ -964,7 +962,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         const pin = pages.pin(.{ .viewport = .{ .x = 0, .y = @intCast(item.y) } }) orelse continue;
 
         // Get page for style and grapheme lookups (must use THIS row's page)
-        const page = &pin.node.data;
+        const page = pin.node.page();
         var row_style_ids = std.AutoHashMap(u16, u16).init(allocator);
         defer row_style_ids.deinit();
 
@@ -979,7 +977,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         defer allocator.free(cell_bytes);
 
         // Collect graphemes for this row (row-relative indices: 0 to cols-1)
-        var row_grapheme_list: std.ArrayListUnmanaged(u8) = .{};
+        var row_grapheme_list: std.ArrayListUnmanaged(u8) = .empty;
         defer row_grapheme_list.deinit(allocator);
         var row_grapheme_count: u32 = 0;
 
@@ -987,7 +985,7 @@ pub fn generateDelta(allocator: std.mem.Allocator, pane: *Pane, from_gen: u64, e
         try row_grapheme_list.appendNTimes(allocator, 0, 4);
 
         // Collect hyperlinks for this row (row-relative indices: 0 to cols-1)
-        var row_hyperlink_list: std.ArrayListUnmanaged(u8) = .{};
+        var row_hyperlink_list: std.ArrayListUnmanaged(u8) = .empty;
         defer row_hyperlink_list.deinit(allocator);
         var row_hyperlink_count: u32 = 0;
 
@@ -1287,7 +1285,7 @@ pub fn generateLayoutMessage(allocator: std.mem.Allocator, session: *Session, la
 test "generate empty snapshot" {
     const allocator = std.testing.allocator;
 
-    var pane = try Pane.init(allocator, .{ .cols = 10, .rows = 5 });
+    var pane = try Pane.init(std.testing.io, allocator, .{ .cols = 10, .rows = 5 });
     defer pane.deinit();
 
     const json = try generateSnapshot(allocator, &pane);
