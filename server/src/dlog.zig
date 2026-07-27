@@ -27,6 +27,7 @@ const builtin = @import("builtin");
 const Pane = @import("pane.zig").Pane;
 const paths = @import("paths.zig");
 const debug_config = @import("debug_config.zig");
+const posix_compat = @import("posix_compat.zig");
 
 /// Comptime check: are we in a debug build?
 /// In debug builds, all logs go to stderr for easier development.
@@ -81,15 +82,12 @@ fn initLogFile(io: std.Io) void {
     paths.ensureTempDir(io) catch return;
 
     const log_file_path = paths.StaticPaths.log();
-    const file = std.Io.Dir.createFileAbsolute(io, log_file_path, .{
-        .truncate = false,
-        .permissions = @enumFromInt(0o644),
-    }) catch return;
-    log_writer = file.writer(io, &log_buffer);
-    log_writer.?.seekTo(file.length(io) catch 0) catch {
-        file.close(io);
-        log_writer = null;
+    const fd = posix_compat.openAppend(log_file_path, 0o644) catch return;
+    const file: std.Io.File = .{
+        .handle = fd,
+        .flags = .{ .nonblocking = false },
     };
+    log_writer = file.writerStreaming(io, &log_buffer);
 }
 
 /// Set the debug pane for console logging

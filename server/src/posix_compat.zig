@@ -46,6 +46,52 @@ pub fn fcntl(fd: posix.fd_t, cmd: i32, arg: usize) !usize {
     }
 }
 
+fn statusFlag(comptime field_name: []const u8) usize {
+    var flags: posix.O = .{};
+    @field(flags, field_name) = true;
+    const Bits = std.meta.Int(.unsigned, @bitSizeOf(posix.O));
+    return @intCast(@as(Bits, @bitCast(flags)));
+}
+
+pub fn setNonBlocking(fd: posix.fd_t, enabled: bool) !void {
+    const current = try fcntl(fd, posix.F.GETFL, 0);
+    const nonblock = statusFlag("NONBLOCK");
+    const updated = if (enabled) current | nonblock else current & ~nonblock;
+    _ = try fcntl(fd, posix.F.SETFL, updated);
+}
+
+pub fn isNonBlocking(fd: posix.fd_t) !bool {
+    return (try fcntl(fd, posix.F.GETFL, 0)) & statusFlag("NONBLOCK") != 0;
+}
+
+pub fn setCloseOnExec(fd: posix.fd_t, enabled: bool) !void {
+    const current = try fcntl(fd, posix.F.GETFD, 0);
+    const updated = if (enabled) current | posix.FD_CLOEXEC else current & ~@as(usize, posix.FD_CLOEXEC);
+    _ = try fcntl(fd, posix.F.SETFD, updated);
+}
+
+pub fn isCloseOnExec(fd: posix.fd_t) !bool {
+    return (try fcntl(fd, posix.F.GETFD, 0)) & posix.FD_CLOEXEC != 0;
+}
+
+fn openAppendAt(dir_fd: posix.fd_t, path: []const u8, mode: posix.mode_t) !posix.fd_t {
+    var flags: posix.O = .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .APPEND = true,
+    };
+    if (@hasField(posix.O, "CLOEXEC")) flags.CLOEXEC = true;
+
+    const fd = try posix.openat(dir_fd, path, flags, mode);
+    errdefer _ = posix.system.close(fd);
+    if (!@hasField(posix.O, "CLOEXEC")) try setCloseOnExec(fd, true);
+    return fd;
+}
+
+pub fn openAppend(path: []const u8, mode: posix.mode_t) !posix.fd_t {
+    return openAppendAt(posix.AT.FDCWD, path, mode);
+}
+
 pub fn socket(domain: u32, socket_type: u32, protocol: u32) !posix.socket_t {
     const rc = posix.system.socket(domain, socket_type, protocol);
     switch (posix.errno(rc)) {
@@ -99,11 +145,29 @@ pub fn accept(
     addr_size: ?*posix.socklen_t,
     flags: u32,
 ) !posix.socket_t {
-    if (flags != 0) return error.UnsupportedFlags;
+    const supported_flags: u32 = posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+    if (flags & ~supported_flags != 0) return error.UnsupportedFlags;
+
+    const accept4_unsupported = switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .haiku => true,
+        else => false,
+    };
+
     while (true) {
-        const rc = posix.system.accept(sock, addr, addr_size);
+        const rc = if (accept4_unsupported)
+            posix.system.accept(sock, addr, addr_size)
+        else
+            posix.system.accept4(sock, addr, addr_size, flags);
         switch (posix.errno(rc)) {
-            .SUCCESS => return @intCast(rc),
+            .SUCCESS => {
+                const fd: posix.socket_t = @intCast(rc);
+                errdefer _ = posix.system.close(fd);
+                if (accept4_unsupported) {
+                    if (flags & posix.SOCK.CLOEXEC != 0) try setCloseOnExec(fd, true);
+                    if (flags & posix.SOCK.NONBLOCK != 0) try setNonBlocking(fd, true);
+                }
+                return fd;
+            },
             .INTR => continue,
             .AGAIN => return error.WouldBlock,
             .CONNABORTED => return error.ConnectionAborted,
@@ -117,6 +181,40 @@ pub fn accept(
             else => return error.Unexpected,
         }
     }
+}
+
+test "append handles never overwrite each other's records" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const first_fd = try openAppendAt(tmp.dir.handle, "shared.log", 0o600);
+    defer _ = posix.system.close(first_fd);
+    const second_fd = try openAppendAt(tmp.dir.handle, "shared.log", 0o600);
+    defer _ = posix.system.close(second_fd);
+
+    const first: std.Io.File = .{ .handle = first_fd, .flags = .{ .nonblocking = false } };
+    const second: std.Io.File = .{ .handle = second_fd, .flags = .{ .nonblocking = false } };
+    var first_buffer: [32]u8 = undefined;
+    var second_buffer: [32]u8 = undefined;
+    var first_writer = first.writerStreaming(std.testing.io, &first_buffer);
+    var second_writer = second.writerStreaming(std.testing.io, &second_buffer);
+    try first_writer.interface.writeAll("first-1\n");
+    try first_writer.interface.flush();
+    try second_writer.interface.writeAll("second-1\n");
+    try second_writer.interface.flush();
+    try first_writer.interface.writeAll("first-2\n");
+    try first_writer.interface.flush();
+    try second_writer.interface.writeAll("second-2\n");
+    try second_writer.interface.flush();
+
+    const contents = try tmp.dir.readFileAlloc(std.testing.io, "shared.log", std.testing.allocator, .limited(1024));
+    defer std.testing.allocator.free(contents);
+    try std.testing.expectEqualStrings(
+        "first-1\nsecond-1\nfirst-2\nsecond-2\n",
+        contents,
+    );
+    try std.testing.expect(try isCloseOnExec(first_fd));
+    try std.testing.expect(try isCloseOnExec(second_fd));
 }
 
 pub fn connect(sock: posix.socket_t, addr: *const posix.sockaddr, len: posix.socklen_t) !void {

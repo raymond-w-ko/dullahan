@@ -36,8 +36,30 @@ pub const Stream = struct {
 
 pub const Connection = struct {
     stream: Stream,
-    address: []const u8 = "unknown",
+    address: std.Io.net.IpAddress,
 };
+
+const PosixAddress = extern union {
+    any: std.posix.sockaddr,
+    in: std.posix.sockaddr.in,
+    in6: std.posix.sockaddr.in6,
+};
+
+fn addressFromPosix(address: *const PosixAddress) !std.Io.net.IpAddress {
+    return switch (address.any.family) {
+        std.posix.AF.INET => .{ .ip4 = .{
+            .port = std.mem.bigToNative(u16, address.in.port),
+            .bytes = @bitCast(address.in.addr),
+        } },
+        std.posix.AF.INET6 => .{ .ip6 = .{
+            .port = std.mem.bigToNative(u16, address.in6.port),
+            .bytes = address.in6.addr,
+            .flow = address.in6.flowinfo,
+            .interface = .{ .index = address.in6.scope_id },
+        } },
+        else => error.AddressFamilyNotSupported,
+    };
+}
 
 pub const Server = struct {
     io: std.Io,
@@ -45,12 +67,22 @@ pub const Server = struct {
     stream: struct { handle: std.posix.fd_t },
 
     pub fn accept(self: *Server) !Connection {
-        const accepted = try self.inner.accept(self.io);
+        var address: PosixAddress = undefined;
+        var address_len: std.posix.socklen_t = @sizeOf(PosixAddress);
+        const fd = try posix_compat.accept(
+            self.stream.handle,
+            &address.any,
+            &address_len,
+            std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
+        );
+        errdefer _ = std.posix.system.close(fd);
+
         return .{
             .stream = .{
                 .io = self.io,
-                .handle = accepted.socket.handle,
+                .handle = fd,
             },
+            .address = try addressFromPosix(&address),
         };
     }
 
@@ -69,4 +101,39 @@ pub fn listen(io: std.Io, address: Address, options: ListenOptions) !Server {
         .stream = .{ .handle = inner.socket.handle },
         .inner = inner,
     };
+}
+
+test "nonblocking accept preserves flags and peer addresses" {
+    var server = try listen(std.testing.io, .initIp4(.{ 127, 0, 0, 1 }, 0), .{
+        .reuse_address = true,
+    });
+    defer server.deinit();
+    try posix_compat.setNonBlocking(server.stream.handle, true);
+
+    try std.testing.expectError(error.WouldBlock, server.accept());
+
+    const address = server.inner.socket.address;
+    var first_client = try address.connect(std.testing.io, .{ .mode = .stream });
+    defer first_client.close(std.testing.io);
+    var second_client = try address.connect(std.testing.io, .{ .mode = .stream });
+    defer second_client.close(std.testing.io);
+
+    var first = try server.accept();
+    defer first.stream.close();
+    var second = try server.accept();
+    defer second.stream.close();
+
+    try std.testing.expect(try posix_compat.isNonBlocking(first.stream.handle));
+    try std.testing.expect(try posix_compat.isCloseOnExec(first.stream.handle));
+    try std.testing.expect(try posix_compat.isNonBlocking(second.stream.handle));
+    try std.testing.expect(try posix_compat.isCloseOnExec(second.stream.handle));
+
+    switch (first.address) {
+        .ip4 => |peer| {
+            try std.testing.expectEqualSlices(u8, &.{ 127, 0, 0, 1 }, &peer.bytes);
+            try std.testing.expect(peer.port != 0);
+        },
+        .ip6 => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectError(error.WouldBlock, server.accept());
 }

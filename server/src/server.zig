@@ -191,6 +191,7 @@ pub fn run(io: std.Io, allocator: std.mem.Allocator, config: RunConfig) !void {
         .allow_sync_output = !config.no_sync_output,
     });
     defer pane_registry.deinit();
+    defer dlog.setDebugPane(null);
 
     // Create session with registry pointer
     var session = try Session.init(allocator, &pane_registry, .{});

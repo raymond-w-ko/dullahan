@@ -32,10 +32,7 @@ const WRITE_TIMEOUT_MS: i64 = 30_000;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 fn setNonBlocking(fd: posix.fd_t, enabled: bool) void {
-    const fl_flags = posix_compat.fcntl(fd, std.posix.F.GETFL, 0) catch return;
-    const O_NONBLOCK: usize = if (@import("builtin").os.tag == .macos) 0x4 else 0x800;
-    const new_flags = if (enabled) (fl_flags | O_NONBLOCK) else (fl_flags & ~O_NONBLOCK);
-    _ = posix_compat.fcntl(fd, std.posix.F.SETFL, new_flags) catch {};
+    posix_compat.setNonBlocking(fd, enabled) catch {};
 }
 
 fn setSocketTimeoutMs(fd: posix.fd_t, timeout_ms: u32) void {
@@ -446,7 +443,7 @@ const PendingWriteState = union(enum) {
 
 const PendingConn = struct {
     stream: PendingStream,
-    peer_addr: []const u8,
+    peer_addr: std.Io.net.IpAddress,
     accepted_ms: i64,
     handshake_done_ms: ?i64 = null,
     first_byte_ms: ?i64 = null,
@@ -837,13 +834,13 @@ pub const Server = struct {
             const handshake_elapsed = if (pending.handshake_done_ms) |ms| ms - pending.accepted_ms else -1;
             if (pending.write_state.hasRemaining()) {
                 log.debug(
-                    "Write timeout sending HTTP response (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
+                    "Write timeout sending HTTP response (accept {d}ms, handshake {d}ms, tls={}, peer={f})",
                     .{ accept_elapsed, handshake_elapsed, pending.stream.isTls(), pending.peer_addr },
                 );
             } else switch (pending.stream) {
-                .tls_handshake => log.debug("TLS handshake timeout after {d}ms (peer={any})", .{ accept_elapsed, pending.peer_addr }),
+                .tls_handshake => log.debug("TLS handshake timeout after {d}ms (peer={f})", .{ accept_elapsed, pending.peer_addr }),
                 else => log.debug(
-                    "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={any})",
+                    "Read timeout waiting for HTTP request (accept {d}ms, handshake {d}ms, tls={}, peer={f})",
                     .{ accept_elapsed, handshake_elapsed, pending.stream.isTls(), pending.peer_addr },
                 ),
             }
@@ -1403,7 +1400,7 @@ pub const Server = struct {
         errdefer ws_conn.deinit();
         try self.ready_ws.append(self.allocator, ws_conn);
 
-        log.info("WebSocket connection established from {any}", .{peer_addr});
+        log.info("WebSocket connection established from {f}", .{peer_addr});
     }
 };
 
@@ -1432,4 +1429,23 @@ test "mime types" {
     try std.testing.expectEqualStrings("application/javascript; charset=utf-8", getMimeType("app.js"));
     try std.testing.expectEqualStrings("image/png", getMimeType("logo.png"));
     try std.testing.expectEqualStrings("application/octet-stream", getMimeType("unknown.xyz"));
+}
+
+test "HTTP listener drains nonblocking accept queue" {
+    var server = try Server.init(std.testing.io, std.testing.allocator, 0, null, false, null);
+    defer server.deinit();
+
+    try server.enqueueAcceptedConnections();
+    try std.testing.expectEqual(@as(usize, 0), server.pending.items.len);
+
+    const address = server.listener.inner.socket.address;
+    var first_client = try address.connect(std.testing.io, .{ .mode = .stream });
+    defer first_client.close(std.testing.io);
+    var second_client = try address.connect(std.testing.io, .{ .mode = .stream });
+    defer second_client.close(std.testing.io);
+
+    try server.enqueueAcceptedConnections();
+    try std.testing.expectEqual(@as(usize, 2), server.pending.items.len);
+    try server.enqueueAcceptedConnections();
+    try std.testing.expectEqual(@as(usize, 2), server.pending.items.len);
 }
