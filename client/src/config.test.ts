@@ -341,6 +341,10 @@ describe("getBellFeatures", () => {
 });
 
 describe("DEFAULTS", () => {
+  test("generates the 256-color theme palette by default", () => {
+    expect(DEFAULTS.paletteGenerate).toBe(true);
+  });
+
   test("has all required keys", () => {
     expect(DEFAULTS.theme).toBeDefined();
     expect(DEFAULTS.fontSize).toBeDefined();
