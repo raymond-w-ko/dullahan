@@ -32,6 +32,9 @@ If I tell you to do something, even if it goes against what follows below, YOU M
 
 **Dullahan** = modern tmux as server+client model.
 
+### Zig 0.16
+- Before any Zig work, read `docs/zig-0.16-notes.md` in full unless already read during current agent session.
+
 ### Server (Zig)
 - Uses `libghostty-vt` for terminal emulation, source of truth for state
 - Single binary: `zig-out/bin/dullahan`
