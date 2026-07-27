@@ -218,6 +218,7 @@ pub const Pane = struct {
         var terminal = try Terminal.init(allocator, .{
             .cols = opts.cols,
             .rows = opts.rows,
+            .max_scrollback = constants.terminal.scrollback_limit,
             .default_modes = default_modes,
             .kitty_image_storage_limit = constants.images.kitty_storage_limit,
         });
@@ -1843,6 +1844,10 @@ test "pane can be created" {
 
     try std.testing.expectEqual(@as(u16, 80), pane.cols);
     try std.testing.expectEqual(@as(u16, 24), pane.rows);
+    try std.testing.expectEqual(
+        constants.terminal.scrollback_limit,
+        pane.terminal.screens.active.pages.maxSize(),
+    );
 }
 
 test "pane can feed data" {

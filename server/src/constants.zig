@@ -56,6 +56,10 @@ pub const snapshot = struct {
 pub const terminal = struct {
     pub const default_cell_width_px: u16 = 8;
     pub const default_cell_height_px: u16 = 16;
+
+    /// Maximum Ghostty page storage for active screen and scrollback per pane.
+    /// Pages are allocated lazily as terminal history grows.
+    pub const scrollback_limit: usize = 16 * 1024 * 1024;
 };
 
 /// Timeout values in milliseconds.
