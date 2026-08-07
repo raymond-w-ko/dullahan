@@ -20,25 +20,38 @@ describe("row run cache context", () => {
     expect(rowRunsCacheContextChanged(context(null), context(null))).toBe(false);
   });
 
-  test("invalidates when entering the Anthropic profile", () => {
+  test("invalidates when entering a font coverage profile", () => {
     expect(
-      rowRunsCacheContextChanged(context(null), context("anthropic-mono"))
+      rowRunsCacheContextChanged(context(null), context("iosevka-term"))
     ).toBe(true);
   });
 
-  test("invalidates when leaving the Anthropic profile", () => {
+  test("invalidates when leaving a font coverage profile", () => {
     expect(
-      rowRunsCacheContextChanged(context("anthropic-mono"), context(null))
+      rowRunsCacheContextChanged(context("iosevka-term"), context(null))
     ).toBe(true);
   });
 
-  test("equivalent Anthropic aliases do not invalidate", () => {
-    const compact = resolveFontCoverageProfile("AnthropicMono, monospace")?.id ?? null;
-    const spaced = resolveFontCoverageProfile("ANTHROPIC MONO, monospace")?.id ?? null;
+  test("equivalent Iosevka family spelling does not invalidate", () => {
+    const regular =
+      resolveFontCoverageProfile("Iosevka Term, monospace")?.id ?? null;
+    const spaced =
+      resolveFontCoverageProfile("IOSEVKA   TERM, monospace")?.id ?? null;
 
-    expect(compact).toBe("anthropic-mono");
-    expect(spaced).toBe("anthropic-mono");
-    expect(rowRunsCacheContextChanged(context(compact), context(spaced))).toBe(false);
+    expect(regular).toBe("iosevka-term");
+    expect(spaced).toBe("iosevka-term");
+    expect(rowRunsCacheContextChanged(context(regular), context(spaced))).toBe(
+      false
+    );
+  });
+
+  test("invalidates when switching between known profiles", () => {
+    expect(
+      rowRunsCacheContextChanged(
+        context("iosevka-term"),
+        context("anthropic-mono")
+      )
+    ).toBe(true);
   });
 
   test("invalidates when any non-font render context changes", () => {

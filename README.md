@@ -175,6 +175,24 @@ Built-in test utilities:
 - generated client CSS palette plus generated Zig theme DB
 - master theme info also feeds OSC color queries
 
+### Font coverage
+
+The client uses checked-in cmap coverage profiles for recognized primary
+terminal fonts. Missing glyphs can then use browser fallback without breaking
+terminal cell width. Profiles currently cover Iosevka Term and Anthropic Mono.
+
+Generate another profile from one or more font files with:
+
+```bash
+bun scripts/generate-font-coverage.ts \
+  --output client/src/terminal/exampleCoverage.generated.ts \
+  --prefix EXAMPLE \
+  /path/to/font.ttf
+```
+
+Every face must have identical coverage. Register generated ranges and CSS
+family aliases in `client/src/terminal/fontCoverage.ts`.
+
 ## Repo Map
 
 | Path | Purpose |

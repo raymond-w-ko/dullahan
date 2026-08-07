@@ -1,14 +1,28 @@
 import { ANTHROPIC_MONO_RANGES } from "./anthropicMonoCoverage.generated";
+import { IOSEVKA_TERM_RANGES } from "./iosevkaTermCoverage.generated";
 
 export interface FontCoverageProfile {
-  id: string;
-  ranges: readonly (readonly [number, number])[];
+  readonly id: string;
+  readonly familyNames: readonly string[];
+  readonly ranges: readonly (readonly [number, number])[];
 }
 
 export const ANTHROPIC_MONO_PROFILE: FontCoverageProfile = {
   id: "anthropic-mono",
+  familyNames: ["anthropicmono", "anthropic mono"],
   ranges: ANTHROPIC_MONO_RANGES,
 };
+
+export const IOSEVKA_TERM_PROFILE: FontCoverageProfile = {
+  id: "iosevka-term",
+  familyNames: ["iosevka term"],
+  ranges: IOSEVKA_TERM_RANGES,
+};
+
+const FONT_COVERAGE_PROFILES: readonly FontCoverageProfile[] = [
+  IOSEVKA_TERM_PROFILE,
+  ANTHROPIC_MONO_PROFILE,
+];
 
 function firstFontFamily(fontFamily: string): string | undefined {
   let quote: "'" | '"' | undefined;
@@ -64,9 +78,9 @@ export function resolveFontCoverageProfile(
   const first = firstFontFamily(fontFamily);
   if (!first) return undefined;
   const normalized = normalizeFamilyName(first);
-  return normalized === "anthropicmono" || normalized === "anthropic mono"
-    ? ANTHROPIC_MONO_PROFILE
-    : undefined;
+  return FONT_COVERAGE_PROFILES.find((profile) =>
+    profile.familyNames.includes(normalized)
+  );
 }
 
 export function profileHasCodepoint(

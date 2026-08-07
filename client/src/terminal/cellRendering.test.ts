@@ -12,7 +12,7 @@ import {
 import { ContentTag, Wide } from "../../../protocol/schema/cell";
 import type { Cell } from "../../../protocol/schema/cell";
 import type { StyleTable } from "../../../protocol/schema/style";
-import { ANTHROPIC_MONO_PROFILE } from "./fontCoverage";
+import { IOSEVKA_TERM_PROFILE } from "./fontCoverage";
 
 /** Create a simple cell with given codepoint and wide state */
 function makeCell(codepoint: number, wide: number = Wide.NARROW, styleId: number = 0): Cell {
@@ -44,7 +44,7 @@ describe("cellsToRuns", () => {
       undefined,
       undefined,
       undefined,
-      ANTHROPIC_MONO_PROFILE
+      IOSEVKA_TERM_PROFILE
     );
 
     expect(lines.length).toBe(1);
@@ -72,7 +72,7 @@ describe("cellsToRuns", () => {
       undefined,
       undefined,
       undefined,
-      ANTHROPIC_MONO_PROFILE
+      IOSEVKA_TERM_PROFILE
     );
 
     expect(lines.length).toBe(1);
@@ -145,7 +145,7 @@ describe("cellsToRuns", () => {
       undefined,
       undefined,
       undefined,
-      ANTHROPIC_MONO_PROFILE
+      IOSEVKA_TERM_PROFILE
     );
 
     expect(lines[0]!.map((run) => run.text)).toEqual([icon, " A"]);
@@ -182,7 +182,7 @@ describe("cellsToRuns", () => {
       undefined,
       undefined,
       undefined,
-      ANTHROPIC_MONO_PROFILE
+      IOSEVKA_TERM_PROFILE
     );
 
     expect(lines[0]!.map((run) => run.text)).toEqual([ch, "A"]);
@@ -202,7 +202,7 @@ describe("cellsToRuns", () => {
       undefined,
       undefined,
       graphemes,
-      ANTHROPIC_MONO_PROFILE
+      IOSEVKA_TERM_PROFILE
     );
 
     expect(lines[0]!.map((run) => run.text)).toEqual(["e\u0301", "A"]);

@@ -1,38 +1,33 @@
 #!/usr/bin/env bun
 /**
- * Generate the checked-in Anthropic Mono cmap coverage table.
+ * Generate a checked-in font cmap coverage table.
  *
  * Usage:
- *   bun scripts/generate-font-coverage.ts /path/to/AnthropicMono-*.ttf
+ *   bun scripts/generate-font-coverage.ts \
+ *     --output client/src/terminal/iosevkaTermCoverage.generated.ts \
+ *     --prefix IOSEVKA_TERM \
+ *     /path/to/SGr-IosevkaTerm.ttc
  *
- * All supplied faces must have identical coverage. This is intentionally a
- * developer-only generator: the external font files are not build inputs.
+ * Every face in every supplied font file must have identical coverage. This
+ * is intentionally a developer-only generator: external font files are not
+ * build inputs.
  */
 
 import { createHash } from "crypto";
 import { basename } from "path";
 import { readFileSync, writeFileSync } from "fs";
 
-const OUTPUT_FILE = "client/src/terminal/anthropicMonoCoverage.generated.ts";
-
 type CodepointRange = readonly [number, number];
 
-function queryCharset(path: string): CodepointRange[] {
-  const result = Bun.spawnSync(["fc-query", "-f", "%{charset}\n", path], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) {
-    const error = result.stderr.toString().trim();
-    throw new Error(`fc-query failed for ${path}${error ? `: ${error}` : ""}`);
-  }
-
+function parseCharset(charset: string, source: string): CodepointRange[] {
   const codepoints = new Set<number>();
-  for (const token of result.stdout.toString().trim().split(/\s+/)) {
+  for (const token of charset.trim().split(/\s+/)) {
     if (!token) continue;
     const match = /^([0-9a-f]+)(?:-([0-9a-f]+))?$/i.exec(token);
     if (!match) {
-      throw new Error(`Unexpected fc-query charset token '${token}' for ${path}`);
+      throw new Error(
+        `Unexpected fc-query charset token '${token}' for ${source}`
+      );
     }
     const start = Number.parseInt(match[1]!, 16);
     const end = match[2] ? Number.parseInt(match[2], 16) : start;
@@ -54,6 +49,37 @@ function queryCharset(path: string): CodepointRange[] {
   return ranges;
 }
 
+function queryCharsets(path: string): CodepointRange[][] {
+  const result = Bun.spawnSync(
+    ["fc-query", "-f", "%{index}\t%{charset}\n", path],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    }
+  );
+  if (result.exitCode !== 0) {
+    const error = result.stderr.toString().trim();
+    throw new Error(`fc-query failed for ${path}${error ? `: ${error}` : ""}`);
+  }
+
+  const lines = result.stdout
+    .toString()
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  if (lines.length === 0) {
+    throw new Error(`fc-query found no faces in ${path}`);
+  }
+  return lines.map((line) => {
+    const separator = line.indexOf("\t");
+    if (separator === -1) {
+      throw new Error(`Unexpected fc-query output for ${path}: '${line}'`);
+    }
+    const faceIndex = line.slice(0, separator);
+    return parseCharset(line.slice(separator + 1), `${path} face ${faceIndex}`);
+  });
+}
+
 function rangeKey(ranges: CodepointRange[]): string {
   return ranges.map(([start, end]) => `${start.toString(16)}-${end.toString(16)}`).join(" ");
 }
@@ -62,17 +88,42 @@ function hex(codepoint: number): string {
   return `0x${codepoint.toString(16).toUpperCase()}`;
 }
 
-const fontPaths = process.argv.slice(2);
-if (fontPaths.length === 0) {
-  throw new Error("Pass one or more Anthropic Mono TTF paths");
+let outputFile: string | undefined;
+let constantPrefix: string | undefined;
+const fontPaths: string[] = [];
+const args = process.argv.slice(2);
+for (let index = 0; index < args.length; index++) {
+  const arg = args[index]!;
+  if (arg === "--output") {
+    outputFile = args[++index];
+  } else if (arg === "--prefix") {
+    constantPrefix = args[++index];
+  } else if (arg.startsWith("--")) {
+    throw new Error(`Unknown option '${arg}'`);
+  } else {
+    fontPaths.push(arg);
+  }
 }
 
-const coverage = queryCharset(fontPaths[0]!);
+if (!outputFile || !constantPrefix || fontPaths.length === 0) {
+  throw new Error("Pass --output, --prefix, and one or more font paths");
+}
+if (!/^[A-Z][A-Z0-9_]*$/.test(constantPrefix)) {
+  throw new Error("--prefix must be an uppercase TypeScript identifier");
+}
+
+const firstPath = fontPaths[0]!;
+const firstFaces = queryCharsets(firstPath);
+const coverage = firstFaces[0]!;
 const expectedKey = rangeKey(coverage);
-for (const path of fontPaths.slice(1)) {
-  const candidate = queryCharset(path);
-  if (rangeKey(candidate) !== expectedKey) {
-    throw new Error(`Coverage differs between ${fontPaths[0]} and ${path}`);
+for (const path of fontPaths) {
+  const faces = path === firstPath ? firstFaces : queryCharsets(path);
+  for (let faceIndex = 0; faceIndex < faces.length; faceIndex++) {
+    if (rangeKey(faces[faceIndex]!) !== expectedKey) {
+      throw new Error(
+        `Coverage differs between ${firstPath} face 0 and ${path} face ${faceIndex}`
+      );
+    }
   }
 }
 
@@ -87,7 +138,7 @@ const rangeLines = coverage
   .map(([start, end]) => `  [${hex(start)}, ${hex(end)}],`)
   .join("\n");
 
-const output = `// Generated by scripts/generate-font-coverage.ts. DO NOT EDIT.\n// Sources:\n${sources}\n// Coverage: ${codepointCount} codepoints in ${coverage.length} ranges.\n\nexport const ANTHROPIC_MONO_CODEPOINT_COUNT = ${codepointCount};\nexport const ANTHROPIC_MONO_RANGE_COUNT = ${coverage.length};\n\nexport const ANTHROPIC_MONO_RANGES: readonly (readonly [number, number])[] = [\n${rangeLines}\n];\n`;
+const output = `// Generated by scripts/generate-font-coverage.ts. DO NOT EDIT.\n// Sources:\n${sources}\n// Coverage: ${codepointCount} codepoints in ${coverage.length} ranges.\n\nexport const ${constantPrefix}_CODEPOINT_COUNT = ${codepointCount};\nexport const ${constantPrefix}_RANGE_COUNT = ${coverage.length};\n\nexport const ${constantPrefix}_RANGES: readonly (readonly [number, number])[] = [\n${rangeLines}\n];\n`;
 
-writeFileSync(OUTPUT_FILE, output);
-console.log(`Wrote ${OUTPUT_FILE}: ${codepointCount} codepoints in ${coverage.length} ranges`);
+writeFileSync(outputFile, output);
+console.log(`Wrote ${outputFile}: ${codepointCount} codepoints in ${coverage.length} ranges`);
