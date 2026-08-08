@@ -5,22 +5,7 @@ const constants = @import("constants.zig");
 
 const log = std.log.scoped(.png_decoder);
 
-const c = @cImport({
-    for (wuffs_defines) |d| @cDefine(d, "1");
-    @cInclude("wuffs-v0.4.c");
-});
-
-const wuffs_defines = [_][]const u8{
-    "WUFFS_CONFIG__MODULES",
-    "WUFFS_CONFIG__MODULE__AUX__BASE",
-    "WUFFS_CONFIG__MODULE__AUX__IMAGE",
-    "WUFFS_CONFIG__MODULE__BASE",
-    "WUFFS_CONFIG__MODULE__ADLER32",
-    "WUFFS_CONFIG__MODULE__CRC32",
-    "WUFFS_CONFIG__MODULE__DEFLATE",
-    "WUFFS_CONFIG__MODULE__PNG",
-    "WUFFS_CONFIG__MODULE__ZLIB",
-};
+const c = @import("wuffs_c");
 
 pub fn install() void {
     ghostty.sys.decode_png = decodePng;

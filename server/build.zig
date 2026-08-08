@@ -12,6 +12,23 @@ const wuffs_defines = [_][]const u8{
     "WUFFS_CONFIG__MODULE__ZLIB",
 };
 
+const wuffs_c_header = wuffs_c_header: {
+    const include = "#include <wuffs-v0.4.c>";
+    const len = len: {
+        var len: usize = 0;
+        for (wuffs_defines) |define| len += std.fmt.count("#define {s}\n", .{define});
+        len += std.fmt.count("{s}\n", .{include});
+        break :len len;
+    };
+
+    var buffer: [len:0]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    for (wuffs_defines) |define| writer.print("#define {s}\n", .{define}) catch unreachable;
+    writer.print("{s}\n", .{include}) catch unreachable;
+    buffer[len] = 0;
+    break :wuffs_c_header buffer;
+};
+
 fn pathExists(b: *std.Build, path: []const u8) bool {
     if (!std.Io.Dir.path.isAbsolute(path)) return false;
     std.Io.Dir.accessAbsolute(b.graph.io, path, .{}) catch return false;
@@ -109,6 +126,17 @@ pub fn build(b: *std.Build) void {
     }
 
     if (b.lazyDependency("wuffs", .{})) |wuffs_dep| {
+        const translate_c = b.lazyImport(@This(), "translate_c") orelse return;
+        const translate_c_dep = b.lazyDependency("translate_c", .{}) orelse return;
+        const wuffs_c: translate_c.Translator = .init(translate_c_dep, .{
+            .name = "wuffs_c",
+            .c_source_file = b.addWriteFiles().add("wuffs_c.h", &wuffs_c_header),
+            .target = target,
+            .optimize = optimize,
+        });
+        wuffs_c.addIncludePath(wuffs_dep.path("release/c"));
+        dullahan_mod.addImport("wuffs_c", wuffs_c.mod);
+
         var wuffs_flags: std.ArrayList([]const u8) = .empty;
         defer wuffs_flags.deinit(b.allocator);
         wuffs_flags.append(b.allocator, "-DWUFFS_IMPLEMENTATION") catch @panic("OOM");
@@ -120,7 +148,6 @@ pub fn build(b: *std.Build) void {
             wuffs_flags.append(b.allocator, "-D" ++ key) catch @panic("OOM");
         }
 
-        dullahan_mod.addIncludePath(wuffs_dep.path("release/c"));
         dullahan_mod.addCSourceFile(.{
             .file = wuffs_dep.path("release/c/wuffs-v0.4.c"),
             .flags = wuffs_flags.items,
