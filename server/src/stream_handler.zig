@@ -95,6 +95,9 @@ pub const Handler = struct {
 
             .semantic_prompt => self.handleSemanticPrompt(value),
 
+            // Dullahan does not expose these embedder-mediated protocols.
+            .kitty_clipboard, .kitty_dnd => {},
+
             // =================================================================
             // Terminal-modifying events (same as stream_readonly.zig)
             // =================================================================
@@ -411,6 +414,9 @@ pub const Handler = struct {
                 },
                 .glyph => {
                     log.debug("Ignoring glyph APC command", .{});
+                },
+                .unknown => {
+                    log.debug("Ignoring unknown APC command", .{});
                 },
             }
         }

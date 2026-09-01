@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .ghostty = .{
-            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#5a35415a5d59a117e654735ca5a01f876dec5841",
-            .hash = "ghostty-1.3.2-dev-5UdBC6MnJgX_ZWlagLj1t4Y397aPWMoPTJZONSE86XQ_",
+            .url = "git+https://github.com/ghostty-org/ghostty?ref=main#81681158b1f04b9900c3e58ba6db790384f5b6f5",
+            .hash = "ghostty-1.3.2-dev-5UdBC4gaYwVruUDKYxdTyGQF6L_6LjdKdJCbx7L4iR5V",
         },
         .@"zig-msgpack" = .{
             .url = "git+https://github.com/zigcc/zig-msgpack#e5d5f8604cf7aa50593df8e450686a269a7299c6",
@@ -17,8 +17,8 @@
             .hash = "snappy-0.1.0-n4AaquQ4AADQScvw9-i6SJvZTTagvxmGgGKnat4T_a4e",
         },
         .wuffs = .{
-            .url = "https://deps.files.ghostty.org/wuffs-122037b39d577ec2db3fd7b2130e7b69ef6cc1807d68607a7c232c958315d381b5cd.tar.gz",
-            .hash = "N-V-__8AAAzZywE3s51XfsLbP9eyEw57ae9swYB9aGB6fCMs",
+            .url = "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz",
+            .hash = "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI",
         },
         .translate_c = .{
             .lazy = true,

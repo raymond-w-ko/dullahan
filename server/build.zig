@@ -137,21 +137,8 @@ pub fn build(b: *std.Build) void {
         wuffs_c.addIncludePath(wuffs_dep.path("release/c"));
         dullahan_mod.addImport("wuffs_c", wuffs_c.mod);
 
-        var wuffs_flags: std.ArrayList([]const u8) = .empty;
-        defer wuffs_flags.deinit(b.allocator);
-        wuffs_flags.append(b.allocator, "-DWUFFS_IMPLEMENTATION") catch @panic("OOM");
-        if (target.result.abi == .msvc) {
-            wuffs_flags.append(b.allocator, "-fno-sanitize=undefined") catch @panic("OOM");
-            wuffs_flags.append(b.allocator, "-fno-sanitize-trap=undefined") catch @panic("OOM");
-        }
-        inline for (wuffs_defines) |key| {
-            wuffs_flags.append(b.allocator, "-D" ++ key) catch @panic("OOM");
-        }
-
-        dullahan_mod.addCSourceFile(.{
-            .file = wuffs_dep.path("release/c/wuffs-v0.4.c"),
-            .flags = wuffs_flags.items,
-        });
+        // ghostty-vt supplies the matching Wuffs C implementation.
+        // Compiling it again here produces duplicate symbols.
     }
 
     // Add zig-msgpack dependency for binary serialization

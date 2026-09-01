@@ -464,7 +464,10 @@ pub const Pane = struct {
     fn ensureVtStream(self: *Pane) void {
         if (self.vt_stream != null) return;
         const handler = stream_handler.Handler.init(&self.terminal, self);
-        self.vt_stream = stream_handler.Stream.initAlloc(self.allocator, handler);
+        self.vt_stream = .init(.{
+            .allocator = self.allocator,
+            .handler = handler,
+        });
     }
 
     fn feedTerminalBytes(self: *Pane, data: []const u8) !void {
@@ -954,6 +957,7 @@ pub const Pane = struct {
         switch (request) {
             .operating_status => self.sendDSRStatusResponse(),
             .cursor_position => self.sendDSRCursorResponse(),
+            .visibility => self.sendVisibilityResponse(),
             .color_scheme => {
                 // Color scheme query (CSI ? 996 n) - report light/dark mode
                 const bg = self.theme_bg orelse .{
@@ -978,6 +982,18 @@ pub const Pane = struct {
             log.warn("Failed to send color scheme response: {any}", .{e});
         };
         dsr_log.debug("Pane {d}: Sent color scheme response ({s})", .{ self.id, if (is_light) "light" else "dark" });
+    }
+
+    fn sendVisibilityResponse(self: *Pane) void {
+        var buf: [device_status.max_visibility_report_encode_size]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        device_status.encodeVisibilityReport(
+            &writer,
+            if (self.terminal.flags.visible) .potentially_visible else .not_visible,
+        ) catch return;
+        self.writeResponse(writer.buffered()) catch |e| {
+            log.warn("Failed to send visibility response: {any}", .{e});
+        };
     }
 
     /// Handle desktop notification from stream handler (OSC 9/777)
@@ -2368,6 +2384,11 @@ test "DA and DSR queries route through the single parser" {
     const dsr_cursor = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
     defer std.testing.allocator.free(dsr_cursor);
     try std.testing.expectEqualStrings("\x1b[1;1R", dsr_cursor);
+
+    try pane.feed("\x1b[?998n");
+    const visible = try readAvailableFromSlave(std.testing.allocator, &pane.pty.?);
+    defer std.testing.allocator.free(visible);
+    try std.testing.expectEqualStrings("\x1b[?999;1n", visible);
 }
 
 test "split title sequence with BEL terminator updates title without triggering bell" {

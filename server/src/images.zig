@@ -68,25 +68,49 @@ fn pointFromPlacement(
     placement: anytype,
     image: anytype,
 ) ?struct { col: i32, row: i32, visible: bool } {
-    const pin = switch (placement.location) {
-        .pin => |pin| pin,
+    const Origin = struct {
+        pin: @TypeOf(pane.terminal.screens.active.cursor.page_pin),
+        col_offset: i32,
+        row_offset: i32,
+    };
+    const storage = &pane.terminal.screens.active.kitty_images;
+    const origin: Origin = switch (placement.location) {
+        .pin => |pin| .{
+            .pin = pin,
+            .col_offset = @as(i32, 0),
+            .row_offset = @as(i32, 0),
+        },
         .virtual => return null,
+        .relative => |relative| relative: {
+            const chain = storage.resolveChain(relative) orelse return null;
+            const pin = switch (chain.root.location) {
+                .pin => |pin| pin,
+                .virtual => return null,
+                .relative => unreachable,
+            };
+            break :relative .{
+                .pin = pin,
+                .col_offset = chain.horizontal_offset,
+                .row_offset = chain.vertical_offset,
+            };
+        },
     };
 
     const pages = &pane.terminal.screens.active.pages;
-    const pin_screen = pages.pointFromPin(.screen, pin.*) orelse return null;
+    const pin_screen = pages.pointFromPin(.screen, origin.pin.*) orelse return null;
     const vp_tl = pages.getTopLeft(.viewport);
     const vp_screen = pages.pointFromPin(.screen, vp_tl) orelse return null;
 
     const grid_size = placement.gridSize(image.*, &pane.terminal);
-    const vp_row: i32 = @as(i32, @intCast(pin_screen.screen.y)) -
-        @as(i32, @intCast(vp_screen.screen.y));
+    const col = @as(i32, @intCast(pin_screen.screen.x)) +| origin.col_offset;
+    const vp_row = (@as(i32, @intCast(pin_screen.screen.y)) -
+        @as(i32, @intCast(vp_screen.screen.y))) +| origin.row_offset;
     const rows_i32: i32 = @intCast(grid_size.rows);
     const term_rows: i32 = @intCast(pane.rows);
     const visible = vp_row + rows_i32 > 0 and vp_row < term_rows;
 
     return .{
-        .col = @intCast(pin_screen.screen.x),
+        .col = col,
         .row = vp_row,
         .visible = visible,
     };
@@ -218,20 +242,21 @@ fn getKittyImageResponse(
 ) ?ImageResponse {
     const image = storage.images.getPtr(key.image_id) orelse return null;
     const format = imageFormat(image.format);
-    if (!keyMatches(key, pane.id, key.image_id, format, image.width, image.height, image.data)) return null;
+    const image_data = image.renderData().bytes() orelse return null;
+    if (!keyMatches(key, pane.id, key.image_id, format, image.width, image.height, image_data)) return null;
 
     if (format != .png) {
         const raw_format = rawPngFormat(format) orelse return .{
-            .data = image.data,
+            .data = image_data,
             .mime_type = "",
             .format = imageFormatString(format),
             .width = image.width,
             .height = image.height,
         };
-        const png = png_encoder.encodeRgba(allocator, image.data, raw_format, image.width, image.height) catch |err| {
+        const png = png_encoder.encodeRgba(allocator, image_data, raw_format, image.width, image.height) catch |err| {
             log.warn("failed to encode raw image as PNG: {}", .{err});
             return .{
-                .data = image.data,
+                .data = image_data,
                 .mime_type = "",
                 .format = imageFormatString(format),
                 .width = image.width,
@@ -249,7 +274,7 @@ fn getKittyImageResponse(
     }
 
     return .{
-        .data = image.data,
+        .data = image_data,
         .mime_type = "image/png",
         .format = "png",
         .width = image.width,
@@ -277,6 +302,7 @@ pub fn putManifest(
         const grid_size = placement.gridSize(image.*, &pane.terminal);
         const sx = @min(placement.source_x, image.width);
         const sy = @min(placement.source_y, image.height);
+        const image_data = image.renderData().bytes() orelse continue;
 
         const image_key = try allocImageKey(
             allocator,
@@ -285,7 +311,7 @@ pub fn putManifest(
             image.format,
             image.width,
             image.height,
-            image.data,
+            image_data,
         );
         errdefer allocator.free(image_key);
 
@@ -557,7 +583,7 @@ test "kitty png transmit and display produces manifest entry" {
     defer payload.free(allocator);
     try putManifest(allocator, &payload, &pane);
 
-    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.renderData().bytes().?);
     defer allocator.free(key);
     const response = getImageResponse(allocator, &pane, key).?;
     defer if (response.owned) allocator.free(response.data);
@@ -581,7 +607,7 @@ test "kitty rgba transmit and display produces manifest entry" {
     try std.testing.expectEqual(@as(usize, 1), storage.placements.count());
     const image = storage.images.getPtr(1).?;
 
-    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.renderData().bytes().?);
     defer allocator.free(key);
     const response = getImageResponse(allocator, &pane, key).?;
     defer if (response.owned) allocator.free(response.data);
@@ -603,7 +629,7 @@ test "kitty image response survives active screen switch" {
 
     const storage = &pane.terminal.screens.active.kitty_images;
     const image = storage.images.getPtr(1).?;
-    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.data);
+    const key = try allocImageKey(allocator, pane.id, 1, image.format, image.width, image.height, image.renderData().bytes().?);
     defer allocator.free(key);
 
     try pane.feed("\x1b[?1049h");
