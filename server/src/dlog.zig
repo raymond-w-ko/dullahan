@@ -3,7 +3,7 @@
 //! Provides logging to three channels:
 //! 1. Log file (/tmp/dullahan-<uid>/dullahan-<port>.log) - always (shared)
 //! 2. Debug console (pane 0) - when session is set
-//! 3. Stderr - for errors, unimplemented features, AND all logs in debug builds
+//! 3. Stderr - for errors, unimplemented features, AND all logs in debug builds (except tests)
 //!
 //! In debug builds (zig build without -Doptimize), ALL logs go to stderr
 //! for easier development. In release builds, only errors go to stderr.
@@ -29,9 +29,10 @@ const paths = @import("paths.zig");
 const debug_config = @import("debug_config.zig");
 const posix_compat = @import("posix_compat.zig");
 
-/// Comptime check: are we in a debug build?
 /// In debug builds, all logs go to stderr for easier development.
-const is_debug_build = builtin.mode == .Debug;
+/// Not under the test runner: Zig 0.16 reports any stderr output from a test
+/// binary as a "failed command" even when every test passes.
+const mirror_to_stderr = builtin.mode == .Debug and !builtin.is_test;
 
 pub const Category = debug_config.Category;
 
@@ -180,7 +181,7 @@ fn writeLine(
     }
 
     // 3. Log to stderr if requested (errors, missing features) or in debug builds
-    if (to_stderr or is_debug_build) {
+    if (to_stderr or mirror_to_stderr) {
         if (category.len > 0) {
             std.debug.print("{s} {s} ({s}): {s}\n", .{ timestamp, level.asText(), category, msg });
         } else {

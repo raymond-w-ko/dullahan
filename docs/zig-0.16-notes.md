@@ -133,6 +133,11 @@ a `failed command` diagnostic even when tests pass. Ghostty reduces test log
 level to `.err`. Dullahan tests that intentionally log may look failed at first
 glance; check final test status.
 
+Dullahan mitigates this in `server/src/dlog.zig`: `mirror_to_stderr` disables
+debug-build stderr mirroring under `builtin.is_test`, so a `failed command`
+line from `zig build test` now indicates a real failure or an explicit error
+log. Check the exit status either way.
+
 ---
 
 ## Recommended Dullahan Ownership Model
