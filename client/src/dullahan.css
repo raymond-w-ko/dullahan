@@ -968,13 +968,21 @@ body.layout-resizing-vertical * {
 }
 
 /* Glyphs that cannot safely share a proportional fallback-font text run are
-   constrained to the terminal grid. */
+   constrained to the terminal grid. The box keeps cell width so the grid
+   stays aligned, but ink may overflow: fallback fonts (Nerd Font PUA,
+   powerline separators) are often wider than the cell and would be clipped
+   otherwise. Positioning lifts the ink above the next cell's background,
+   which otherwise paints over it in tree order. Selector must beat
+   `.terminal-line span`, which also sets overflow: hidden. */
+.terminal-line span.fixed-cell,
 .fixed-cell {
   display: inline-block;
   vertical-align: top;
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 1;
   width: var(--cell-width, 1ch);
-  text-align: center;
+  text-align: left;
 }
 
 .fixed-cell-wide {
