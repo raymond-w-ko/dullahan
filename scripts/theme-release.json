@@ -1,10 +1,10 @@
 {
   "repo": "mbadolato/iTerm2-Color-Schemes",
-  "releaseTag": "release-20260831-151010-752a9c0",
-  "releaseName": "Terminal Themes - 20260831",
-  "publishedAt": "2026-08-31T15:10:26Z",
-  "commit": "752a9c0",
+  "releaseTag": "release-20261116-150709-494b809",
+  "releaseName": "Terminal Themes - 20261116",
+  "publishedAt": "2026-11-16T15:07:31Z",
+  "commit": "494b809",
   "assetName": "ghostty-themes.tgz",
-  "assetUrl": "https://github.com/mbadolato/iTerm2-Color-Schemes/releases/download/release-20260831-151010-752a9c0/ghostty-themes.tgz",
-  "assetSha256": "83653eb837baeb5bfc7d50c91b7d44772796e08c1c243134e11c5edf6c8d15c5"
+  "assetUrl": "https://github.com/mbadolato/iTerm2-Color-Schemes/releases/download/release-20261116-150709-494b809/ghostty-themes.tgz",
+  "assetSha256": "b9efec975b065de7db27bd34d7a056f491a3726ce14a4a41c53ccdcf2a9a285d"
 }
