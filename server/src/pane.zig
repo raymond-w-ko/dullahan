@@ -649,7 +649,9 @@ pub const Pane = struct {
 
     /// Send DSR (Device Status Report) cursor position response (CSI 6 n)
     /// Response: CSI row ; col R (1-indexed)
-    fn sendDSRCursorResponse(self: *Pane) void {
+    /// Send CPR (CSI 6 n) or, when `extended`, DECXCPR (CSI ? 6 n).
+    /// DECXCPR adds a page number. Panes have no page memory, so it is 1.
+    fn sendDSRCursorResponse(self: *Pane, extended: bool) void {
         // Get cursor position from terminal (0-indexed), convert to 1-indexed
         const cursor = self.terminal.screens.active.cursor;
         var row = cursor.y;
@@ -661,9 +663,12 @@ pub const Pane = struct {
         row += 1;
         col += 1;
 
-        // Format response: ESC [ row ; col R
+        // Format response: ESC [ row ; col R, or ESC [ ? row ; col ; 1 R
         var buf: [32]u8 = undefined;
-        const response = std.fmt.bufPrint(&buf, "\x1b[{d};{d}R", .{ row, col }) catch {
+        const response = (if (extended)
+            std.fmt.bufPrint(&buf, "\x1b[?{d};{d};1R", .{ row, col })
+        else
+            std.fmt.bufPrint(&buf, "\x1b[{d};{d}R", .{ row, col })) catch {
             log.warn("Failed to format DSR cursor response", .{});
             return;
         };
@@ -717,6 +722,9 @@ pub const Pane = struct {
             .csi_14_t => std.fmt.bufPrint(&buf, "\x1b[4;{d};{d}t", .{ height_px, width_px }),
             .csi_16_t => std.fmt.bufPrint(&buf, "\x1b[6;{d};{d}t", .{ cell_height, cell_width }),
             .csi_18_t => std.fmt.bufPrint(&buf, "\x1b[8;{d};{d}t", .{ rows, cols }),
+            // Screen size in characters. A pane has no separate screen, so
+            // this matches the text area size, as in Ghostty.
+            .csi_19_t => std.fmt.bufPrint(&buf, "\x1b[9;{d};{d}t", .{ rows, cols }),
             .csi_21_t => {
                 var list: std.ArrayListUnmanaged(u8) = .empty;
                 defer list.deinit(self.allocator);
@@ -869,7 +877,7 @@ pub const Pane = struct {
                         constants.colors.fg_g,
                         constants.colors.fg_b,
                     };
-                    self.sendOscColorResponse(@intFromEnum(d), fg[0], fg[1], fg[2], use_st);
+                    self.sendOscColorResponse(@backingInt(d), fg[0], fg[1], fg[2], use_st);
                 },
                 .pointer_background,
                 .tektronix_background,
@@ -880,7 +888,7 @@ pub const Pane = struct {
                         constants.colors.bg_g,
                         constants.colors.bg_b,
                     };
-                    self.sendOscColorResponse(@intFromEnum(d), bg[0], bg[1], bg[2], use_st);
+                    self.sendOscColorResponse(@backingInt(d), bg[0], bg[1], bg[2], use_st);
                 },
             },
             .palette => |idx| {
@@ -934,7 +942,7 @@ pub const Pane = struct {
             .osc_5, .osc_105 => 5,
             else => 4,
         };
-        const idx: u16 = if (cmd == 5) @intFromEnum(special) else special.osc4();
+        const idx: u16 = if (cmd == 5) @backingInt(special) else special.osc4();
 
         const r16: u16 = @as(u16, r) << 8 | r;
         const g16: u16 = @as(u16, g) << 8 | g;
@@ -956,7 +964,8 @@ pub const Pane = struct {
     pub fn handleDSR(self: *Pane, request: device_status.Request) void {
         switch (request) {
             .operating_status => self.sendDSRStatusResponse(),
-            .cursor_position => self.sendDSRCursorResponse(),
+            .cursor_position => self.sendDSRCursorResponse(false),
+            .cursor_position_extended => self.sendDSRCursorResponse(true),
             .visibility => self.sendVisibilityResponse(),
             .color_scheme => {
                 // Color scheme query (CSI ? 996 n) - report light/dark mode
@@ -2308,7 +2317,7 @@ fn attachResponsePipe(pane: *Pane) !void {
     }
 
     const flags = try posix_compat.fcntl(fds[0], posix.F.GETFL, 0);
-    const o_nonblock: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+    const o_nonblock: usize = if (builtin.target.os.tag == .macos) 0x4 else 0x800;
     _ = try posix_compat.fcntl(fds[0], posix.F.SETFL, flags | o_nonblock);
 
     pane.pty = .{

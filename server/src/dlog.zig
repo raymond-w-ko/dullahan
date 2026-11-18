@@ -32,7 +32,7 @@ const posix_compat = @import("posix_compat.zig");
 /// In debug builds, all logs go to stderr for easier development.
 /// Not under the test runner: Zig 0.16 reports any stderr output from a test
 /// binary as a "failed command" even when every test passes.
-const mirror_to_stderr = builtin.mode == .Debug and !builtin.is_test;
+const mirror_to_stderr = builtin.mode == .debug and !builtin.is_test;
 
 pub const Category = debug_config.Category;
 

@@ -64,7 +64,7 @@ fn initLogFile(io: std.Io) void {
     const path = paths.StaticPaths.ptyTraffic();
     const file = std.Io.Dir.createFileAbsolute(io, path, .{
         .truncate = true,
-        .permissions = @enumFromInt(0o644),
+        .permissions = @fromBackingInt(@intCast(0o644)),
     }) catch return;
     log_writer = file.writer(io, &log_buffer);
 }

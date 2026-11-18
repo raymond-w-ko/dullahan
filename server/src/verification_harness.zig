@@ -103,8 +103,7 @@ pub const Harness = struct {
         const label_slug = try slugify(allocator, options.label);
         errdefer allocator.free(label_slug);
 
-        const artifact_dir = try std.fmt.allocPrint(
-            allocator,
+        const artifact_dir = try allocator.print(
             "{s}/verify-{s}-{d}",
             .{
                 paths.getTempDir(),
@@ -115,11 +114,11 @@ pub const Harness = struct {
         errdefer allocator.free(artifact_dir);
         try std.Io.Dir.createDirAbsolute(io, artifact_dir, .default_dir);
 
-        const manifest_path = try std.fmt.allocPrint(allocator, "{s}/manifest.json", .{artifact_dir});
+        const manifest_path = try allocator.print("{s}/manifest.json", .{artifact_dir});
         errdefer allocator.free(manifest_path);
-        const server_log_artifact = try std.fmt.allocPrint(allocator, "{s}/server.log", .{artifact_dir});
+        const server_log_artifact = try allocator.print("{s}/server.log", .{artifact_dir});
         errdefer allocator.free(server_log_artifact);
-        const pty_log_artifact = try std.fmt.allocPrint(allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
+        const pty_log_artifact = try allocator.print("{s}/pty-traffic.jsonl", .{artifact_dir});
         errdefer allocator.free(pty_log_artifact);
 
         const previous_debug_owned = try allocator.dupe(u8, previous_config);
@@ -199,16 +198,16 @@ pub const Harness = struct {
         const case_slug = try slugify(self.allocator, name);
         defer self.allocator.free(case_slug);
 
-        const prefix = try std.fmt.allocPrint(self.allocator, "{s}/{d:0>2}-{s}", .{
+        const prefix = try self.allocator.print("{s}/{d:0>2}-{s}", .{
             self.artifact_dir,
             self.capture_index,
             case_slug,
         });
         defer self.allocator.free(prefix);
 
-        const request_file = try std.fmt.allocPrint(self.allocator, "{s}-request.bin", .{prefix});
+        const request_file = try self.allocator.print("{s}-request.bin", .{prefix});
         errdefer self.allocator.free(request_file);
-        const response_file = try std.fmt.allocPrint(self.allocator, "{s}-response.bin", .{prefix});
+        const response_file = try self.allocator.print("{s}-response.bin", .{prefix});
         errdefer self.allocator.free(response_file);
 
         try writeFileAbsolute(self.io, request_file, request);
@@ -362,7 +361,7 @@ fn setNonBlocking(fd: std.posix.fd_t) !void {
     const current_result = std.posix.system.fcntl(fd, std.posix.F.GETFL, @as(usize, 0));
     if (std.posix.errno(current_result) != .SUCCESS) return error.FcntlFailed;
     const current: usize = @intCast(current_result);
-    const o_nonblock: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+    const o_nonblock: usize = if (builtin.target.os.tag == .macos) 0x4 else 0x800;
     const set_result = std.posix.system.fcntl(fd, std.posix.F.SETFL, current | o_nonblock);
     if (std.posix.errno(set_result) != .SUCCESS) return error.FcntlFailed;
 }

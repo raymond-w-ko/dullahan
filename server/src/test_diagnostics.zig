@@ -29,17 +29,16 @@ pub const Harness = struct {
         defer allocator.free(safe_scenario);
 
         const ts_ms = std.Io.Timestamp.now(io, .real).toMilliseconds();
-        const artifact_dir = try std.fmt.allocPrint(
-            allocator,
+        const artifact_dir = try allocator.print(
             "{s}/diag-{s}-{s}-{d}",
             .{ paths.getTempDir(), safe_suite, safe_scenario, ts_ms },
         );
         errdefer allocator.free(artifact_dir);
         try std.Io.Dir.createDirAbsolute(io, artifact_dir, .default_dir);
 
-        const events_path = try std.fmt.allocPrint(allocator, "{s}/events.jsonl", .{artifact_dir});
+        const events_path = try allocator.print("{s}/events.jsonl", .{artifact_dir});
         errdefer allocator.free(events_path);
-        const metadata_path = try std.fmt.allocPrint(allocator, "{s}/metadata.json", .{artifact_dir});
+        const metadata_path = try allocator.print("{s}/metadata.json", .{artifact_dir});
         errdefer allocator.free(metadata_path);
 
         const events_file = try std.Io.Dir.createFileAbsolute(io, events_path, .{ .truncate = true });
@@ -170,7 +169,7 @@ pub const Harness = struct {
         };
         defer src.close(self.io);
 
-        const dest_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.artifact_dir, dest_name });
+        const dest_path = try self.allocator.print("{s}/{s}", .{ self.artifact_dir, dest_name });
         defer self.allocator.free(dest_path);
 
         const dest = try std.Io.Dir.createFileAbsolute(self.io, dest_path, .{ .truncate = true });
@@ -280,9 +279,9 @@ test "diagnostics harness snapshots shared logs" {
 
     try harness.snapshotSharedLogs();
 
-    const server_copy_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/server.log", .{artifact_dir});
+    const server_copy_path = try std.testing.allocator.print("{s}/server.log", .{artifact_dir});
     defer std.testing.allocator.free(server_copy_path);
-    const pty_copy_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
+    const pty_copy_path = try std.testing.allocator.print("{s}/pty-traffic.jsonl", .{artifact_dir});
     defer std.testing.allocator.free(pty_copy_path);
 
     const server_copy = try readFileAllocAbsolute(std.testing.io, std.testing.allocator, server_copy_path, 4096);

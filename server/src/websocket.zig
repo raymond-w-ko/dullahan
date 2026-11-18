@@ -40,7 +40,7 @@ pub fn parseFrameHeader(data: []const u8) !struct { header: FrameHeader, header_
     const byte1 = data[1];
 
     const fin = (byte0 & 0x80) != 0;
-    const opcode: Opcode = @enumFromInt(@as(u4, @truncate(byte0 & 0x0F)));
+    const opcode: Opcode = @fromBackingInt(@intCast(@as(u4, @truncate(byte0 & 0x0F))));
     const mask = (byte1 & 0x80) != 0;
     var payload_len: u64 = byte1 & 0x7F;
 
@@ -88,7 +88,7 @@ pub fn createFrame(allocator: std.mem.Allocator, opcode: Opcode, payload: []cons
     errdefer frame.deinit(allocator);
 
     // First byte: FIN + opcode
-    try frame.append(allocator, 0x80 | @as(u8, @intFromEnum(opcode)));
+    try frame.append(allocator, 0x80 | @as(u8, @backingInt(opcode)));
 
     // Payload length (no mask for server -> client)
     if (payload.len < 126) {
@@ -158,7 +158,7 @@ pub const Connection = struct {
 
         // Set non-blocking for poll-based event loop.
         const fl_flags = posix_compat.fcntl(fd, std.posix.F.GETFL, 0) catch 0;
-        const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+        const O_NONBLOCK: usize = if (builtin.target.os.tag == .macos) 0x4 else 0x800;
         _ = posix_compat.fcntl(fd, std.posix.F.SETFL, fl_flags | O_NONBLOCK) catch {};
 
         return .{

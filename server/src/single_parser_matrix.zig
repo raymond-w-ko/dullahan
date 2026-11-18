@@ -89,14 +89,14 @@ fn runMatrix(
     try expectNoResponse(allocator, harness, pane, "osc7-pwd", "\x1b]7;file://localhost/tmp/dullahan/project\x07");
     try expectPwd(pane, "file://localhost/tmp/dullahan/project");
 
-    const size_14 = try std.fmt.allocPrint(allocator, "\x1b[4;{d};{d}t", .{
+    const size_14 = try allocator.print("\x1b[4;{d};{d}t", .{
         pane.terminal.height_px,
         pane.terminal.width_px,
     });
     defer allocator.free(size_14);
     try expectExact(allocator, harness, pane, "size-report-14t", "\x1b[14t", size_14);
 
-    const size_18 = try std.fmt.allocPrint(allocator, "\x1b[8;{d};{d}t", .{
+    const size_18 = try allocator.print("\x1b[8;{d};{d}t", .{
         pane.rows,
         pane.cols,
     });
@@ -206,7 +206,7 @@ test "single parser matrix smoke completes and preserves artifacts" {
     const artifact_dir = try runSmoke(std.testing.allocator);
     defer std.testing.allocator.free(artifact_dir);
 
-    const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
+    const manifest_path = try std.testing.allocator.print("{s}/manifest.json", .{artifact_dir});
     defer std.testing.allocator.free(manifest_path);
     var manifest_file = try std.Io.Dir.openFileAbsolute(std.testing.io, manifest_path, .{});
     manifest_file.close(std.testing.io);

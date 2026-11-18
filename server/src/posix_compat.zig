@@ -49,7 +49,7 @@ pub fn fcntl(fd: posix.fd_t, cmd: i32, arg: usize) !usize {
 fn statusFlag(comptime field_name: []const u8) usize {
     var flags: posix.O = .{};
     @field(flags, field_name) = true;
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(posix.O));
+    const Bits = @Int(.unsigned, @bitSizeOf(posix.O));
     return @intCast(@as(Bits, @bitCast(flags)));
 }
 
@@ -148,7 +148,7 @@ pub fn accept(
     const supported_flags: u32 = posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
     if (flags & ~supported_flags != 0) return error.UnsupportedFlags;
 
-    const accept4_unsupported = switch (builtin.os.tag) {
+    const accept4_unsupported = switch (builtin.target.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .haiku => true,
         else => false,
     };
@@ -268,7 +268,7 @@ pub fn setsockopt(
 pub fn write(fd: posix.fd_t, bytes: []const u8) WriteError!usize {
     if (bytes.len == 0) return 0;
 
-    const max_count = switch (builtin.os.tag) {
+    const max_count = switch (builtin.target.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos, .visionos => std.math.maxInt(i32),
         else => std.math.maxInt(isize),

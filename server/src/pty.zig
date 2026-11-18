@@ -8,19 +8,7 @@ const posix = std.posix;
 const posix_compat = @import("posix_compat.zig");
 const builtin = @import("builtin");
 
-const c = @cImport({
-    @cInclude("sys/ioctl.h");
-    @cInclude("sys/stat.h"); // stat() for directory check
-    @cInclude("fcntl.h");
-    if (builtin.os.tag == .macos) {
-        @cInclude("util.h"); // openpty() on macOS
-    } else {
-        @cInclude("pty.h"); // openpty() on Linux
-    }
-    @cInclude("termios.h");
-    @cInclude("unistd.h"); // setsid
-    @cInclude("stdlib.h"); // setenv
-});
+const c = @import("posix_c"); // see src/c/posix.h
 
 pub const Winsize = extern struct {
     ws_row: u16 = 24,
@@ -91,7 +79,7 @@ pub const Pty = struct {
 
     /// Set the PTY size
     pub fn setSize(self: *Pty, size: Winsize) !void {
-        const TIOCSWINSZ: u32 = if (builtin.os.tag == .macos) 2148037735 else 0x5414;
+        const TIOCSWINSZ: u32 = if (builtin.target.os.tag == .macos) 2148037735 else 0x5414;
         if (c.ioctl(self.master, TIOCSWINSZ, @intFromPtr(&size)) < 0) {
             return error.SetSizeFailed;
         }
@@ -152,7 +140,7 @@ pub const Pty = struct {
         }
 
         // Set controlling terminal
-        const TIOCSCTTY: u32 = if (builtin.os.tag == .macos) 536900705 else 0x540E;
+        const TIOCSCTTY: u32 = if (builtin.target.os.tag == .macos) 536900705 else 0x540E;
         if (c.ioctl(self.slave, TIOCSCTTY, @as(c_ulong, 0)) < 0) {
             return error.SetCttyFailed;
         }

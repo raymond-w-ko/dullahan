@@ -12,9 +12,7 @@ const log = std.log.scoped(.process);
 /// Try non-blocking waitpid, returns true if child exited/reaped or doesn't exist.
 /// Uses C library waitpid directly to handle ECHILD (std.posix.waitpid panics on it).
 pub fn tryWaitpid(pid: posix.pid_t) bool {
-    const c = @cImport({
-        @cInclude("sys/wait.h");
-    });
+    const c = @import("posix_c");
     var status: c_int = 0;
     const ret = c.waitpid(pid, &status, c.WNOHANG);
     if (ret == -1) {

@@ -53,41 +53,47 @@ fn resolveOpenSslPrefix(b: *std.Build, openssl_dir: ?[]const u8) ?[]const u8 {
     return null;
 }
 
-fn linkOpenSsl(
-    b: *std.Build,
-    module: *std.Build.Module,
-    target: std.Build.ResolvedTarget,
-    openssl_dir: ?[]const u8,
-    openssl_include_dir: ?[]const u8,
-    openssl_lib_dir: ?[]const u8,
-) void {
-    var include_dir = openssl_include_dir;
-    var lib_dir = openssl_lib_dir;
+const OpenSslPaths = struct {
+    include_dir: ?[]const u8 = null,
+    lib_dir: ?[]const u8 = null,
 
-    if (openssl_dir) |prefix| {
-        if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
-        if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
-    }
+    fn resolve(
+        b: *std.Build,
+        target: std.Build.ResolvedTarget,
+        openssl_dir: ?[]const u8,
+        openssl_include_dir: ?[]const u8,
+        openssl_lib_dir: ?[]const u8,
+    ) OpenSslPaths {
+        var include_dir = openssl_include_dir;
+        var lib_dir = openssl_lib_dir;
 
-    if (target.result.os.tag == .macos) {
-        if (include_dir == null or lib_dir == null) {
-            if (resolveOpenSslPrefix(b, openssl_dir)) |prefix| {
-                if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
-                if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
+        if (openssl_dir) |prefix| {
+            if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
+            if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
+        }
+
+        if (target.result.os.tag == .macos) {
+            if (include_dir == null or lib_dir == null) {
+                if (resolveOpenSslPrefix(b, openssl_dir)) |prefix| {
+                    if (include_dir == null) include_dir = b.pathJoin(&.{ prefix, "include" });
+                    if (lib_dir == null) lib_dir = b.pathJoin(&.{ prefix, "lib" });
+                }
             }
         }
+
+        return .{
+            .include_dir = if (include_dir) |path| (if (pathExists(b, path)) path else null) else null,
+            .lib_dir = if (lib_dir) |path| (if (pathExists(b, path)) path else null) else null,
+        };
     }
 
-    if (include_dir) |path| {
-        if (pathExists(b, path)) module.addIncludePath(.{ .cwd_relative = path });
+    fn link(paths: OpenSslPaths, module: *std.Build.Module) void {
+        if (paths.include_dir) |path| module.addIncludePath(.{ .cwd_relative = path });
+        if (paths.lib_dir) |path| module.addLibraryPath(.{ .cwd_relative = path });
+        module.linkSystemLibrary("ssl", .{ .use_pkg_config = .yes });
+        module.linkSystemLibrary("crypto", .{ .use_pkg_config = .yes });
     }
-    if (lib_dir) |path| {
-        if (pathExists(b, path)) module.addLibraryPath(.{ .cwd_relative = path });
-    }
-
-    module.linkSystemLibrary("ssl", .{ .use_pkg_config = .yes });
-    module.linkSystemLibrary("crypto", .{ .use_pkg_config = .yes });
-}
+};
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -108,6 +114,8 @@ pub fn build(b: *std.Build) void {
         "Path to OpenSSL libraries (contains libssl)",
     );
 
+    const openssl = OpenSslPaths.resolve(b, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+
     // Create a module for the core library (can be imported by tests and exe)
     const dullahan_mod = b.addModule("dullahan", .{
         .root_source_file = b.path("src/root.zig"),
@@ -125,9 +133,33 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.addImport("ghostty-vt", ghostty_vt);
     }
 
+    // Zig 0.17 removed @cImport. C headers are translated here with the
+    // external translate_c package and imported as ordinary modules.
+    const translate_c = b.lazyImport(@This(), "translate_c") orelse return;
+    const translate_c_dep = b.lazyDependency("translate_c", .{}) orelse return;
+
+    const posix_c: translate_c.Translator = .init(translate_c_dep, .{
+        .name = "posix_c",
+        .c_source_file = b.path("src/c/posix.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    dullahan_mod.addImport("posix_c", posix_c.mod);
+
+    const openssl_c: translate_c.Translator = .init(translate_c_dep, .{
+        .name = "openssl_c",
+        .c_source_file = b.path("src/c/openssl.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_system_libs = &.{
+            .{ .name = "ssl", .options = .{ .use_pkg_config = .yes } },
+            .{ .name = "crypto", .options = .{ .use_pkg_config = .yes } },
+        },
+    });
+    if (openssl.include_dir) |path| openssl_c.addIncludePath(.{ .cwd_relative = path });
+    dullahan_mod.addImport("openssl_c", openssl_c.mod);
+
     if (b.lazyDependency("wuffs", .{})) |wuffs_dep| {
-        const translate_c = b.lazyImport(@This(), "translate_c") orelse return;
-        const translate_c_dep = b.lazyDependency("translate_c", .{}) orelse return;
         const wuffs_c: translate_c.Translator = .init(translate_c_dep, .{
             .name = "wuffs_c",
             .c_source_file = b.addWriteFiles().add("wuffs_c.h", &wuffs_c_header),
@@ -147,15 +179,14 @@ pub fn build(b: *std.Build) void {
         dullahan_mod.addImport("msgpack", msgpack);
     }
 
-    // Add snappy dependency for compression
-    // Pass target/optimize so the C++ library builds correctly
+    // Add snappy dependency for compression.
+    // Pass target/optimize so the C++ library builds correctly.
+    // Only the static library is used: its Zig wrapper module still uses
+    // @cImport, so src/snappy_c.zig declares the C functions instead.
     if (b.lazyDependency("snappy", .{
         .target = target,
         .optimize = optimize,
     })) |snappy_dep| {
-        const snappy = snappy_dep.module("snappy");
-        dullahan_mod.addImport("snappy", snappy);
-        // Link the snappy static library
         dullahan_mod.linkLibrary(snappy_dep.artifact("snappy"));
     }
 
@@ -173,7 +204,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.link_libc = true;
-    linkOpenSsl(b, exe.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    openssl.link(exe.root_module);
 
     b.installArtifact(exe);
 
@@ -183,9 +214,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // ============================================================
     // Tests
@@ -196,7 +225,7 @@ pub fn build(b: *std.Build) void {
         .root_module = dullahan_mod,
     });
     mod_tests.root_module.link_libc = true;
-    linkOpenSsl(b, mod_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    openssl.link(mod_tests.root_module);
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
     // Test the executable's root module
@@ -204,7 +233,7 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
     exe_tests.root_module.link_libc = true;
-    linkOpenSsl(b, exe_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    openssl.link(exe_tests.root_module);
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     // Integration tests (separate test/ directory)
@@ -219,7 +248,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     integration_tests.root_module.link_libc = true;
-    linkOpenSsl(b, integration_tests.root_module, target, openssl_dir, openssl_include_dir, openssl_lib_dir);
+    openssl.link(integration_tests.root_module);
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
     // `zig build test` runs all tests (unit + integration)

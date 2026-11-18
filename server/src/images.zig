@@ -49,10 +49,7 @@ fn imageFormatString(format: ImageFormat) []const u8 {
 }
 
 fn imageFormatFromString(raw: []const u8) ?ImageFormat {
-    inline for (@typeInfo(ImageFormat).@"enum".fields) |field| {
-        if (std.mem.eql(u8, raw, field.name)) return @enumFromInt(field.value);
-    }
-    return null;
+    return std.meta.stringToEnum(ImageFormat, raw);
 }
 
 fn rawPngFormat(format: ImageFormat) ?png_encoder.RawFormat {
@@ -315,8 +312,7 @@ pub fn putManifest(
         );
         errdefer allocator.free(image_key);
 
-        const url = try std.fmt.allocPrint(
-            allocator,
+        const url = try allocator.print(
             "/api/images/{d}/{s}",
             .{ pane.id, image_key },
         );
@@ -433,8 +429,7 @@ fn appendIterm2Manifest(
         const image_key = try iterm2_images.allocImageKey(allocator, pane.id, entry);
         errdefer allocator.free(image_key);
 
-        const url = try std.fmt.allocPrint(
-            allocator,
+        const url = try allocator.print(
             "/api/images/{d}/{s}",
             .{ pane.id, image_key },
         );

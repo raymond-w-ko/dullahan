@@ -1198,7 +1198,7 @@ pub const Server = struct {
             return;
         };
 
-        const uploaded_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{
+        const uploaded_path = self.allocator.print("{s}/{s}", .{
             paths.getTempDir(),
             filename,
         }) catch {
@@ -1209,7 +1209,7 @@ pub const Server = struct {
 
         const file = std.Io.Dir.createFileAbsolute(self.io, uploaded_path, .{
             .truncate = true,
-            .permissions = @enumFromInt(0o600),
+            .permissions = @fromBackingInt(@intCast(0o600)),
         }) catch {
             self.respondAndClose(idx, "500 Internal Server Error", "Failed to create upload file");
             return;

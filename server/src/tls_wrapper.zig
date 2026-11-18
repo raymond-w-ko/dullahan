@@ -7,10 +7,7 @@ const std = @import("std");
 const posix = std.posix;
 const posix_compat = @import("posix_compat.zig");
 const net_compat = @import("net_compat.zig");
-const c = @cImport({
-    @cInclude("openssl/ssl.h");
-    @cInclude("openssl/err.h");
-});
+const c = @import("openssl_c"); // see src/c/openssl.h
 
 const log = std.log.scoped(.tls);
 
@@ -81,7 +78,7 @@ pub const TlsContext = struct {
 
         // Check key file permissions (warn if world-readable)
         if (std.Io.Dir.cwd().statFile(io, config.key_path, .{})) |stat| {
-            const mode = @intFromEnum(stat.permissions);
+            const mode = @backingInt(stat.permissions);
             if (mode & 0o004 != 0) {
                 log.warn("TLS key file {s} is world-readable. Consider restricting permissions.", .{config.key_path});
             }
@@ -96,9 +93,9 @@ pub const TlsContext = struct {
             return error.TlsInitFailed;
         };
 
-        const cert_path_z = try allocator.dupeZ(u8, config.cert_path);
+        const cert_path_z = try allocator.dupeSentinel(u8, config.cert_path, 0);
         defer allocator.free(cert_path_z);
-        const key_path_z = try allocator.dupeZ(u8, config.key_path);
+        const key_path_z = try allocator.dupeSentinel(u8, config.key_path, 0);
         defer allocator.free(key_path_z);
 
         if (c.SSL_CTX_use_certificate_file(ctx, cert_path_z, c.SSL_FILETYPE_PEM) != 1) {

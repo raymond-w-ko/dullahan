@@ -69,7 +69,7 @@ pub fn getTempDir() []const u8 {
 /// Returns error if directory cannot be created.
 pub fn ensureTempDir(io: std.Io) !void {
     const dir_path = getTempDir();
-    const permissions: std.Io.File.Permissions = @enumFromInt(0o700);
+    const permissions: std.Io.File.Permissions = @fromBackingInt(@intCast(0o700));
 
     std.Io.Dir.createDirAbsolute(io, dir_path, permissions) catch |e| switch (e) {
         error.PathAlreadyExists => {
@@ -120,7 +120,7 @@ pub fn ensureConfigDir(io: std.Io) !void {
 /// Caller owns the returned slice and must free it with the provided allocator.
 pub fn getTempPath(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
     const dir = getTempDir();
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, filename });
+    return allocator.print("{s}/{s}", .{ dir, filename });
 }
 
 /// Static paths for commonly used files.

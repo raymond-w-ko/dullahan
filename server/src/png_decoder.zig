@@ -216,7 +216,7 @@ fn appendTestPngChunk(
     try out.appendSlice(allocator, chunk_type);
     try out.appendSlice(allocator, data);
 
-    var crc = std.hash.crc.Crc32.init();
+    var crc = std.hash.Crc32.init();
     crc.update(chunk_type);
     crc.update(data);
     var crc_buf: [4]u8 = undefined;

@@ -47,10 +47,13 @@ const PosixAddress = extern union {
 
 fn addressFromPosix(address: *const PosixAddress) !std.Io.net.IpAddress {
     return switch (address.any.family) {
-        std.posix.AF.INET => .{ .ip4 = .{
-            .port = std.mem.bigToNative(u16, address.in.port),
-            .bytes = @bitCast(address.in.addr),
-        } },
+        std.posix.AF.INET => .{
+            .ip4 = .{
+                .port = std.mem.bigToNative(u16, address.in.port),
+                // addr holds network-order bytes; copy them in memory order.
+                .bytes = std.mem.toBytes(address.in.addr),
+            },
+        },
         std.posix.AF.INET6 => .{ .ip6 = .{
             .port = std.mem.bigToNative(u16, address.in6.port),
             .bytes = address.in6.addr,

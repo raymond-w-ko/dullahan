@@ -103,9 +103,8 @@ pub const TestCommand = enum {
 pub fn printTestUsage() void {
     std.debug.print("Usage: dullahan test <SUBCOMMAND>\n\n", .{});
     std.debug.print("Test Commands:\n", .{});
-    inline for (std.meta.fields(TestCommand)) |field| {
-        const cmd: TestCommand = @enumFromInt(field.value);
-        std.debug.print("  {s:<17} {s}\n", .{ field.name, cmd.description() });
+    inline for (comptime std.enums.values(TestCommand)) |cmd| {
+        std.debug.print("  {s:<17} {s}\n", .{ @tagName(cmd), cmd.description() });
     }
     std.debug.print(
         \\
@@ -202,8 +201,8 @@ fn runKeytestKitty(io: std.Io) !void {
     raw.lflag.IEXTEN = false;
     raw.iflag.IXON = false;
     raw.iflag.ICRNL = false;
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    raw.cc[@backingInt(posix.V.MIN)] = 1;
+    raw.cc[@backingInt(posix.V.TIME)] = 0;
     try posix.tcsetattr(stdin_fd, .NOW, raw);
     defer posix.tcsetattr(stdin_fd, .NOW, original) catch {};
 
@@ -238,15 +237,15 @@ test "single-parser diagnostics smoke creates reusable artifacts" {
     const artifact_dir = try runSingleParserDiagSmoke(std.testing.io, std.testing.allocator);
     defer std.testing.allocator.free(artifact_dir);
 
-    const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
+    const manifest_path = try std.testing.allocator.print("{s}/manifest.json", .{artifact_dir});
     defer std.testing.allocator.free(manifest_path);
-    const server_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/server.log", .{artifact_dir});
+    const server_log_path = try std.testing.allocator.print("{s}/server.log", .{artifact_dir});
     defer std.testing.allocator.free(server_log_path);
-    const pty_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
+    const pty_log_path = try std.testing.allocator.print("{s}/pty-traffic.jsonl", .{artifact_dir});
     defer std.testing.allocator.free(pty_log_path);
-    const first_request_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/01-osc11-bel-request.bin", .{artifact_dir});
+    const first_request_path = try std.testing.allocator.print("{s}/01-osc11-bel-request.bin", .{artifact_dir});
     defer std.testing.allocator.free(first_request_path);
-    const first_response_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/01-osc11-bel-response.bin", .{artifact_dir});
+    const first_response_path = try std.testing.allocator.print("{s}/01-osc11-bel-response.bin", .{artifact_dir});
     defer std.testing.allocator.free(first_response_path);
 
     const io = std.testing.io;
@@ -324,7 +323,7 @@ fn captureParserExchange(
 
 fn setNonBlocking(fd: posix.fd_t) !void {
     const flags = try posix_compat.fcntl(fd, posix.F.GETFL, 0);
-    const O_NONBLOCK: usize = if (builtin.os.tag == .macos) 0x4 else 0x800;
+    const O_NONBLOCK: usize = if (builtin.target.os.tag == .macos) 0x4 else 0x800;
     _ = try posix_compat.fcntl(fd, posix.F.SETFL, flags | O_NONBLOCK);
 }
 
@@ -337,8 +336,8 @@ fn setRawMode(fd: posix.fd_t) !void {
     raw.lflag.IEXTEN = false;
     raw.iflag.IXON = false;
     raw.iflag.ICRNL = false;
-    raw.cc[@intFromEnum(posix.V.MIN)] = 0;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    raw.cc[@backingInt(posix.V.MIN)] = 0;
+    raw.cc[@backingInt(posix.V.TIME)] = 0;
     try posix.tcsetattr(fd, .NOW, raw);
 }
 
@@ -666,10 +665,10 @@ const CLEAR = "\x1b[2J\x1b[H";
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
 
-var bytes_received: [256]bool = [_]bool{false} ** 256;
+var bytes_received: [256]bool = @splat(false);
 var bytes_running = true;
 var bytes_total_received: u16 = 0;
-var bytes_warning_buf: [80]u8 = [_]u8{' '} ** 80;
+var bytes_warning_buf: [80]u8 = @splat(' ');
 var bytes_warning_len: usize = 0;
 
 const key_hints = [256][]const u8{
@@ -721,7 +720,7 @@ fn runKeytestBytes() !void {
     const stdout_fd = posix.STDOUT_FILENO;
 
     // Reset state
-    bytes_received = [_]bool{false} ** 256;
+    bytes_received = @splat(false);
     bytes_running = true;
     bytes_total_received = 0;
     bytes_warning_len = 0;
@@ -738,8 +737,8 @@ fn runKeytestBytes() !void {
     raw.iflag.BRKINT = false;
     raw.iflag.INPCK = false;
     raw.iflag.ISTRIP = false;
-    raw.cc[@intFromEnum(posix.V.MIN)] = 0;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 1; // 100ms timeout
+    raw.cc[@backingInt(posix.V.MIN)] = 0;
+    raw.cc[@backingInt(posix.V.TIME)] = 1; // 100ms timeout
     try posix.tcsetattr(stdin_fd, .NOW, raw);
     defer posix.tcsetattr(stdin_fd, .NOW, original) catch {};
 

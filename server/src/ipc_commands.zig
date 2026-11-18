@@ -13,9 +13,7 @@ const layout_db = @import("layout_db.zig");
 const debug_config = @import("debug_config.zig");
 const Session = @import("session.zig").Session;
 
-const sys = @cImport({
-    @cInclude("sys/ioctl.h");
-});
+const sys = @import("posix_c");
 
 const log = std.log.scoped(.ipc_commands);
 
@@ -164,9 +162,8 @@ fn handleHelp(ctx: Context) !ipc.Response {
     defer buf.deinit();
     const writer = &buf.writer;
     try writer.writeAll("Available commands:\n");
-    inline for (std.meta.fields(ipc.Command)) |field| {
-        const cmd: ipc.Command = @enumFromInt(field.value);
-        try writer.print("  {s:<10} - {s}\n", .{ field.name, cmd.description() });
+    inline for (comptime std.enums.values(ipc.Command)) |cmd| {
+        try writer.print("  {s:<10} - {s}\n", .{ @tagName(cmd), cmd.description() });
     }
     const result_data = try buf.toOwnedSlice();
     return ipc.Response.okWithData("Help", result_data);
@@ -228,7 +225,7 @@ fn handleDebugCapture(ctx: Context) ipc.Response {
 fn handlePtyLog(ctx: Context) !ipc.Response {
     const enabled = ctx.session.isPtyLoggingEnabled();
     const path = ctx.session.getPtyLogPath();
-    const msg = try std.fmt.allocPrint(ctx.alloc, "PTY logging: {s}\nLog file: {s}", .{
+    const msg = try ctx.alloc.print("PTY logging: {s}\nLog file: {s}", .{
         if (enabled) "enabled" else "disabled",
         path,
     });
@@ -238,7 +235,7 @@ fn handlePtyLog(ctx: Context) !ipc.Response {
 fn handlePtyLogOn(ctx: Context) !ipc.Response {
     ctx.session.setPtyLogging(true);
     const path = ctx.session.getPtyLogPath();
-    const msg = try std.fmt.allocPrint(ctx.alloc, "PTY traffic logging enabled.\nLog file: {s}", .{path});
+    const msg = try ctx.alloc.print("PTY traffic logging enabled.\nLog file: {s}", .{path});
     return ipc.Response.okWithData("PTY logging enabled", msg);
 }
 
@@ -253,7 +250,7 @@ fn handleTtySize(ctx: Context) !ipc.Response {
     const writer = &buf.writer;
 
     // Query stdin (fd 0) for terminal size
-    const TIOCGWINSZ: u32 = if (builtin.os.tag == .macos) 0x40087468 else 0x5413;
+    const TIOCGWINSZ: u32 = if (builtin.target.os.tag == .macos) 0x40087468 else 0x5413;
     var ws: extern struct {
         ws_row: u16 = 0,
         ws_col: u16 = 0,

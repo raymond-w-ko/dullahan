@@ -48,11 +48,11 @@ test "query trace runner emits harness artifacts" {
     const artifact_dir = try runSmoke(std.testing.io, std.testing.allocator);
     defer std.testing.allocator.free(artifact_dir);
 
-    const manifest_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/manifest.json", .{artifact_dir});
+    const manifest_path = try std.testing.allocator.print("{s}/manifest.json", .{artifact_dir});
     defer std.testing.allocator.free(manifest_path);
-    const server_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/server.log", .{artifact_dir});
+    const server_log_path = try std.testing.allocator.print("{s}/server.log", .{artifact_dir});
     defer std.testing.allocator.free(server_log_path);
-    const pty_log_path = try std.fmt.allocPrint(std.testing.allocator, "{s}/pty-traffic.jsonl", .{artifact_dir});
+    const pty_log_path = try std.testing.allocator.print("{s}/pty-traffic.jsonl", .{artifact_dir});
     defer std.testing.allocator.free(pty_log_path);
 
     const manifest_file = try std.Io.Dir.openFileAbsolute(std.testing.io, manifest_path, .{});

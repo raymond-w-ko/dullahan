@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 
 DEPS_DIR="deps/ghostty"
 SERVER_DIR="server"
-EXPECTED_ZIG_VERSION="0.16.0"
+EXPECTED_ZIG_VERSION="0.17.1"
 
 actual_zig_version="$(zig version)"
 if [ "$actual_zig_version" != "$EXPECTED_ZIG_VERSION" ]; then

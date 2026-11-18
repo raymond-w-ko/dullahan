@@ -73,7 +73,7 @@ fn generateTokenHex(io: std.Io) ![64]u8 {
 fn writeTokensFile(io: std.Io, path: []const u8, master_token: []const u8, view_token: []const u8) !void {
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{
         .truncate = true,
-        .permissions = @enumFromInt(0o600),
+        .permissions = @fromBackingInt(@intCast(0o600)),
     });
     defer file.close(io);
 

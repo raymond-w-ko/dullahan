@@ -116,9 +116,8 @@ pub fn printUsage() void {
     std.debug.print("Commands:\n", .{});
     std.debug.print("  {s:<18} {s}\n", .{ "serve", "Run as server (foreground)" });
     std.debug.print("  {s:<18} {s}\n", .{ "test", "Run test utilities (see 'dullahan test help')" });
-    inline for (std.meta.fields(ipc.Command)) |field| {
-        const cmd: ipc.Command = @enumFromInt(field.value);
-        std.debug.print("  {s:<18} {s}\n", .{ field.name, cmd.description() });
+    inline for (comptime std.enums.values(ipc.Command)) |cmd| {
+        std.debug.print("  {s:<18} {s}\n", .{ @tagName(cmd), cmd.description() });
     }
     std.debug.print(
         \\
@@ -223,7 +222,7 @@ pub fn runClient(io: std.Io, allocator: std.mem.Allocator, args: CliArgs) !void 
                 };
                 if (stdin_text.len > 0) {
                     // Combine: "pane_id stdin_text"
-                    stdin_buf = std.fmt.allocPrint(allocator, "{s} {s}", .{ data, stdin_text }) catch null;
+                    stdin_buf = allocator.print("{s} {s}", .{ data, stdin_text }) catch null;
                     allocator.free(stdin_text);
                     if (stdin_buf) |buf| {
                         send_data = buf;

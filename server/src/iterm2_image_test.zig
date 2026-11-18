@@ -73,8 +73,7 @@ fn writeSingleFile(
     args: []const u8,
     terminator: Terminator,
 ) !void {
-    const header = try std.fmt.allocPrint(
-        allocator,
+    const header = try allocator.print(
         "\x1b]1337;File=size={d};{s}:",
         .{ raw_len, args },
     );
@@ -91,8 +90,7 @@ fn writeMultipartFile(
     raw_len: usize,
     args: []const u8,
 ) !void {
-    const start = try std.fmt.allocPrint(
-        allocator,
+    const start = try allocator.print(
         "\x1b]1337;MultipartFile=size={d};{s}\x07",
         .{ raw_len, args },
     );

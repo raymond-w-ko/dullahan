@@ -5,15 +5,20 @@ all: build
 UNAME_S := $(shell uname -s)
 HAS_NIX := $(shell command -v nix-shell >/dev/null 2>&1 && echo 1)
 HAS_NIX_DARWIN := $(shell command -v darwin-rebuild >/dev/null 2>&1 && echo 1)
-EXPECTED_ZIG_VERSION := 0.16.0
-ZIG_0160_HOME := $(firstword $(wildcard $(HOME)/zig-*-${EXPECTED_ZIG_VERSION}) $(HOME)/zig-x86_64-linux-${EXPECTED_ZIG_VERSION})
-ZIG_0160_BIN := $(ZIG_0160_HOME)/bin
-NIX_ZIG_0160_EXPR := 'with import <nixpkgs> {}; mkShell { packages = [ ((callPackage $(CURDIR)/scripts/nix/zig {})."0.16") ]; }'
+# Zig toolchain lookup, in order:
+#   1. nix-darwin (macOS) or nix (Linux): build/fetch scripts/nix/zig for this version
+#   2. a manual install in $(HOME)/zig-<arch>-<os>-$(EXPECTED_ZIG_VERSION)/
+#   3. whatever `zig` is on PATH (check-zig rejects a wrong version)
+EXPECTED_ZIG_VERSION := 0.17.1
+ZIG_MAJOR_MINOR := $(word 1,$(subst ., ,$(EXPECTED_ZIG_VERSION))).$(word 2,$(subst ., ,$(EXPECTED_ZIG_VERSION)))
+ZIG_HOME := $(firstword $(wildcard $(HOME)/zig-*-${EXPECTED_ZIG_VERSION}) $(HOME)/zig-x86_64-linux-${EXPECTED_ZIG_VERSION})
+ZIG_BIN := $(ZIG_HOME)/bin
+NIX_ZIG_EXPR := 'with import <nixpkgs> {}; mkShell { packages = [ ((callPackage $(CURDIR)/scripts/nix/zig {})."$(ZIG_MAJOR_MINOR)") ]; }'
 
 ifeq ($(UNAME_S),Darwin)
 ifneq ($(HAS_NIX),)
 ifneq ($(HAS_NIX_DARWIN),)
-RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_0160_EXPR) --run 'env NIX_CFLAGS_COMPILE=
+RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_EXPR) --run 'env NIX_CFLAGS_COMPILE=
 RUN_ZIG_ENV_END = '
 endif
 endif
@@ -22,17 +27,17 @@ endif
 ifeq ($(RUN_ZIG_ENV),)
 ifneq ($(HAS_NIX),)
 ifeq ($(UNAME_S),Linux)
-RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_0160_EXPR) --run 'env NIX_CFLAGS_COMPILE=
+RUN_ZIG_ENV = nix-shell -E $(NIX_ZIG_EXPR) --run 'env NIX_CFLAGS_COMPILE=
 RUN_ZIG_ENV_END = '
 endif
 endif
 endif
 
 ifeq ($(RUN_ZIG_ENV),)
-ifneq ($(wildcard $(ZIG_0160_BIN)/zig),)
-RUN_ZIG_ENV = PATH="$(ZIG_0160_BIN):$(PATH)"
-else ifneq ($(wildcard $(ZIG_0160_HOME)/zig),)
-RUN_ZIG_ENV = PATH="$(ZIG_0160_HOME):$(PATH)"
+ifneq ($(wildcard $(ZIG_BIN)/zig),)
+RUN_ZIG_ENV = PATH="$(ZIG_BIN):$(PATH)"
+else ifneq ($(wildcard $(ZIG_HOME)/zig),)
+RUN_ZIG_ENV = PATH="$(ZIG_HOME):$(PATH)"
 endif
 endif
 
@@ -80,7 +85,7 @@ dist-client-assets: themes
 
 # Build server with embedded client assets (includes theme-db for OSC color queries)
 dist-server-embedded: check-zig theme-db
-	cd server && $(RUN_ZIG) build -Doptimize=ReleaseFast$(RUN_ZIG_END)
+	cd server && $(RUN_ZIG) build -Doptimize=fast$(RUN_ZIG_END)
 	@mkdir -p dist
 	cp server/zig-out/bin/dullahan dist/
 	git checkout server/src/embedded_assets.zig 2>/dev/null || true
@@ -151,7 +156,7 @@ coverage: coverage-server coverage-client
 
 coverage-server: check-zig
 	@echo "=== Server Test Coverage (Module-level) ==="
-	@cd server && $(RUN_ZIG) build test-bin -Doptimize=Debug$(RUN_ZIG_END)
+	@cd server && $(RUN_ZIG) build test-bin -Doptimize=debug$(RUN_ZIG_END)
 	@server/zig-out/bin/test 2>&1 | awk -F'[. ]' ' \
 		/^[0-9]+\/[0-9]+.*\.test\..*\.\.\./ { \
 			for (i=1; i<=NF; i++) { \

@@ -176,7 +176,7 @@ fn isServerRunning(io: std.Io, pid_path: []const u8) bool {
     const pid = std.fmt.parseInt(posix.pid_t, pid_str, 10) catch return false;
 
     // Check if process exists (kill with signal 0)
-    posix.kill(pid, @enumFromInt(0)) catch |e| switch (e) {
+    posix.kill(pid, @fromBackingInt(@intCast(0))) catch |e| switch (e) {
         error.ProcessNotFound => return false,
         error.PermissionDenied => return true, // Process exists but we can't signal it
         else => return false,
@@ -355,7 +355,7 @@ pub const Client = struct {
         const pid = std.fmt.parseInt(posix.pid_t, pid_str, 10) catch return false;
 
         // Check if process exists (kill with signal 0)
-        posix.kill(pid, @enumFromInt(0)) catch |e| switch (e) {
+        posix.kill(pid, @fromBackingInt(@intCast(0))) catch |e| switch (e) {
             error.ProcessNotFound => return false,
             error.PermissionDenied => return true, // Process exists but we can't signal it
             else => return false,

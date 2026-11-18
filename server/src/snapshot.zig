@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const msgpack = @import("msgpack");
-const snappy = @import("snappy");
+const snappy = @import("snappy_c.zig");
 const constants = @import("constants.zig");
 const Pane = @import("pane.zig").Pane;
 const Session = @import("session.zig").Session;
@@ -114,12 +114,12 @@ fn packAndCompress(allocator: std.mem.Allocator, payload: *msgpack.Payload, max_
 /// Returns owned slice with 1-byte header (0 = uncompressed, 1 = compressed) that caller must free.
 fn compress(data: []const u8, allocator: std.mem.Allocator) ![]u8 {
     if (data.len >= constants.snapshot.compression_threshold) {
-        const compressed_max = snappy.raw.maxCompressedLength(data.len);
+        const compressed_max = snappy.maxCompressedLength(data.len);
         const compressed_buf = try allocator.alloc(u8, compressed_max + 1);
         errdefer allocator.free(compressed_buf);
 
         compressed_buf[0] = 1; // Header: compressed
-        const compressed_len = snappy.raw.compress(data, compressed_buf[1..]) catch |e| {
+        const compressed_len = snappy.compress(data, compressed_buf[1..]) catch |e| {
             log.err("Failed to compress: {any}", .{e});
             return error.CompressionFailed;
         };
@@ -218,12 +218,12 @@ const ColorTag = enum(u8) {
 };
 
 /// Encode a color to 4 bytes [tag, v0, v1, v2]
-/// Works with any tagged union that has none, palette, and rgb variants
-fn encodeColor(c: anytype) [4]u8 {
-    return switch (c) {
-        .none => .{ @intFromEnum(ColorTag.none), 0, 0, 0 },
-        .palette => |idx| .{ @intFromEnum(ColorTag.palette), idx, 0, 0 },
-        .rgb => |rgb| .{ @intFromEnum(ColorTag.rgb), rgb.r, rgb.g, rgb.b },
+/// Takes ghostty's packed Style.Color and switches on its tagged-union view.
+fn encodeColor(c: ghostty.Style.Color) [4]u8 {
+    return switch (c.value()) {
+        .none => .{ @backingInt(ColorTag.none), 0, 0, 0 },
+        .palette => |idx| .{ @backingInt(ColorTag.palette), idx, 0, 0 },
+        .rgb => |rgb| .{ @backingInt(ColorTag.rgb), rgb.r, rgb.g, rgb.b },
     };
 }
 
@@ -238,7 +238,7 @@ fn encodeFlags(flags: anytype) u16 {
     if (flags.invisible) result |= 0x20;
     if (flags.strikethrough) result |= 0x40;
     if (flags.overline) result |= 0x80;
-    result |= @as(u16, @intFromEnum(flags.underline)) << 8;
+    result |= @as(u16, @backingInt(flags.underline)) << 8;
     return result;
 }
 

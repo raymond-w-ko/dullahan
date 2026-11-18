@@ -59,9 +59,20 @@ pub const Handler = struct {
         comptime action: StreamAction.Tag,
         value: StreamAction.Value(action),
     ) void {
-        self.vtFallible(action, value) catch |err| {
-            log.warn("error handling VT action action={} err={}", .{ action, err });
-        };
+        self.vtFallible(action, value) catch |err| self.vtFailed(action, err);
+    }
+
+    /// Stream hook for runs that are known to be printable ASCII.
+    /// Without it the stream widens each run into a print_slice.
+    pub fn vtPrintAscii(self: *Handler, bytes: []const u8) void {
+        self.terminal.printSliceAscii(bytes) catch |err| self.vtFailed(.print_slice, err);
+    }
+
+    /// Kept out of line so failure logging stays off the hot VT path.
+    noinline fn vtFailed(self: *Handler, action: StreamAction.Tag, err: anyerror) void {
+        @branchHint(.cold);
+        _ = self;
+        log.warn("error handling VT action action={} err={}", .{ action, err });
     }
 
     inline fn vtFallible(
@@ -114,21 +125,17 @@ pub const Handler = struct {
                 self.terminal.carriageReturn();
             },
             .reverse_index => self.terminal.reverseIndex(),
+            .back_index => self.terminal.backIndex(),
+            .forward_index => self.terminal.forwardIndex(),
             .cursor_up => self.terminal.cursorUp(value.value),
             .cursor_down => self.terminal.cursorDown(value.value),
             .cursor_left => self.terminal.cursorLeft(value.value),
             .cursor_right => self.terminal.cursorRight(value.value),
             .cursor_pos => self.terminal.setCursorPos(value.row, value.col),
-            .cursor_col => self.terminal.setCursorPos(self.terminal.screens.active.cursor.y + 1, value.value),
-            .cursor_row => self.terminal.setCursorPos(value.value, self.terminal.screens.active.cursor.x + 1),
-            .cursor_col_relative => self.terminal.setCursorPos(
-                self.terminal.screens.active.cursor.y + 1,
-                self.terminal.screens.active.cursor.x + 1 +| value.value,
-            ),
-            .cursor_row_relative => self.terminal.setCursorPos(
-                self.terminal.screens.active.cursor.y + 1 +| value.value,
-                self.terminal.screens.active.cursor.x + 1,
-            ),
+            .cursor_col => self.terminal.setCursorCol(value.value),
+            .cursor_row => self.terminal.setCursorRow(value.value),
+            .cursor_col_relative => self.terminal.cursorColRelative(value.value),
+            .cursor_row_relative => self.terminal.cursorRowRelative(value.value),
             .cursor_style => {
                 const blink = switch (value) {
                     .default, .steady_block, .steady_bar, .steady_underline => false,
@@ -161,6 +168,8 @@ pub const Handler = struct {
             .erase_chars => self.terminal.eraseChars(value),
             .insert_lines => self.terminal.insertLines(value),
             .insert_blanks => self.terminal.insertBlanks(value),
+            .insert_columns => self.terminal.insertColumns(value),
+            .delete_columns => self.terminal.deleteColumns(value),
             .delete_lines => self.terminal.deleteLines(value),
             .scroll_up => try self.terminal.scrollUp(value),
             .scroll_down => self.terminal.scrollDown(value),
@@ -190,10 +199,7 @@ pub const Handler = struct {
             .restore_cursor => self.terminal.restoreCursor(),
             .invoke_charset => self.terminal.invokeCharset(value.bank, value.charset, value.locking),
             .configure_charset => self.terminal.configureCharset(value.slot, value.charset),
-            .set_attribute => switch (value) {
-                .unknown => {},
-                else => self.terminal.setAttribute(value) catch {},
-            },
+            .set_attributes => try self.terminal.setAttributes(value.parser()),
             .protected_mode_off => self.terminal.setProtectedMode(.off),
             .protected_mode_iso => self.terminal.setProtectedMode(.iso),
             .protected_mode_dec => self.terminal.setProtectedMode(.dec),
@@ -235,6 +241,7 @@ pub const Handler = struct {
             },
             .active_status_display => self.terminal.status_display = value,
             .decaln => try self.terminal.decaln(),
+            .soft_reset => self.terminal.softReset(),
             .full_reset => {
                 self.pane.clearIterm2ImagesAllScreens();
                 self.terminal.fullReset();
@@ -242,6 +249,7 @@ pub const Handler = struct {
             .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
             .end_hyperlink => self.terminal.screens.active.endHyperlink(),
             .mouse_shape => self.terminal.mouse_shape = value,
+            .mouse_shape_reset => self.terminal.mouse_shape = .text,
             .kitty_color_report => try self.kittyColorOperation(value),
 
             // =================================================================
@@ -251,7 +259,7 @@ pub const Handler = struct {
             .dcs_put => try self.dcsPut(value),
             .dcs_unhook => try self.dcsUnhook(),
             .apc_start => self.apc.start(),
-            .apc_end => try self.apcEnd(),
+            .apc_end => try self.apcEnd(value.terminated),
             .apc_put => self.apc.feed(self.pane.allocator, value),
             .apc_put_slice => self.apc.feedSlice(self.pane.allocator, value.bytes),
 
@@ -271,6 +279,15 @@ pub const Handler = struct {
             .title_pop => {
                 log.debug("Unhandled title pop: {d}", .{value});
             },
+            .osc_unknown => log.debug("Ignoring unknown OSC sequence", .{}),
+            // Clients own the pane size, so programs cannot resize it.
+            .resize_window => log.debug("Ignoring window resize request", .{}),
+            // OSC 7501 program status: Dullahan has no consumer, so it
+            // neither records reports nor claims support in query replies.
+            .program_status => {},
+            // DECRQCRA/XTCHECKSUM: Ghostty disables screen checksum reports
+            // by default because they let a program read screen contents.
+            .request_xt_checksum, .xt_checksum_extension => {},
         }
     }
 
@@ -393,9 +410,13 @@ pub const Handler = struct {
         }
     }
 
-    fn apcEnd(self: *Handler) !void {
+    fn apcEnd(self: *Handler, terminated: bool) !void {
         var cmd = self.apc.end() orelse return;
         defer cmd.deinit(self.pane.allocator);
+
+        // ECMA-48: a cancelled or aborted string is discarded. end() still
+        // runs above so the APC handler resets and frees what it collected.
+        if (!terminated) return;
 
         if (comptime @hasDecl(ghostty.kitty.graphics, "Command")) {
             switch (cmd) {
@@ -656,7 +677,7 @@ pub const Handler = struct {
                         self.terminal.flags.dirty.palette = true;
                         self.terminal.colors.palette.reset(@intCast(i));
                     }
-                    mask.* = .initEmpty();
+                    mask.* = .empty;
                 },
                 .reset_special => {},
             }
@@ -823,7 +844,7 @@ pub const Handler = struct {
     }
 
     fn requestMode(self: *Handler, mode: modes.Mode) !void {
-        const tag: modes.ModeTag = @bitCast(@intFromEnum(mode));
+        const tag: modes.ModeTag = @bitCast(@backingInt(mode));
         const code: u8 = if (self.terminal.modes.get(mode)) 1 else 2;
 
         var buf: [64]u8 = undefined;

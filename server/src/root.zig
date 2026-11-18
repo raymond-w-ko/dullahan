@@ -68,4 +68,5 @@ pub const test_diagnostics = @import("test_diagnostics.zig");
 // Ensure all tests from submodules are run
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("snappy_c.zig");
 }

@@ -751,8 +751,7 @@ pub fn allocImageKey(
     pane_id: u16,
     entry: *const Entry,
 ) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
+    return allocator.print(
         "iterm2-{d}-{d}-{s}-{d}x{d}-{x}",
         .{
             pane_id,
@@ -791,10 +790,7 @@ fn parseImageKey(raw: []const u8) ?ImageKey {
 }
 
 fn mimeFromString(raw: []const u8) ?Mime {
-    inline for (@typeInfo(Mime).@"enum".fields) |field| {
-        if (std.mem.eql(u8, raw, field.name)) return @enumFromInt(field.value);
-    }
-    return null;
+    return std.meta.stringToEnum(Mime, raw);
 }
 
 fn keyMatches(key: ImageKey, pane_id: u16, entry: *const Entry) bool {

@@ -123,15 +123,15 @@ fn keyFromEvent(event: KeyEvent) input.Key {
     }
     if (code.len == 4 and std.mem.startsWith(u8, code, "Key")) {
         const c = code[3];
-        if (c >= 'A' and c <= 'Z') return @enumFromInt(@intFromEnum(input.Key.key_a) + c - 'A');
+        if (c >= 'A' and c <= 'Z') return @fromBackingInt(@intCast(@backingInt(input.Key.key_a) + c - 'A'));
     }
     if (code.len == 6 and std.mem.startsWith(u8, code, "Digit")) {
         const c = code[5];
-        if (c >= '0' and c <= '9') return @enumFromInt(@intFromEnum(input.Key.digit_0) + c - '0');
+        if (c >= '0' and c <= '9') return @fromBackingInt(@intCast(@backingInt(input.Key.digit_0) + c - '0'));
     }
     if (code.len >= 2 and code[0] == 'F') {
         const n = std.fmt.parseInt(u8, code[1..], 10) catch 0;
-        if (n >= 1 and n <= 25) return @enumFromInt(@intFromEnum(input.Key.f1) + n - 1);
+        if (n >= 1 and n <= 25) return @fromBackingInt(@intCast(@backingInt(input.Key.f1) + n - 1));
     }
 
     const entries = [_]struct { []const u8, input.Key }{
@@ -185,7 +185,7 @@ fn keyFromEvent(event: KeyEvent) input.Key {
     for (entries) |entry| if (std.mem.eql(u8, code, entry[0])) return entry[1];
 
     if (std.mem.startsWith(u8, code, "Numpad") and code.len == 7 and code[6] >= '0' and code[6] <= '9') {
-        return @enumFromInt(@intFromEnum(input.Key.numpad_0) + code[6] - '0');
+        return @fromBackingInt(@intCast(@backingInt(input.Key.numpad_0) + code[6] - '0'));
     }
     return .unidentified;
 }
