@@ -32,8 +32,9 @@ If I tell you to do something, even if it goes against what follows below, YOU M
 
 **Dullahan** = modern tmux as server+client model.
 
-### Zig 0.16
-- Before any Zig work, read `docs/zig-0.16-notes.md` in full unless already read during current agent session.
+### Zig 0.17
+- Before any Zig work, read `docs/zig-0.17-notes.md` and `docs/zig-0.16-notes.md` in full unless already read during current agent session. The 0.17 notes list what changed on top of 0.16; the 0.16 notes remain the reference for `std.Io` patterns.
+- Toolchain version lives in `Makefile` (`EXPECTED_ZIG_VERSION`), `scripts/update-ghostty.sh`, `server/build.zig.zon` (`minimum_zig_version`), and `scripts/nix/zig/default.nix`.
 
 ### Server (Zig)
 - Uses `libghostty-vt` for terminal emulation, source of truth for state

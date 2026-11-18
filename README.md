@@ -54,13 +54,19 @@ Wire protocol:
 
 ### Prerequisites
 
-- Zig `0.16.0`
+- Zig `0.17.1`
 - Bun
 - OpenSSL headers/libs available to Zig
 
 macOS usually means Homebrew `openssl@3`. The build already checks common Homebrew prefixes.
-Make targets select the repository's Zig 0.16 Nix package when Nix is available,
-otherwise a local 0.16.0 install, and reject any other compiler version.
+Make targets find Zig in this order and reject any other compiler version:
+
+1. Nix (Linux, or macOS with nix-darwin): the repository's Zig 0.17 package in `scripts/nix/zig`.
+2. A manual install unpacked in your home directory as `~/zig-<arch>-<os>-0.17.1/`
+   (for example `~/zig-x86_64-linux-0.17.1/zig`).
+3. `zig` on `PATH`.
+
+The required version is `EXPECTED_ZIG_VERSION` in the `Makefile`.
 
 ### Build
 
